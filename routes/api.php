@@ -35,6 +35,8 @@ use App\Http\Controllers\Api\Admin\CategoryController;
 use App\Http\Controllers\Api\Admin\SubCategoryController;
 use App\Http\Controllers\Api\Admin\ProductController;
 use App\Http\Controllers\Api\Admin\InventoryController;
+use App\Http\Controllers\Api\Admin\PenaltyController;
+use App\Http\Controllers\Api\Admin\PayrollController;
 
 
 
@@ -124,6 +126,7 @@ Route::prefix('v1')->group(function () {
 
         Route::get('shifts', [ShiftController::class, 'getPublicShifts']);
         Route::get('employees', [EmployeeController::class, 'getPublicEmployees']);
+        Route::get('active-employees', [EmployeeController::class, 'getActiveEmployees']);
         Route::get('sites', [SiteController::class, 'getPublicSites']);
         Route::get('departments', [DepartmentsController::class, 'getPublicDepartments']);
         Route::get('products', [ProductController::class, 'getPublicProducts']);
@@ -286,6 +289,31 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('shift-rotation', ShiftChangeController::class)->only(['index', 'store', 'update', 'show']);
             Route::post('shift-rotation/override', [ShiftChangeController::class, 'overrideShift']);
             Route::post('shift-rotation/swap', [ShiftChangeController::class, 'swapShift']);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Penalty Management
+            |--------------------------------------------------------------------------
+            */
+            Route::post('penalties/bulk', [PenaltyController::class, 'storeBulk']);
+            Route::post('penalties/bulk-upload', [PenaltyController::class, 'bulkUpload']);
+            Route::apiResource('penalties', PenaltyController::class);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Payroll Management
+            |--------------------------------------------------------------------------
+            */
+
+            Route::prefix('payroll')->group(function () {
+                Route::get('/', [PayrollController::class, 'index']);
+                Route::post('generate', [PayrollController::class, 'generate']);
+                Route::get('{employeeId}/detail', [PayrollController::class, 'show']);
+                Route::get('{employeeId}/penalties', [PayrollController::class, 'employeePenalties']);
+                Route::patch('{id}/status', [PayrollController::class, 'updateStatus']);
+                Route::patch('bulk-status', [PayrollController::class, 'bulkUpdateStatus']);
+                Route::delete('{id}', [PayrollController::class, 'destroy']);
+            });
 
             /*
             |--------------------------------------------------------------------------

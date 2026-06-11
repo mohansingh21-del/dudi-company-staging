@@ -72,4 +72,14 @@ class Employee extends Model
 
         return $assignment && $assignment->shift ? $assignment->shift->shift_name : null;
     }
+
+    public function penalties()
+    {
+        return $this->hasMany(Penalty::class);
+    }
+
+    public function payrolls()
+    {
+        return $this->hasMany(Payroll::class);
+    }
 }

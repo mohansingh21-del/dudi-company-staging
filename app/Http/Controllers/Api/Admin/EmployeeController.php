@@ -312,4 +312,61 @@ class EmployeeController extends Controller
             ]);
         }
     }
+
+    public function getActiveEmployees(Request $request)
+    {
+        try {
+            $query = Employee::where('is_active', 1);
+
+            // Optional Search
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'LIKE', "%{$search}%")
+                      ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                });
+            }
+
+            // Optional Department Filter
+            if ($request->filled('department_id')) {
+                $query->where('department_id', $request->department_id);
+            }
+
+            // Optional Site Filter
+            if ($request->filled('site_id')) {
+                $query->where('site_id', $request->site_id);
+            }
+
+            // Return limited/paginated active employees if limit parameter exists
+            if ($request->filled('limit')) {
+                $employees = $query->paginate($request->limit);
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Active employees fetched successfully',
+                    'data' => $employees->items(),
+                    'pagination' => [
+                        'current_page' => $employees->currentPage(),
+                        'last_page' => $employees->lastPage(),
+                        'per_page' => $employees->perPage(),
+                        'total' => $employees->total(),
+                        'from' => $employees->firstItem(),
+                        'to' => $employees->lastItem(),
+                    ]
+                ]);
+            }
+
+            $employees = $query->latest()->get(['id', 'name', 'employee_code']);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Active employees fetched successfully',
+                'data' => $employees
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
 }
