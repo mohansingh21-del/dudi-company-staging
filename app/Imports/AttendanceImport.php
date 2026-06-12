@@ -118,7 +118,23 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                     $checkOut->diffInMinutes($shiftEnd, false) * -1
                 );
             }
+            $hasApprovedLeave = \App\Models\Leave::where('employee_id', $employee->id)
+    ->where('status', 'approved')
+    ->whereDate('from_date', '<=', $attendanceDate->format('Y-m-d'))
+    ->whereDate('to_date', '>=', $attendanceDate->format('Y-m-d'))
+    ->exists();
 
+$status = $row['status'] ?? 'present';
+
+if (
+    strtolower($status) === 'present' &&
+    $hasApprovedLeave
+) {
+    throw ValidationException::withMessages([
+        "row_" . ($index + 2) =>
+        "Cannot mark Present. Employee {$employee->employee_code} has approved leave on {$attendanceDate->format('d-m-Y')}."
+    ]);
+}
             AttendanceProcessed::create([
                 'employee_id' => $employee->id,
                 'shift_id' => $shiftAssignment->shift_id,

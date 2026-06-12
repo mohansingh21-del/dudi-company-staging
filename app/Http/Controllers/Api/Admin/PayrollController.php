@@ -9,7 +9,6 @@ use App\Models\AttendanceProcessed;
 use App\Models\Leave;
 use App\Models\Penalty;
 use App\Models\Holiday;
-use App\Models\SalaryStructure;
 use App\Http\Resources\PayrollResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -27,15 +26,15 @@ class PayrollController extends Controller
         try {
             $request->validate([
                 'month' => 'nullable|integer|between:1,12',
-                'year'  => 'nullable|integer|min:2020',
+                'year' => 'nullable|integer|min:2020',
             ]);
 
             $month = (int) ($request->month ?? now()->month);
-            $year  = (int) ($request->year ?? now()->year);
+            $year = (int) ($request->year ?? now()->year);
             $limit = $request->input('limit', 10);
 
             // ── Build employee query with filters ──
-            $employeeQuery = Employee::with(['department', 'designation', 'site'])
+            $employeeQuery = Employee::with(['department', 'designation', 'site', 'activePayroll'])
                 ->where('is_active', true);
 
             if ($request->filled('site_id')) {
@@ -137,11 +136,6 @@ class PayrollController extends Controller
                 ->groupBy('site_id')
                 ->pluck('count', 'site_id');
 
-            // Salary structures by designation
-            $designationIds = $employees->pluck('designation_id')->unique()->filter();
-            $salaryStructures = SalaryStructure::whereIn('designation_id', $designationIds)
-                ->where('is_active', true)->get()->keyBy('designation_id');
-
             // Existing payroll records
             $existingPayrolls = Payroll::whereIn('employee_id', $employeeIds)
                 ->where('month', $month)
@@ -150,31 +144,28 @@ class PayrollController extends Controller
                 ->keyBy('employee_id');
 
             // ── Build result collection ──
-            $result = $employees->getCollection()->map(function ($employee) use (
-                $attendanceCounts, $leaveSummary, $penaltyTotals, $salaryStructures,
-                $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year
-            ) {
+            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $penaltyTotals, $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year) {
                 $att = $attendanceCounts->get($employee->id);
                 $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
                 $penaltyTotal = $penaltyTotals[$employee->id] ?? 0;
 
                 $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
 
-                $presentDays     = $att ? (int) $att->present_days : 0;
-                $absentDays      = $att ? (int) $att->absent_days  : 0;
-                $halfDays        = $att ? (int) $att->half_days    : 0;
-                $restDays        = $att ? (int) $att->rest_days    : 0;
-                $paidLeaveDays   = $empLeave['paid'] + $restDays; // rest day is counted as paid leave
+                $presentDays = $att ? (int) $att->present_days : 0;
+                $absentDays = $att ? (int) $att->absent_days : 0;
+                $halfDays = $att ? (int) $att->half_days : 0;
+                $restDays = $att ? (int) $att->rest_days : 0;
+                $paidLeaveDays = $empLeave['paid'] + $restDays; // rest day is counted as paid leave
                 $unpaidLeaveDays = $empLeave['unpaid'];
 
                 // ── Salary Calculation (per documentation) ──
-                $basicSalary = (float) $employee->basic_salary;
-                $ss = $salaryStructures->get($employee->designation_id);
-                $shiftAllowance = $ss ? (float) $ss->shift_allowance : 0;
-                $incentives     = $ss ? (float) $ss->incentives : 0;
+                $activePayroll = $employee->activePayroll;
+                $basicSalary = $activePayroll ? (float) $activePayroll->basic_salary : (float) $employee->basic_salary;
+                $shiftAllowance = 0;
+                $incentives = 0;
 
                 // Gross = Basic + Shift Allowance + Incentives
-                $grossSalary  = $basicSalary + $shiftAllowance + $incentives;
+                $grossSalary = $basicSalary + $shiftAllowance + $incentives;
                 $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
                 // Unmarked days count as absent: effective_absent = total - accounted days
@@ -183,47 +174,54 @@ class PayrollController extends Controller
                 $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
 
                 // Fixed deductions
-                $pfDeduction   = $employee->pf_applicable ? (float) $employee->pf_amount : 0;
-                $messDeduction = $employee->mess_deduction_applicable ? (float) $employee->mess_deduction_amount : 0;
+                $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
+                $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
 
-                // Net = Gross − (PF + Mess + Leave Deduction + Penalty)
-                $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal;
+                $pfDeduction = $pfApplicable ? (float) $employee->pf_amount : 0;
+                $messDeduction = $messDeductionApplicable ? (float) $employee->mess_deduction_amount : 0;
+
+                $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
+                $otherDeduction = $otherDeductionApplicable ? ($activePayroll ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
+
+                // Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction)
+                $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
                 $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
 
                 $payroll = $existingPayrolls->get($employee->id);
 
                 return [
-                    'id'                => $employee->id,
-                    'payroll_id'        => $payroll?->id,
-                    'payroll_status'    => $payroll?->status,
-                    'employee_code'     => $employee->employee_code,
-                    'name'              => $employee->name,
-                    'department'        => optional($employee->department)->name,
-                    'designation'       => optional($employee->designation)->name,
-                    'site'              => optional($employee->site)->site_name,
-                    'site_id'           => $employee->site_id,
-                    'department_id'     => $employee->department_id,
-                    'month'             => $month,
-                    'year'              => $year,
-                    'days_in_month'     => $daysInMonth,
-                    'present_days'      => $presentDays,
-                    'absent_days'       => $effectiveAbsent,
-                    'half_days'         => $halfDays,
-                    'rest_days'         => $restDays,
-                    'holidays'          => $holidays,
-                    'paid_leave_days'   => $paidLeaveDays,
+                    'id' => $employee->id,
+                    'payroll_id' => $payroll?->id,
+                    'payroll_status' => $payroll?->status,
+                    'employee_code' => $employee->employee_code,
+                    'name' => $employee->name,
+                    'department' => optional($employee->department)->name,
+                    'designation' => optional($employee->designation)->name,
+                    'site' => optional($employee->site)->site_name,
+                    'site_id' => $employee->site_id,
+                    'department_id' => $employee->department_id,
+                    'month' => $month,
+                    'year' => $year,
+                    'days_in_month' => $daysInMonth,
+                    'present_days' => $presentDays,
+                    'absent_days' => $effectiveAbsent,
+                    'half_days' => $halfDays,
+                    'rest_days' => $restDays,
+                    'holidays' => $holidays,
+                    'paid_leave_days' => $paidLeaveDays,
                     'unpaid_leave_days' => $unpaidLeaveDays,
-                    'penalty_amount'    => (float) $penaltyTotal,
-                    'basic_salary'      => $basicSalary,
-                    'shift_allowance'   => $shiftAllowance,
-                    'incentives'        => $incentives,
-                    'gross_salary'      => $grossSalary,
-                    'leave_deduction'   => $leaveDeduction,
-                    'pf_deduction'      => $pfDeduction,
-                    'mess_deduction'    => $messDeduction,
-                    'monthly_salary'    => $grossSalary,
-                    'net_salary'        => $payroll ? (float) $payroll->net_salary : $netSalary,
-                    'created_at'        => $payroll?->created_at?->toDateTimeString() ?? $employee->created_at->toDateTimeString(),
+                    'penalty_amount' => (float) $penaltyTotal,
+                    'basic_salary' => $basicSalary,
+                    'shift_allowance' => $shiftAllowance,
+                    'incentives' => $incentives,
+                    'gross_salary' => $grossSalary,
+                    'leave_deduction' => $leaveDeduction,
+                    'pf_deduction' => $pfDeduction,
+                    'mess_deduction' => $messDeduction,
+                    'other_deduction' => $payroll ? (float) $payroll->other_deduction : $otherDeduction,
+                    'monthly_salary' => $grossSalary,
+                    'net_salary' => $payroll ? (float) $payroll->net_salary : $netSalary,
+                    'created_at' => $payroll?->created_at?->toDateTimeString() ?? $employee->created_at->toDateTimeString(),
                 ];
             });
 
@@ -270,6 +268,8 @@ class PayrollController extends Controller
                 'month' => 'required|integer|between:1,12',
                 'year' => 'required|integer|min:2020',
                 'employee_id' => 'nullable|exists:employees,id',
+                'employee_ids' => 'nullable|array',
+                'employee_ids.*' => 'exists:employees,id',
             ]);
 
             $month = (int) $request->month;
@@ -277,9 +277,11 @@ class PayrollController extends Controller
 
             // Determine target employees
             if ($request->filled('employee_id')) {
-                $employees = Employee::where('id', $request->employee_id)->get();
+                $employees = Employee::with(['activePayroll'])->where('id', $request->employee_id)->get();
+            } elseif ($request->filled('employee_ids')) {
+                $employees = Employee::with(['activePayroll'])->whereIn('id', $request->employee_ids)->get();
             } else {
-                $employees = Employee::where('is_active', true)->get();
+                $employees = Employee::with(['activePayroll'])->where('is_active', true)->get();
             }
 
             if ($employees->isEmpty()) {
@@ -310,9 +312,9 @@ class PayrollController extends Controller
                         ')->first();
 
                     $presentDays = $attendance ? (int) $attendance->present_days : 0;
-                    $halfDays    = $attendance ? (int) $attendance->half_days : 0;
-                    $leaveDays   = $attendance ? (int) $attendance->leave_days : 0;
-                    $restDays    = $attendance ? (int) $attendance->rest_days : 0;
+                    $halfDays = $attendance ? (int) $attendance->half_days : 0;
+                    $leaveDays = $attendance ? (int) $attendance->leave_days : 0;
+                    $restDays = $attendance ? (int) $attendance->rest_days : 0;
 
                     // ── Leave breakdown (paid vs unpaid) ──
                     $paidLeaveDays = 0;
@@ -330,9 +332,13 @@ class PayrollController extends Controller
                     foreach ($approvedLeaves as $leave) {
                         $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
                         $from = Carbon::parse($leave->from_date)->max($monthStart);
-                        $to   = Carbon::parse($leave->to_date)->min($monthEnd);
+                        $to = Carbon::parse($leave->to_date)->min($monthEnd);
                         $days = $from->diffInDays($to) + 1;
-                        if ($category === 'paid') { $paidLeaveDays += $days; } else { $unpaidLeaveDays += $days; }
+                        if ($category === 'paid') {
+                            $paidLeaveDays += $days;
+                        } else {
+                            $unpaidLeaveDays += $days;
+                        }
                     }
 
                     // ── Holidays for this employee's site ──
@@ -343,54 +349,60 @@ class PayrollController extends Controller
                         })->count();
 
                     // ── Earnings ──
-                    $basicSalary = (float) $employee->basic_salary;
-                    $ss = SalaryStructure::where('designation_id', $employee->designation_id)->where('is_active', true)->first();
-                    $shiftAllowance = $ss ? (float) $ss->shift_allowance : 0;
-                    $incentives     = $ss ? (float) $ss->incentives : 0;
-                    $grossSalary    = $basicSalary + $shiftAllowance + $incentives;
-                    $perDaySalary   = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
+                    $activePayroll = $employee->activePayroll;
+                    $basicSalary = $activePayroll ? (float) $activePayroll->basic_salary : (float) $employee->basic_salary;
+                    $shiftAllowance = 0;
+                    $incentives = 0;
+                    $grossSalary = $basicSalary + $shiftAllowance + $incentives;
+                    $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
                     // rest day is counted as paid leave
                     $paidLeaveDays += $restDays;
 
                     // ── Leave Deduction (unmarked days = absent) ──
                     $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
-                    $leaveDeduction  = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+                    $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
 
                     // ── Fixed Deductions ──
-                    $pfDeduction   = $employee->pf_applicable ? (float) $employee->pf_amount : 0;
-                    $messDeduction = $employee->mess_deduction_applicable ? (float) $employee->mess_deduction_amount : 0;
+                    $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
+                    $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
+
+                    $pfDeduction = $pfApplicable ? (float) $employee->pf_amount : 0;
+                    $messDeduction = $messDeductionApplicable ? (float) $employee->mess_deduction_amount : 0;
+
+                    $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
+                    $otherDeduction = $otherDeductionApplicable ? ($activePayroll ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
 
                     // ── Penalty ──
                     $penaltyTotal = Penalty::where('employee_id', $employee->id)
                         ->where('month', $month)->where('year', $year)->sum('amount');
 
-                    // ── Net = Gross − (PF + Mess + Leave Deduction + Penalty) ──
-                    $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal;
+                    // ── Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction) ──
+                    $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
                     $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
 
                     // ── Upsert payroll record ──
                     Payroll::updateOrCreate(
                         ['employee_id' => $employee->id, 'month' => $month, 'year' => $year],
                         [
-                            'basic_salary'      => $basicSalary,
-                            'shift_allowance'   => $shiftAllowance,
-                            'incentives'        => $incentives,
-                            'present_days'      => $presentDays,
-                            'half_days'         => $halfDays,
-                            'absent_days'       => $effectiveAbsent,
-                            'leave_days'        => $leaveDays,
-                            'paid_leave_days'   => $paidLeaveDays,
+                            'basic_salary' => $basicSalary,
+                            'shift_allowance' => $shiftAllowance,
+                            'incentives' => $incentives,
+                            'present_days' => $presentDays,
+                            'half_days' => $halfDays,
+                            'absent_days' => $effectiveAbsent,
+                            'leave_days' => $leaveDays,
+                            'paid_leave_days' => $paidLeaveDays,
                             'unpaid_leave_days' => $unpaidLeaveDays,
-                            'gross_salary'      => $grossSalary,
-                            'pf_deduction'      => $pfDeduction,
-                            'mess_deduction'    => $messDeduction,
-                            'other_deduction'   => 0,
-                            'leave_deduction'   => $leaveDeduction,
+                            'gross_salary' => $grossSalary,
+                            'pf_deduction' => $pfDeduction,
+                            'mess_deduction' => $messDeduction,
+                            'other_deduction' => $otherDeduction,
+                            'leave_deduction' => $leaveDeduction,
                             'penalty_deduction' => $penaltyTotal,
-                            'net_salary'        => $netSalary,
-                            'status'            => 'generated',
-                            'generated_by'      => auth()->id(),
+                            'net_salary' => $netSalary,
+                            'status' => 'generated',
+                            'generated_by' => auth()->id(),
                         ]
                     );
 
@@ -432,7 +444,7 @@ class PayrollController extends Controller
             $month = (int) $request->month;
             $year = (int) $request->year;
 
-            $employee = Employee::with(['department', 'designation', 'site'])->find($employeeId);
+            $employee = Employee::with(['department', 'designation', 'site', 'activePayroll'])->find($employeeId);
 
             if (!$employee) {
                 return response()->json([
@@ -505,30 +517,36 @@ class PayrollController extends Controller
 
             // ── Salary calculation ──
             $presentDays = $attendance ? (int) $attendance->present_days : 0;
-            $halfDays    = $attendance ? (int) $attendance->half_days : 0;
-            $restDays    = $attendance ? (int) $attendance->rest_days : 0;
+            $halfDays = $attendance ? (int) $attendance->half_days : 0;
+            $restDays = $attendance ? (int) $attendance->rest_days : 0;
 
             // Earnings
-            $basicSalary = (float) $employee->basic_salary;
-            $ss = SalaryStructure::where('designation_id', $employee->designation_id)->where('is_active', true)->first();
-            $shiftAllowance = $ss ? (float) $ss->shift_allowance : 0;
-            $incentives     = $ss ? (float) $ss->incentives : 0;
-            $grossSalary    = $basicSalary + $shiftAllowance + $incentives;
-            $perDaySalary   = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
+            $activePayroll = $employee->activePayroll;
+            $basicSalary = $activePayroll ? (float) $activePayroll->basic_salary : (float) $employee->basic_salary;
+            $shiftAllowance = 0;
+            $incentives = 0;
+            $grossSalary = $basicSalary + $shiftAllowance + $incentives;
+            $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
             // rest day is counted as paid leave
             $paidLeaveDays += $restDays;
 
             // Leave Deduction (unmarked days = absent)
             $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
-            $leaveDeduction  = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+            $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
 
             // Fixed deductions
-            $pfDeduction   = $employee->pf_applicable ? (float) $employee->pf_amount : 0;
-            $messDeduction = $employee->mess_deduction_applicable ? (float) $employee->mess_deduction_amount : 0;
+            $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
+            $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
 
-            // Net = Gross − (PF + Mess + Leave Deduction + Penalty)
-            $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal;
+            $pfDeduction = $pfApplicable ? (float) $employee->pf_amount : 0;
+            $messDeduction = $messDeductionApplicable ? (float) $employee->mess_deduction_amount : 0;
+
+            $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
+            $otherDeduction = $otherDeductionApplicable ? ($activePayroll ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
+
+            // Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction)
+            $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
             $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
 
             // ── Existing payroll record ──
@@ -542,24 +560,24 @@ class PayrollController extends Controller
             $payroll = Payroll::updateOrCreate(
                 ['employee_id' => $employeeId, 'month' => $month, 'year' => $year],
                 [
-                    'basic_salary'      => $basicSalary,
-                    'shift_allowance'   => $shiftAllowance,
-                    'incentives'        => $incentives,
-                    'present_days'      => $presentDays,
-                    'half_days'         => $halfDays,
-                    'absent_days'       => $effectiveAbsent,
-                    'leave_days'        => $paidLeaveDays + $unpaidLeaveDays,
-                    'paid_leave_days'   => $paidLeaveDays,
+                    'basic_salary' => $basicSalary,
+                    'shift_allowance' => $shiftAllowance,
+                    'incentives' => $incentives,
+                    'present_days' => $presentDays,
+                    'half_days' => $halfDays,
+                    'absent_days' => $effectiveAbsent,
+                    'leave_days' => $paidLeaveDays + $unpaidLeaveDays,
+                    'paid_leave_days' => $paidLeaveDays,
                     'unpaid_leave_days' => $unpaidLeaveDays,
-                    'gross_salary'      => $grossSalary,
-                    'pf_deduction'      => $pfDeduction,
-                    'mess_deduction'    => $messDeduction,
-                    'other_deduction'   => 0,
-                    'leave_deduction'   => $leaveDeduction,
+                    'gross_salary' => $grossSalary,
+                    'pf_deduction' => $pfDeduction,
+                    'mess_deduction' => $messDeduction,
+                    'other_deduction' => $otherDeduction,
+                    'leave_deduction' => $leaveDeduction,
                     'penalty_deduction' => $penaltyTotal,
-                    'net_salary'        => $netSalary,
-                    'status'            => $status,
-                    'generated_by'      => auth()->id(),
+                    'net_salary' => $netSalary,
+                    'status' => $status,
+                    'generated_by' => auth()->id(),
                 ]
             );
 
@@ -574,10 +592,10 @@ class PayrollController extends Controller
                         'department' => optional($employee->department)->name,
                         'designation' => optional($employee->designation)->name,
                         'site' => optional($employee->site)->site_name,
-                        'salary_type' => $employee->salary_type,
-                        'bank_name' => $employee->bank_name,
-                        'bank_account_number' => $employee->bank_account_number,
-                        'ifsc_code' => $employee->ifsc_code,
+                        'salary_type' => $activePayroll ? $activePayroll->salary_type : $employee->salary_type,
+                        'bank_name' => $activePayroll ? $activePayroll->bank_name : $employee->bank_name,
+                        'bank_account_number' => $activePayroll ? $activePayroll->bank_account_number : $employee->bank_account_number,
+                        'ifsc_code' => $activePayroll ? $activePayroll->ifsc_code : $employee->ifsc_code,
                     ],
                     'payroll_period' => [
                         'month' => $month,
@@ -586,26 +604,27 @@ class PayrollController extends Controller
                         'days_in_month' => $daysInMonth,
                     ],
                     'attendance' => [
-                        'present_days'      => $presentDays,
-                        'absent_days'       => $effectiveAbsent,
-                        'half_days'         => $halfDays,
-                        'rest_days'         => $restDays,
-                        'holidays'          => $holidays,
-                        'paid_leave_days'   => $paidLeaveDays,
+                        'present_days' => $presentDays,
+                        'absent_days' => $effectiveAbsent,
+                        'half_days' => $halfDays,
+                        'rest_days' => $restDays,
+                        'holidays' => $holidays,
+                        'paid_leave_days' => $paidLeaveDays,
                         'unpaid_leave_days' => $unpaidLeaveDays,
                     ],
                     'earnings' => [
-                        'basic_salary'    => $basicSalary,
+                        'basic_salary' => $basicSalary,
                         'shift_allowance' => $shiftAllowance,
-                        'incentives'      => $incentives,
-                        'gross_salary'    => $grossSalary,
-                        'per_day_salary'  => (float) round($perDaySalary, 0),
+                        'incentives' => $incentives,
+                        'gross_salary' => $grossSalary,
+                        'per_day_salary' => (float) round($perDaySalary, 0),
                     ],
                     'deductions' => [
-                        'pf_deduction'     => $pfDeduction,
-                        'mess_deduction'   => $messDeduction,
-                        'leave_deduction'  => $leaveDeduction,
-                        'penalty_amount'   => (float) $penaltyTotal,
+                        'pf_deduction' => $pfDeduction,
+                        'mess_deduction' => $messDeduction,
+                        'leave_deduction' => $leaveDeduction,
+                        'other_deduction' => $otherDeduction,
+                        'penalty_amount' => (float) $penaltyTotal,
                         'total_deductions' => $totalDeductions,
                     ],
                     'penalties' => $penalties,

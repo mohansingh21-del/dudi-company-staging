@@ -1,9 +1,9 @@
 <?php
 
 namespace App\Http\Controllers\Api\Admin;
-
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
+use App\Models\Leave;
 use App\Models\AttendanceCorrection;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -578,7 +578,29 @@ public function update(UpdateAttendanceRequest $request, $id)
         'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
         'remarks' => 'nullable|string'
     ]);
+        if ($request->attendance_status === 'present') {
 
+        $attendances = AttendanceProcessed::whereIn(
+            'id',
+            $request->attendance_ids
+        )->get();
+
+        foreach ($attendances as $attendance) {
+
+            $hasLeave = Leave::where('employee_id', $attendance->employee_id)
+                ->where('status', 'approved')
+                ->whereDate('from_date', '<=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
+                ->whereDate('to_date', '>=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
+                ->exists();
+
+            if ($hasLeave) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Cannot mark attendance as Present. Approved leave exists for employee on {$attendance->date}."
+                ], 422);
+            }
+        }
+    }
     AttendanceProcessed::whereIn(
         'id',
         $request->attendance_ids

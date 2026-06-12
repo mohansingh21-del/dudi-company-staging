@@ -19,7 +19,6 @@ use App\Http\Controllers\Api\Admin\SiteController;
 use App\Http\Controllers\Api\Admin\ShiftController;
 use App\Http\Controllers\Api\Admin\EmployeeShiftAssignmentController;
 use App\Http\Controllers\Api\Admin\LeaveTypeController;
-use App\Http\Controllers\Api\Admin\SalaryStructureController;
 use App\Http\Controllers\Api\Admin\HolidayController;
 
 use App\Http\Controllers\Api\Admin\TrainingTypeController;
@@ -158,9 +157,6 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('leavetype', LeaveTypeController::class);
 
             Route::patch('leavetype/{id}/status', [LeaveTypeController::class, 'toggleStatus']);
-            Route::apiResource('salarystructure', SalaryStructureController::class);
-
-            Route::patch('salarystructure/{id}/status', [SalaryStructureController::class, 'toggleStatus']);
             Route::apiResource('holiday', HolidayController::class);
 
             Route::patch('holiday/{id}/status', [HolidayController::class, 'toggleStatus']);

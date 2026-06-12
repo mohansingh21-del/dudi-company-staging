@@ -10,7 +10,7 @@ class Employee extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['employee_code', 'name', 'father_name', 'dob', 'gender', 'mobile', 'address', 'emergency_contact', 'joining_date', 'employee_type', 'department_id', 'designation_id', 'site_id', 'supervisor_id', 'salary_type', 'basic_salary', 'pf_applicable', 'pf_number', 'bank_name', 'bank_account_number', 'ifsc_code', 'mess_deduction_applicable', 'other_deduction_appliacble', 'other_deduction', 'is_active','relay_shift','pf_amount','mess_deduction_amount','rest_days'];
+    protected $fillable = ['employee_code', 'name', 'father_name', 'dob', 'gender', 'mobile', 'address', 'emergency_contact', 'joining_date', 'employee_type', 'department_id', 'designation_id', 'site_id', 'supervisor_id', 'salary_type', 'basic_salary', 'pf_applicable', 'pf_number', 'bank_name', 'bank_account_number', 'ifsc_code', 'mess_deduction_applicable', 'other_deduction_appliacble', 'other_deduction', 'is_active', 'relay_shift', 'pf_amount', 'mess_deduction_amount', 'rest_days'];
 
     protected $casts = [
         'dob' => 'date:Y-m-d',
@@ -60,7 +60,7 @@ class Employee extends Model
 
     public function getShiftIdAttribute()
     {
-       return optional($this->currentShiftAssignment)->shift_id;
+        return optional($this->currentShiftAssignment)->shift_id;
     }
 
     public function getPreviousShiftAttribute()
@@ -72,7 +72,6 @@ class Employee extends Model
 
         return $assignment && $assignment->shift ? $assignment->shift->shift_name : null;
     }
-
     public function penalties()
     {
         return $this->hasMany(Penalty::class);
@@ -81,5 +80,12 @@ class Employee extends Model
     public function payrolls()
     {
         return $this->hasMany(Payroll::class);
+    }
+
+    public function activePayroll()
+    {
+        return $this->hasOne(EmployeePayroll::class)
+            ->where('is_active', true)
+            ->latest();
     }
 }

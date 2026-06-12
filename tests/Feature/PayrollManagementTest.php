@@ -6,7 +6,6 @@ use App\Models\Employee;
 use App\Models\Role;
 use App\Models\User;
 use App\Models\Payroll;
-use App\Models\SalaryStructure;
 use App\Models\AttendanceProcessed;
 use App\Models\Leave;
 use App\Models\LeaveType;
@@ -59,14 +58,6 @@ class PayrollManagementTest extends TestCase
             'updated_at' => now(),
         ]);
 
-        // Create salary structure for the designation (Worker)
-        SalaryStructure::create([
-            'designation_id' => $this->role->id,
-            'shift_allowance' => 1500.00,
-            'incentives' => 500.00,
-            'is_active' => 1
-        ]);
-
         // Create test employee
         $this->employee = Employee::create([
             'employee_code' => 'EMP5001',
@@ -101,14 +92,14 @@ class PayrollManagementTest extends TestCase
             'amount' => 2000.00
         ]);
 
-        // Earnings: Basic (25000) + Allowance (1500) + Incentives (500) = 27000 gross
-        // Per day salary: 27000 / 30 = 900
+        // Earnings: Basic (25000) + Allowance (0) + Incentives (0) = 25000 gross
+        // Per day salary: 25000 / 30 = 833.3333
         // Days worked: 1 present. Holidays = 0. Rest days = 0. Paid leaves = 0.
         // Effective absent: 30 - 1 = 29 days absent (unmarked count as absent)
-        // Leave deduction: 29 absent * 900 = 26100.
+        // Leave deduction: round(29 * (25000 / 30)) = 24167.
         // PF (1200) + Mess (500) + Penalty (2000) = 3700 other deductions
-        // Total deductions = 26100 + 3700 = 29800
-        // Net salary = max(0, 27000 - 29800) = 0.00
+        // Total deductions = 24167 + 3700 = 27867
+        // Net salary = max(0, 25000 - 27867) = 0.00
 
         $response = $this->getJson('/api/v1/admin/payroll?month=6&year=2026');
         $response->assertStatus(200);
@@ -116,9 +107,9 @@ class PayrollManagementTest extends TestCase
         $response->assertJsonFragment([
             'employee_code' => 'EMP5001',
             'basic_salary' => 25000,
-            'shift_allowance' => 1500,
-            'incentives' => 500,
-            'gross_salary' => 27000,
+            'shift_allowance' => 0,
+            'incentives' => 0,
+            'gross_salary' => 25000,
             'present_days' => 1,
             'absent_days' => 29,
             'net_salary' => 0
@@ -262,5 +253,213 @@ class PayrollManagementTest extends TestCase
                 ]
             ]
         ]);
+    }
+
+    public function test_rest_days_do_not_offset_unpaid_leaves()
+    {
+        // For June 2026 (30 days)
+        // Employee basic_salary = 25000.
+        // Gross Salary = 25000. Per day salary = 25000 / 30 = 833.33.
+        // Let's create:
+        // - 18 present days
+        // - 5 rest days
+        // - 7 unpaid leaves (so 18 + 5 + 7 = 30 days total)
+        // Expected outcome:
+        // - Rest days do not offset unpaid leaves.
+        // - So all 7 unpaid leaves remain and are deducted.
+        // - Effective absent days = 7.
+        // - Leave deduction = round(7 * 833.33) = 5833.
+        
+        // 18 present days
+        for ($i = 1; $i <= 18; $i++) {
+            AttendanceProcessed::create([
+                'employee_id' => $this->employee->id,
+                'date' => sprintf('2026-06-%02d', $i),
+                'attendance_status' => 'present'
+            ]);
+        }
+
+        // 5 rest days
+        for ($i = 19; $i <= 23; $i++) {
+            AttendanceProcessed::create([
+                'employee_id' => $this->employee->id,
+                'date' => sprintf('2026-06-%02d', $i),
+                'attendance_status' => 'rest_day'
+            ]);
+        }
+
+        // 7 unpaid leaves
+        $leaveType = LeaveType::create([
+            'name' => 'Unpaid Leave',
+            'leave_category' => 'unpaid',
+            'allowed_days' => 10,
+            'is_active' => 1
+        ]);
+
+        Leave::create([
+            'employee_id' => $this->employee->id,
+            'leave_type_id' => $leaveType->id,
+            'from_date' => '2026-06-24',
+            'to_date' => '2026-06-30',
+            'reason' => 'Personal work',
+            'status' => 'approved'
+        ]);
+
+        // Disable PF and Mess deductions for clean net salary verification
+        $this->employee->update([
+            'pf_applicable' => 0,
+            'mess_deduction_applicable' => 0
+        ]);
+
+        // 1. Fetch payroll data (on-the-fly calculation)
+        $response = $this->getJson('/api/v1/admin/payroll?month=6&year=2026');
+        $response->assertStatus(200);
+
+        // Expected paid_leave_days: 5 rest_days + 0 paid_leave = 5
+        // Expected unpaid_leave_days: 7
+        // Expected absent_days (effective absent): 7
+        // Expected net_salary: Gross (25000) - Leave Deduction (5833) = 19167
+        $response->assertJsonFragment([
+            'employee_code' => 'EMP5001',
+            'present_days' => 18,
+            'rest_days' => 5,
+            'paid_leave_days' => 5,
+            'unpaid_leave_days' => 7,
+            'absent_days' => 7,
+            'leave_deduction' => 5833,
+            'net_salary' => 19167
+        ]);
+
+        // 2. Generate payroll and verify database record
+        $genResponse = $this->postJson('/api/v1/admin/payroll/generate', [
+            'month' => 6,
+            'year' => 2026,
+            'employee_id' => $this->employee->id
+        ]);
+        $genResponse->assertStatus(200);
+
+        $this->assertDatabaseHas('payrolls', [
+            'employee_id' => $this->employee->id,
+            'month' => 6,
+            'year' => 2026,
+            'present_days' => 18,
+            'absent_days' => 7,
+            'paid_leave_days' => 5,
+            'unpaid_leave_days' => 7,
+            'leave_deduction' => 5833,
+            'net_salary' => 19167
+        ]);
+    }
+
+    public function test_can_bulk_generate_payroll_records()
+    {
+        // Create another employee
+        $employee2 = Employee::create([
+            'employee_code' => 'EMP5002',
+            'name' => 'John Doe',
+            'designation_id' => $this->role->id,
+            'joining_date' => '2026-01-01',
+            'salary_type' => 'monthly',
+            'basic_salary' => 20000,
+            'pf_applicable' => 0,
+            'mess_deduction_applicable' => 0,
+            'is_active' => 1
+        ]);
+
+        $response = $this->postJson('/api/v1/admin/payroll/generate', [
+            'month' => 6,
+            'year' => 2026,
+            'employee_ids' => [$this->employee->id, $employee2->id]
+        ]);
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'status' => 200,
+            'message' => '2 payroll record(s) generated successfully'
+        ]);
+
+        $this->assertDatabaseHas('payrolls', [
+            'employee_id' => $this->employee->id,
+            'month' => 6,
+            'year' => 2026
+        ]);
+
+        $this->assertDatabaseHas('payrolls', [
+            'employee_id' => $employee2->id,
+            'month' => 6,
+            'year' => 2026
+        ]);
+    }
+
+    public function test_uses_employee_payrolls_table_details_if_available()
+    {
+        // 1 present day in June 2026
+        AttendanceProcessed::create([
+            'employee_id' => $this->employee->id,
+            'date' => '2026-06-01',
+            'attendance_status' => 'present'
+        ]);
+
+        // Create an active employee payroll record (different configuration)
+        \App\Models\EmployeePayroll::create([
+            'employee_id' => $this->employee->id,
+            'salary_type' => 'monthly',
+            'basic_salary' => 30000.00,
+            'pf_applicable' => false,
+            'mess_deduction_applicable' => false,
+            'other_deduction_appliacble' => true,
+            'other_deduction' => 500.00,
+            'is_active' => true
+        ]);
+
+        // 1. Verify index method lists it correctly
+        // Earnings: Basic (30000) + Allowance (0) + Incentives (0) = 30000 gross
+        // Per day salary: 30000 / 30 = 1000
+        // Days worked: 1 present. Holidays = 0. Rest days = 0. Paid leaves = 0.
+        // Effective absent: 30 - 1 = 29 days absent.
+        // Leave deduction: 29 * 1000 = 29000
+        // PF (0) + Mess (0) + Other Deduction (500) = 500 fixed deductions
+        // Net salary = 30000 - 29000 - 500 = 500
+        $response = $this->getJson('/api/v1/admin/payroll?month=6&year=2026');
+        $response->assertStatus(200);
+        $response->assertJsonFragment([
+            'employee_code' => 'EMP5001',
+            'basic_salary' => 30000,
+            'gross_salary' => 30000,
+            'pf_deduction' => 0,
+            'mess_deduction' => 0,
+            'other_deduction' => 500,
+            'leave_deduction' => 29000,
+            'net_salary' => 500
+        ]);
+
+        // 2. Generate payroll and assert database record has correct values
+        $genResponse = $this->postJson('/api/v1/admin/payroll/generate', [
+            'month' => 6,
+            'year' => 2026,
+            'employee_id' => $this->employee->id
+        ]);
+        $genResponse->assertStatus(200);
+
+        $this->assertDatabaseHas('payrolls', [
+            'employee_id' => $this->employee->id,
+            'month' => 6,
+            'year' => 2026,
+            'basic_salary' => 30000,
+            'pf_deduction' => 0,
+            'mess_deduction' => 0,
+            'other_deduction' => 500,
+            'leave_deduction' => 29000,
+            'net_salary' => 500
+        ]);
+
+        // 3. Verify show method returns correct detailed response
+        $showResponse = $this->getJson("/api/v1/admin/payroll/{$this->employee->id}/detail?month=6&year=2026");
+        $showResponse->assertStatus(200);
+        $showResponse->assertJsonPath('data.earnings.basic_salary', 30000);
+        $showResponse->assertJsonPath('data.deductions.pf_deduction', 0);
+        $showResponse->assertJsonPath('data.deductions.mess_deduction', 0);
+        $showResponse->assertJsonPath('data.deductions.other_deduction', 500);
+        $showResponse->assertJsonPath('data.net_salary', 500);
     }
 }
