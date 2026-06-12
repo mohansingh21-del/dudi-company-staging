@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
 use App\Models\Leave;
+use App\Models\Holiday;
 use App\Models\AttendanceCorrection;
 use App\Models\User;
 use Illuminate\Http\Request;
@@ -128,85 +129,171 @@ class AttendanceController extends Controller
         }
     }
 
-public function update(UpdateAttendanceRequest $request, $id)
+    public function update(UpdateAttendanceRequest $request, $id = null)
     {
         try {
+            $data = $request->validated();
+            
+            $attendance = null;
+            $employeeId = $request->input('employee_id');
+            $date = $request->input('date');
 
-            $attendance = AttendanceProcessed::with('shift')->find($id);
-
-            if (!$attendance) {
-                return response()->json([
-                    'status' => 404,
-                    'message' => 'Attendance not found'
-                ]);
+            if ($employeeId && $date) {
+                $attendance = AttendanceProcessed::where('employee_id', $employeeId)
+                    ->where('date', $date)
+                    ->first();
+            } else if ($id) {
+                $attendance = AttendanceProcessed::find($id);
+                if (!$attendance && $date) {
+                    // Try treating ID as employee ID
+                    $attendance = AttendanceProcessed::where('employee_id', $id)
+                        ->where('date', $date)
+                        ->first();
+                }
             }
 
-            $data = $request->validated();
+            $empId = $attendance ? $attendance->employee_id : ($employeeId ?? $id);
+            $employee = \App\Models\Employee::find($empId);
+            if (!$employee) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Employee not found'
+                ], 404);
+            }
 
-            $attendanceDate = Carbon::parse($attendance->date)->format('Y-m-d');
+            // Update employee site_id if provided
+            if ($request->filled('site_id')) {
+                $employee->update(['site_id' => $request->site_id]);
+            }
 
-            $checkIn = Carbon::parse(
-                $attendanceDate . ' ' . $data['check_in']
-            );
+            $attendanceDate = $attendance
+                ? Carbon::parse($attendance->date)->format('Y-m-d')
+                : $date;
+            if (!$attendanceDate) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Date is required for updating attendance'
+                ], 422);
+            }
 
-            $checkOut = Carbon::parse(
-                $attendanceDate . ' ' . $data['check_out']
-            );
+            $checkIn = null;
+            $checkOut = null;
 
-            if ($checkOut->lessThanOrEqualTo($checkIn)) {
+            if ($request->filled('check_in')) {
+                try {
+                    $checkIn = Carbon::parse($attendanceDate . ' ' . $request->check_in);
+                } catch (\Exception $e) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Invalid check-in time format'
+                    ], 422);
+                }
+            }
+
+            if ($request->filled('check_out')) {
+                try {
+                    $checkOut = Carbon::parse($attendanceDate . ' ' . $request->check_out);
+                } catch (\Exception $e) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Invalid check-out time format'
+                    ], 422);
+                }
+            }
+
+            if ($checkIn && $checkOut && $checkOut->lessThanOrEqualTo($checkIn)) {
                 return response()->json([
                     'status' => 422,
                     'message' => 'Check-out must be greater than check-in'
-                ]);
+                ], 422);
             }
 
-            $workingHours = round(
-                $checkIn->diffInMinutes($checkOut) / 60,
-                2
-            );
+            $status = strtolower($data['attendance_status']);
+            $dbStatus = $status;
+            if ($status === 'exception') {
+                $dbStatus = 'absent';
+            }
 
+            // Resolve shift
+            $shift = $attendance ? $attendance->shift : null;
+            $shiftId = $attendance ? $attendance->shift_id : null;
+            if (!$shift) {
+                $shiftAssignment = \App\Models\EmployeeShiftAssignment::where('employee_id', $employee->id)->first();
+                $shiftId = $shiftAssignment ? $shiftAssignment->shift_id : null;
+                $shift = $shiftId ? \App\Models\Shift::find($shiftId) : null;
+            }
+
+            $workingHours = 0.0;
             $lateMinutes = 0;
             $earlyExitMinutes = 0;
 
-            if ($attendance->shift) {
+            if ($checkIn && $checkOut) {
+                $workingHours = round($checkIn->diffInMinutes($checkOut) / 60, 2);
 
-                $shiftStart = Carbon::parse(
-                    $attendanceDate . ' ' . $attendance->shift->start_time
-                );
+                if ($shift) {
+                    $shiftStart = Carbon::parse($attendanceDate . ' ' . $shift->start_time);
+                    $shiftEnd = Carbon::parse($attendanceDate . ' ' . $shift->end_time);
 
-                $shiftEnd = Carbon::parse(
-                    $attendanceDate . ' ' . $attendance->shift->end_time
-                );
+                    if ($checkIn->gt($shiftStart)) {
+                        $lateMinutes = $shiftStart->diffInMinutes($checkIn);
+                    }
 
-                if ($checkIn->gt($shiftStart)) {
-                    $lateMinutes = $shiftStart->diffInMinutes($checkIn);
-                }
-
-                if ($checkOut->lt($shiftEnd)) {
-                    $earlyExitMinutes = $checkOut->diffInMinutes($shiftEnd);
+                    if ($checkOut->lt($shiftEnd)) {
+                        $earlyExitMinutes = $checkOut->diffInMinutes($shiftEnd);
+                    }
                 }
             }
 
-            $attendance->update([
-                'check_in' => $checkIn,
-                'check_out' => $checkOut,
-                'working_hours' => $workingHours,
-                'late_minutes' => $lateMinutes,
-                'early_exit_minutes' => $earlyExitMinutes,
-                'attendance_status' => $data['attendance_status'],
-                'remarks' => $data['remarks'] ?? null,
-            ]);
+            $remarks = $request->input('remarks');
+            if ($status === 'exception') {
+                $remarks = trim('[Exception] ' . ($remarks ?? ''));
+            }
+
+            if ($attendance) {
+                $attendance->update([
+                    'check_in' => $checkIn,
+                    'check_out' => $checkOut,
+                    'working_hours' => $workingHours,
+                    'late_minutes' => $lateMinutes,
+                    'early_exit_minutes' => $earlyExitMinutes,
+                    'attendance_status' => $dbStatus,
+                    'remarks' => $remarks,
+                ]);
+                $attendance->refresh();
+            } else {
+                $attendance = AttendanceProcessed::create([
+                    'employee_id' => $employee->id,
+                    'shift_id' => $shiftId,
+                    'date' => $attendanceDate,
+                    'check_in' => $checkIn,
+                    'check_out' => $checkOut,
+                    'working_hours' => $workingHours,
+                    'late_minutes' => $lateMinutes,
+                    'early_exit_minutes' => $earlyExitMinutes,
+                    'attendance_status' => $dbStatus,
+                    'remarks' => $remarks,
+                ]);
+            }
 
             return response()->json([
                 'status' => 200,
-                'message' => 'Attendance updated successfully'
+                'message' => 'Attendance updated successfully',
+                'data' => [
+                    'id' => $attendance->id,
+                    'employee_id' => $attendance->employee_id,
+                    'date' => $attendance->date,
+                    'check_in' => $attendance->check_in ? Carbon::parse($attendance->check_in)->toDateTimeString() : null,
+                    'check_out' => $attendance->check_out ? Carbon::parse($attendance->check_out)->toDateTimeString() : null,
+                    'working_hours' => (float) $attendance->working_hours,
+                    'attendance_status' => $attendance->attendance_status,
+                    'remarks' => $attendance->remarks,
+                ]
             ]);
         } catch (\Throwable $th) {
-
             return response()->json([
                 'status' => 500,
                 'message' => $th->getMessage()
-            ]);
+            ], 500);
         }
     }
     /**
@@ -469,8 +556,8 @@ public function update(UpdateAttendanceRequest $request, $id)
                             $status = 'Leave';
                             break;
                         case '5':
-                        $statusLabel = 'Rest Day';
-                        break;
+                            $statusLabel = 'Rest Day';
+                            break;
                     }
                 } elseif ($isWeekend) {
                     $status = 'Weekend';
@@ -506,6 +593,159 @@ public function update(UpdateAttendanceRequest $request, $id)
             return $this->errorResponse('An error occurred: ' . $e->getMessage(), 500);
         }
     }
+
+    public function getEmployeeAttendanceDetails(Request $request, $employee_id)
+    {
+        try {
+            $monthInput = $request->input('month', now()->month);
+            $yearInput = $request->input('year', now()->year);
+
+            if ($request->filled('date')) {
+                try {
+                    $parsed = Carbon::parse($request->date);
+                    $monthInput = $parsed->month;
+                    $yearInput = $parsed->year;
+                } catch (\Exception $e) {
+                    // ignore and use fallback/default
+                }
+            }
+
+            $month = (int) $monthInput;
+            $year = (int) $yearInput;
+
+            $employee = \App\Models\Employee::with(['site', 'department', 'designation'])
+                ->findOrFail($employee_id);
+
+            $startDate = Carbon::create($year, $month, 1)->startOfDay();
+            $endDate = $startDate->copy()->endOfMonth()->endOfDay();
+            $daysInMonth = $startDate->daysInMonth;
+
+            // Fetch processed attendance
+            $attendanceRecords = AttendanceProcessed::where('employee_id', $employee_id)
+                ->whereBetween('date', [$startDate->format('Y-m-d'), $endDate->format('Y-m-d')])
+                ->get()
+                ->keyBy(function ($item) {
+                    return Carbon::parse($item->date)->format('Y-m-d');
+                });
+
+            // Fetch approved leaves
+            $leaves = Leave::where('employee_id', $employee_id)
+                ->where('status', 'approved')
+                ->where(function ($q) use ($month, $year) {
+                    $q->where(function ($q2) use ($month, $year) {
+                        $q2->whereMonth('from_date', $month)->whereYear('from_date', $year);
+                    })->orWhere(function ($q2) use ($month, $year) {
+                        $q2->whereMonth('to_date', $month)->whereYear('to_date', $year);
+                    });
+                })
+                ->with('leaveType')
+                ->get();
+
+            $leaveDays = [];
+            $monthStart = $startDate->copy();
+            $monthEnd = $endDate->copy();
+            foreach ($leaves as $leave) {
+                $from = Carbon::parse($leave->from_date)->max($monthStart);
+                $to = Carbon::parse($leave->to_date)->min($monthEnd);
+                $curr = $from->copy();
+                while ($curr->lte($to)) {
+                    $leaveDays[$curr->format('Y-m-d')] = [
+                        'status' => 'Leave',
+                        'leave_type' => optional($leave->leaveType)->name ?? 'Leave',
+                        'is_paid' => optional($leave->leaveType)->leave_category === 'paid',
+                    ];
+                    $curr->addDay();
+                }
+            }
+
+            // Fetch holidays
+            $holidays = Holiday::whereMonth('holiday_date', $month)
+                ->whereYear('holiday_date', $year)
+                ->where('is_active', true)
+                ->where(function ($q) use ($employee) {
+                    $q->whereNull('site_id')
+                        ->orWhere('site_id', $employee->site_id);
+                })
+                ->get()
+                ->keyBy(function ($item) {
+                    return Carbon::parse($item->holiday_date)->format('Y-m-d');
+                });
+
+            $history = [];
+            for ($day = 1; $day <= $daysInMonth; $day++) {
+                $carbonDate = Carbon::create($year, $month, $day)->startOfDay();
+                $dateString = $carbonDate->format('Y-m-d');
+                $isWeekend = $carbonDate->isWeekend();
+
+                $record = $attendanceRecords->get($dateString);
+
+                $status = 'Absent';
+                $checkIn = '--:--';
+                $checkOut = '--:--';
+                $duration = '0h 0m';
+                $durationFormatted = '00:00';
+                $workingHours = 0.0;
+                $recordId = null;
+
+                if ($record) {
+                    $recordId = $record->id;
+                    $status = ucfirst(str_replace('_', ' ', $record->attendance_status));
+                    $checkIn = $record->check_in ? Carbon::parse($record->check_in)->format('H:i') : '--:--';
+                    $checkOut = $record->check_out ? Carbon::parse($record->check_out)->format('H:i') : '--:--';
+                    $workingHours = (float) $record->working_hours;
+
+                    $hours = floor($workingHours);
+                    $minutes = round(($workingHours - $hours) * 60);
+                    $duration = sprintf("%dh %dm", $hours, $minutes);
+                    $durationFormatted = sprintf("%02d:%02d", $hours, $minutes);
+                } else if (isset($leaveDays[$dateString])) {
+                    $status = 'Leave';
+                } else if ($holidays->has($dateString)) {
+                    $status = 'Holiday';
+                } else if ($isWeekend) {
+                    $status = 'Weekend';
+                }
+
+                $history[] = [
+                    'date' => $dateString,
+                    'formatted_date' => $carbonDate->format('d/m/Y'),
+                    'status' => $status,
+                    'check_in' => $checkIn,
+                    'check_out' => $checkOut,
+                    'duration' => $durationFormatted,
+                    'duration_label' => $duration,
+                    'working_hours' => $workingHours,
+                    'attendance_processed_id' => $recordId,
+                ];
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Employee attendance details fetched successfully',
+                'data' => [
+                    'employee' => [
+                        'id' => $employee->id,
+                        'employee_id' => $employee->id,
+                        'name' => $employee->name,
+                        'employee_code' => $employee->employee_code,
+                        'department' => $employee->department->name ?? null,
+                        'designation' => $employee->designation->name ?? null,
+                        'site_name' => $employee->site->site_name ?? null,
+                    ],
+                    'month' => $startDate->format('F Y'),
+                    'month_num' => $month,
+                    'year' => $year,
+                    'history' => $history,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 500,
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function bulkUpload(Request $request)
     {
         try {
@@ -543,144 +783,457 @@ public function update(UpdateAttendanceRequest $request, $id)
             return response()->json(['status' => 500, 'message' => $th->getMessage()]);
         }
     } /* |-------------------------------------------------------------------------- | Update Employee |-------------------------------------------------------------------------- */
-   public function updateStatus(Request $request, $id)
-   {
-    $request->validate([
-        'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
-        'remarks' => 'nullable|string'
-    ]);
+    public function updateStatus(Request $request, $id)
+    {
+        $request->validate([
+            'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
+            'remarks' => 'nullable|string'
+        ]);
 
-    $attendance = AttendanceProcessed::find($id);
+        $attendance = AttendanceProcessed::find($id);
 
-    if (!$attendance) {
+        if (!$attendance) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Attendance not found'
+            ]);
+        }
+
+        $attendance->update([
+            'attendance_status' => $request->attendance_status,
+            'remarks' => $request->remarks
+        ]);
+
         return response()->json([
-            'status' => 404,
-            'message' => 'Attendance not found'
+            'status' => 200,
+            'message' => 'Attendance status updated successfully',
+
         ]);
     }
-
-    $attendance->update([
-        'attendance_status' => $request->attendance_status,
-        'remarks' => $request->remarks
-    ]);
-
-    return response()->json([
-        'status' => 200,
-        'message' => 'Attendance status updated successfully',
-        
-    ]);
-    }
     public function bulkUpdateStatus(Request $request)
-   {
-    $request->validate([
-        'attendance_ids' => 'required|array|min:1',
-        'attendance_ids.*' => 'exists:attendance_processeds,id',
-        'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
-        'remarks' => 'nullable|string'
-    ]);
+    {
+        $request->validate([
+            'attendance_ids' => 'required|array|min:1',
+            'attendance_ids.*' => 'exists:attendance_processeds,id',
+            'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
+            'remarks' => 'nullable|string'
+        ]);
         if ($request->attendance_status === 'present') {
 
-        $attendances = AttendanceProcessed::whereIn(
-            'id',
-            $request->attendance_ids
-        )->get();
+            $attendances = AttendanceProcessed::whereIn(
+                'id',
+                $request->attendance_ids
+            )->get();
 
-        foreach ($attendances as $attendance) {
+            foreach ($attendances as $attendance) {
 
-            $hasLeave = Leave::where('employee_id', $attendance->employee_id)
-                ->where('status', 'approved')
-                ->whereDate('from_date', '<=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
-                ->whereDate('to_date', '>=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
-                ->exists();
+                $hasLeave = Leave::where('employee_id', $attendance->employee_id)
+                    ->where('status', 'approved')
+                    ->whereDate('from_date', '<=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
+                    ->whereDate('to_date', '>=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
+                    ->exists();
 
-            if ($hasLeave) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => "Cannot mark attendance as Present. Approved leave exists for employee on {$attendance->date}."
-                ], 422);
+                if ($hasLeave) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => "Cannot mark attendance as Present. Approved leave exists for employee on {$attendance->date}."
+                    ], 422);
+                }
             }
         }
-    }
-    AttendanceProcessed::whereIn(
-        'id',
-        $request->attendance_ids
-    )->update([
-        'attendance_status' => $request->attendance_status,
-        'remarks' => $request->remarks,
-        'updated_at' => now()
-    ]);
+        AttendanceProcessed::whereIn(
+            'id',
+            $request->attendance_ids
+        )->update([
+                    'attendance_status' => $request->attendance_status,
+                    'remarks' => $request->remarks,
+                    'updated_at' => now()
+                ]);
 
-    return response()->json([
-        'status' => 200,
-        'message' => 'Attendance statuses updated successfully'
-    ]);
-   }
+        return response()->json([
+            'status' => 200,
+            'message' => 'Attendance statuses updated successfully'
+        ]);
+    }
     public function index(Request $request)
     {
         try {
-
             $limit = $request->input('limit', 10);
+            $viewType = strtolower($request->input('view_type', 'daily'));
 
-            $query = AttendanceProcessed::with(['employee', 'shift']);
+            // Parse Date and View Type (daily or monthly)
+            $startDate = null;
+            $endDate = null;
+            $statsDate = null;
 
+            if ($request->filled('month') && $request->filled('year')) {
+                try {
+                    $parsedDate = Carbon::create((int) $request->year, (int) $request->month, 1)->startOfDay();
+                    $statsDate = $parsedDate;
+                    if ($viewType === 'monthly') {
+                        $startDate = $parsedDate->copy()->startOfMonth()->startOfDay();
+                        $endDate = $parsedDate->copy()->endOfMonth()->endOfDay();
+                    } else {
+                        $startDate = $parsedDate->copy()->startOfDay();
+                        $endDate = $parsedDate->copy()->endOfDay();
+                    }
+                } catch (\Exception $e) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Invalid month or year.'
+                    ], 422);
+                }
+            } else if ($request->filled('from_date') && $request->filled('to_date')) {
+                try {
+                    $startDate = Carbon::parse($request->from_date)->startOfDay();
+                    $endDate = Carbon::parse($request->to_date)->endOfDay();
+                    $statsDate = $startDate;
+                } catch (\Exception $e) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Invalid from_date or to_date format.'
+                    ], 422);
+                }
+            } else {
+                $dateInput = $request->input('date');
+                $parsedDate = null;
 
-            if ($request->filled('search')) {
+                if ($dateInput) {
+                    $formats = ['Y-m-d', 'm/d/Y', 'd/m/Y', 'd-m-Y', 'Y/m/d'];
+                    foreach ($formats as $format) {
+                        try {
+                            $parsedDate = Carbon::createFromFormat($format, $dateInput)->startOfDay();
+                            break;
+                        } catch (\Exception $e) {
+                            // continue
+                        }
+                    }
+                    if (!$parsedDate) {
+                        try {
+                            $parsedDate = Carbon::parse($dateInput)->startOfDay();
+                        } catch (\Exception $e) {
+                            return response()->json([
+                                'status' => 422,
+                                'message' => 'Invalid date format.'
+                            ], 422);
+                        }
+                    }
+                } else {
+                    $parsedDate = Carbon::today();
+                }
 
-                $search = $request->search;
+                $statsDate = $parsedDate;
 
-                $query->where(function ($q) use ($search) {
-
-                    $q->whereHas('employee', function ($e) use ($search) {
-
-                        $e->where('name', 'LIKE', "%{$search}%")
-                            ->orWhere('employee_code', 'LIKE', "%{$search}%");
-                    })
-
-                        ->orWhereHas('shift', function ($s) use ($search) {
-
-                            $s->where('shift_name', 'LIKE', "%{$search}%");
-                        });
-                });
+                if ($viewType === 'monthly') {
+                    $startDate = $parsedDate->copy()->startOfMonth()->startOfDay();
+                    $endDate = $parsedDate->copy()->endOfMonth()->endOfDay();
+                } else {
+                    $startDate = $parsedDate->copy()->startOfDay();
+                    $endDate = $parsedDate->copy()->endOfDay();
+                }
             }
 
+            // Employee Status Filters (Active / Inactive / All Statuses)
+            $employeeStatusInput = $request->input('employee_status') ?? $request->input('is_active') ?? $request->input('status');
+            $filterActive = true; // default is active only
+            $applyActiveFilter = true;
 
-            if ($request->filled('from_date') && $request->filled('to_date')) {
+            if ($employeeStatusInput !== null) {
+                $statusStr = strtolower((string) $employeeStatusInput);
+                if ($statusStr === 'inactive' || $statusStr === '0' || $statusStr === 'false') {
+                    $filterActive = false;
+                    $applyActiveFilter = true;
+                } elseif ($statusStr === 'all' || $statusStr === 'all statuses') {
+                    $applyActiveFilter = false;
+                } elseif ($statusStr === 'active' || $statusStr === '1' || $statusStr === 'true') {
+                    $filterActive = true;
+                    $applyActiveFilter = true;
+                }
+            }
 
-                $query->whereBetween('date', [
-                    $request->from_date,
-                    $request->to_date
+            // Attendance Status Filter mapping
+            $attendanceStatusInput = null;
+            if ($request->filled('attendance_status')) {
+                $attendanceStatusInput = $request->attendance_status;
+            } elseif ($request->filled('status')) {
+                $statusStr = strtolower((string) $request->status);
+                $validAttendanceStatuses = ['present', 'absent', 'half_day', 'leave', 'rest_day'];
+                if (in_array($statusStr, $validAttendanceStatuses)) {
+                    $attendanceStatusInput = $statusStr;
+                }
+            }
+
+            // Build Employee Query to calculate total_employees card stat
+            $employeeQuery = \App\Models\Employee::query();
+            if ($applyActiveFilter) {
+                $employeeQuery->where('is_active', $filterActive);
+            }
+            if ($request->filled('site_id')) {
+                $employeeQuery->where('site_id', $request->site_id);
+            }
+            if ($request->filled('department_id')) {
+                $employeeQuery->where('department_id', $request->department_id);
+            }
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $employeeQuery->where(function ($q) use ($search) {
+                    $q->where('name', 'LIKE', "%{$search}%")
+                        ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                });
+            }
+            $totalEmployeesCount = $employeeQuery->count();
+
+            // Build Stats Query for other cards (Present, Absent, Half Day, Leaves)
+            $statsQuery = AttendanceProcessed::query();
+            if ($viewType === 'monthly') {
+                $statsQuery->whereMonth('date', $statsDate->month)
+                    ->whereYear('date', $statsDate->year);
+            } else {
+                $statsQuery->whereDate('date', $statsDate->format('Y-m-d'));
+            }
+
+            $statsQuery->whereHas('employee', function ($q) use ($request, $statsDate, $viewType, $applyActiveFilter, $filterActive, $attendanceStatusInput) {
+                if ($applyActiveFilter) {
+                    $q->where('is_active', $filterActive);
+                }
+                if ($request->filled('site_id')) {
+                    $q->where('site_id', $request->site_id);
+                }
+                if ($request->filled('department_id')) {
+                    $q->where('department_id', $request->department_id);
+                }
+                if ($request->filled('search')) {
+                    $search = $request->search;
+                    $q->where(function ($sq) use ($search) {
+                        $sq->where('name', 'LIKE', "%{$search}%")
+                            ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                    });
+                }
+                if ($attendanceStatusInput) {
+                    $q->whereHas('attendanceProcesseds', function ($aq) use ($statsDate, $attendanceStatusInput, $viewType) {
+                        if ($viewType === 'monthly') {
+                            $aq->whereMonth('date', $statsDate->month)
+                                ->whereYear('date', $statsDate->year);
+                        } else {
+                            $aq->whereDate('date', $statsDate->format('Y-m-d'));
+                        }
+                        $aq->where('attendance_status', $attendanceStatusInput);
+                    });
+                }
+            });
+
+            $statusCounts = $statsQuery->select('attendance_status', DB::raw('count(*) as count'))
+                ->groupBy('attendance_status')
+                ->pluck('count', 'attendance_status')
+                ->toArray();
+
+            $presentCount = $statusCounts['present'] ?? 0;
+            $absentCount = $statusCounts['absent'] ?? 0;
+            $halfDayCount = $statusCounts['half_day'] ?? 0;
+            $leaveCount = $statusCounts['leave'] ?? 0;
+
+            if ($viewType === 'monthly') {
+                $month = $statsDate->month;
+                $year = $statsDate->year;
+                $daysInMonth = Carbon::create($year, $month)->daysInMonth;
+
+                // Count holidays for the month
+                $generalHolidays = Holiday::whereMonth('holiday_date', $month)
+                    ->whereYear('holiday_date', $year)
+                    ->where('is_active', true)
+                    ->whereNull('site_id')
+                    ->count();
+
+                $siteHolidays = Holiday::whereMonth('holiday_date', $month)
+                    ->whereYear('holiday_date', $year)
+                    ->where('is_active', true)
+                    ->whereNotNull('site_id')
+                    ->selectRaw('site_id, COUNT(*) as count')
+                    ->groupBy('site_id')
+                    ->pluck('count', 'site_id')
+                    ->toArray();
+
+                // Build Employee query
+                $employeeQuery = \App\Models\Employee::with(['site', 'department']);
+                if ($applyActiveFilter) {
+                    $employeeQuery->where('is_active', $filterActive);
+                }
+
+                if ($request->filled('site_id')) {
+                    $employeeQuery->where('site_id', $request->site_id);
+                }
+                if ($request->filled('department_id')) {
+                    $employeeQuery->where('department_id', $request->department_id);
+                }
+                if ($request->filled('search')) {
+                    $search = $request->search;
+                    $employeeQuery->where(function ($q) use ($search) {
+                        $q->where('name', 'LIKE', "%{$search}%")
+                            ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                    });
+                }
+                if ($attendanceStatusInput) {
+                    $employeeQuery->whereHas('attendanceProcesseds', function ($q) use ($month, $year, $attendanceStatusInput) {
+                        $q->whereMonth('date', $month)
+                            ->whereYear('date', $year)
+                            ->where('attendance_status', $attendanceStatusInput);
+                    });
+                }
+
+                $employees = $employeeQuery->orderBy('name')->paginate($limit);
+                $employeeIds = $employees->pluck('id')->toArray();
+
+                // Fetch attendance counts for these employees
+                $attendanceCounts = AttendanceProcessed::whereIn('employee_id', $employeeIds)
+                    ->whereMonth('date', $month)
+                    ->whereYear('date', $year)
+                    ->selectRaw('employee_id,
+                        SUM(CASE WHEN attendance_status = "present" THEN 1 ELSE 0 END) as present_days,
+                        SUM(CASE WHEN attendance_status = "absent" THEN 1 ELSE 0 END) as absent_days,
+                        SUM(CASE WHEN attendance_status = "half_day" THEN 1 ELSE 0 END) as half_days,
+                        SUM(CASE WHEN attendance_status = "leave" THEN 1 ELSE 0 END) as leave_days,
+                        SUM(CASE WHEN attendance_status = "rest_day" THEN 1 ELSE 0 END) as rest_days
+                    ')
+                    ->groupBy('employee_id')
+                    ->get()
+                    ->keyBy('employee_id');
+
+                // Fetch approved leaves
+                $leaves = Leave::whereIn('employee_id', $employeeIds)
+                    ->where('status', 'approved')
+                    ->where(function ($q) use ($month, $year) {
+                        $q->where(function ($q2) use ($month, $year) {
+                            $q2->whereMonth('from_date', $month)->whereYear('from_date', $year);
+                        })->orWhere(function ($q2) use ($month, $year) {
+                            $q2->whereMonth('to_date', $month)->whereYear('to_date', $year);
+                        });
+                    })
+                    ->with('leaveType')
+                    ->get();
+
+                $leaveSummary = [];
+                $monthStart = Carbon::create($year, $month, 1)->startOfDay();
+                $monthEnd = $monthStart->copy()->endOfMonth();
+
+                foreach ($leaves as $leave) {
+                    $empId = $leave->employee_id;
+                    if (!isset($leaveSummary[$empId])) {
+                        $leaveSummary[$empId] = ['paid' => 0, 'unpaid' => 0];
+                    }
+
+                    $from = Carbon::parse($leave->from_date)->max($monthStart);
+                    $to = Carbon::parse($leave->to_date)->min($monthEnd);
+                    $days = $from->diffInDays($to) + 1;
+
+                    $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
+                    if ($category === 'paid') {
+                        $leaveSummary[$empId]['paid'] += $days;
+                    } else {
+                        $leaveSummary[$empId]['unpaid'] += $days;
+                    }
+                }
+
+                $data = collect($employees->items())->map(function ($employee) use ($attendanceCounts, $leaveSummary, $generalHolidays, $siteHolidays, $daysInMonth) {
+                    $att = $attendanceCounts->get($employee->id);
+                    $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
+
+                    $present = $att ? (int) $att->present_days : 0;
+                    $absent = $att ? (int) $att->absent_days : 0;
+                    $halfDay = $att ? (int) $att->half_days : 0;
+                    $restDay = $att ? (int) $att->rest_days : 0;
+                    $restDaysSetting = (int) $employee->rest_days; // Uses accessor which automatically gets from activePayroll
+                    $paidRestDays = min($restDay, $restDaysSetting);
+                    $leave = $att ? (int) $att->leave_days : 0;
+
+                    $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
+
+                    // Payable days calculation matching payroll logic:
+                    // Payable Days = Present + (Half Day * 0.5) + Rest Day + Paid Leave + Holiday
+                    $payableDays = $present + ($halfDay * 0.5) + $paidRestDays + $empLeave['paid'] + $holidays;
+
+                    return [
+                        'employee_id' => $employee->id,
+                        'employee_name' => $employee->name,
+                        'employee_code' => $employee->employee_code,
+                        'site_name' => $employee->site ? $employee->site->site_name : null,
+                        'total_days' => $daysInMonth,
+                        'present' => $present,
+                        'absent' => $absent,
+                        'half_day' => $halfDay,
+                        'rest_day' => $restDay,
+                        'leave' => $leave,
+                        'payable_days' => $payableDays,
+                    ];
+                });
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Attendance fetched successfully',
+                    'summary' => [
+                        'total_employees' => $totalEmployeesCount,
+                        'present' => $presentCount,
+                        'absent' => $absentCount,
+                        'half_day' => $halfDayCount,
+                        'leaves' => $leaveCount,
+                    ],
+                    'data' => $data,
+                    'pagination' => [
+                        'current_page' => $employees->currentPage(),
+                        'last_page' => $employees->lastPage(),
+                        'per_page' => $employees->perPage(),
+                        'total' => $employees->total(),
+                        'from' => $employees->firstItem(),
+                        'to' => $employees->lastItem(),
+                    ]
                 ]);
             }
 
+            // Main Attendance Query
+            $query = AttendanceProcessed::with(['employee.site', 'shift'])
+                ->whereBetween('date', [
+                    $startDate->format('Y-m-d'),
+                    $endDate->format('Y-m-d')
+                ])
+                ->whereHas('employee', function ($q) use ($request, $applyActiveFilter, $filterActive) {
+                    if ($applyActiveFilter) {
+                        $q->where('is_active', $filterActive);
+                    }
+                    if ($request->filled('site_id')) {
+                        $q->where('site_id', $request->site_id);
+                    }
+                    if ($request->filled('department_id')) {
+                        $q->where('department_id', $request->department_id);
+                    }
+                    if ($request->filled('search')) {
+                        $search = $request->search;
+                        $q->where(function ($sq) use ($search) {
+                            $sq->where('name', 'LIKE', "%{$search}%")
+                                ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                        });
+                    }
+                });
 
-            if ($request->filled('attendance_status')) {
-
-                $query->where('attendance_status', $request->attendance_status);
+            if ($attendanceStatusInput) {
+                $query->where('attendance_status', $attendanceStatusInput);
             }
 
-
-            $attendance = $query->latest()->paginate($limit);
-
+            $attendance = $query->latest('date')->paginate($limit);
 
             $data = collect($attendance->items())->map(function ($item) {
-
                 return [
                     'id' => $item->id,
                     'employee_id' => $item->employee_id,
                     'shift_id' => $item->shift_id,
-
                     'employee_name' => $item->employee->name ?? null,
                     'employee_code' => $item->employee->employee_code ?? null,
+                    'site_name' => $item->employee->site->site_name ?? null,
                     'shift_name' => $item->shift->shift_name ?? null,
-
                     'date' => $item->date
                         ? \Carbon\Carbon::parse($item->date)->format('d M Y')
                         : null,
-
                     'check_in' => $item->check_in
                         ? \Carbon\Carbon::parse($item->check_in)->format('H:i')
                         : null,
-
                     'check_out' => $item->check_out
                         ? \Carbon\Carbon::parse($item->check_out)->format('H:i')
                         : null,
@@ -688,21 +1241,26 @@ public function update(UpdateAttendanceRequest $request, $id)
                     'late_minutes' => $item->late_minutes,
                     'early_exit_minutes' => $item->early_exit_minutes,
                     'attendance_status' => $item->attendance_status,
+                    'attendance_status_label' => $item->attendance_status
+                        ? ucwords(str_replace('_', ' ', $item->attendance_status))
+                        : null,
                     'remarks' => $item->remarks,
-
                     'created_at' => $item->created_at,
                     'updated_at' => $item->updated_at,
-
-
                 ];
             });
-
 
             return response()->json([
                 'status' => 200,
                 'message' => 'Attendance fetched successfully',
+                'summary' => [
+                    'total_employees' => $totalEmployeesCount,
+                    'present' => $presentCount,
+                    'absent' => $absentCount,
+                    'half_day' => $halfDayCount,
+                    'leaves' => $leaveCount,
+                ],
                 'data' => $data,
-
                 'pagination' => [
                     'current_page' => $attendance->currentPage(),
                     'last_page' => $attendance->lastPage(),
@@ -713,7 +1271,6 @@ public function update(UpdateAttendanceRequest $request, $id)
                 ]
             ]);
         } catch (\Throwable $th) {
-
             return response()->json([
                 'status' => 500,
                 'message' => $th->getMessage()

@@ -69,6 +69,11 @@ class EmployeeShiftAssignmentImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
+            if ($employee->relay_shift === 'general') {
+                $this->errors[] = "Row {$rowNum}: Shift assignment is not allowed for general shift employee '{$employee->name}'.";
+                continue;
+            }
+
             // Find shift by shift_name
             $shift = Shift::where('shift_name', $shiftName)->first();
 

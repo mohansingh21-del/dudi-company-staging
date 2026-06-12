@@ -67,6 +67,7 @@ class EmployeeShiftAssignmentTest extends TestCase
             'employee_code' => 'EMP123',
             'name' => 'Neha Jain',
             'joining_date' => '2026-01-01',
+            'relay_shift' => 'relay_1',
             'is_active' => 1
         ]);
 
@@ -74,6 +75,7 @@ class EmployeeShiftAssignmentTest extends TestCase
             'employee_code' => 'EMP456',
             'name' => 'Ramesh Kumar',
             'joining_date' => '2026-01-01',
+            'relay_shift' => 'relay_2',
             'is_active' => 1
         ]);
     }
@@ -157,6 +159,29 @@ class EmployeeShiftAssignmentTest extends TestCase
         $this->assertDatabaseHas('employee_shift_assignments', [
             'employee_id' => $this->employee2->id,
             'shift_id' => $this->shiftB->id,
+        ]);
+    }
+
+    public function test_cannot_assign_shift_to_general_shift_employee()
+    {
+        // Create general shift employee
+        $generalEmployee = Employee::create([
+            'employee_code' => 'EMP999',
+            'name' => 'General Employee',
+            'joining_date' => '2026-01-01',
+            'relay_shift' => 'general',
+            'is_active' => 1
+        ]);
+
+        $response = $this->postJson('/api/v1/admin/employee-shift-assignments', [
+            'employee_id' => $generalEmployee->id,
+            'shift_id' => $this->shiftA->id,
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonFragment([
+            'status' => 422,
+            'message' => "Shift assignment is not allowed for general shift employee 'General Employee'."
         ]);
     }
 }

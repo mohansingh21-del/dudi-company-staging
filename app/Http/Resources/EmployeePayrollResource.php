@@ -43,6 +43,7 @@ class EmployeePayrollResource extends JsonResource
 
             'other_deduction' => $this->other_deduction,
 
+            'rest_days' => $this->rest_days,
 
             'is_active' => $this->is_active
         ];

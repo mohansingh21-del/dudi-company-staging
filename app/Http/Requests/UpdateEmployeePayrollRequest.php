@@ -29,6 +29,8 @@ class UpdateEmployeePayrollRequest extends FormRequest
 
     'basic_salary' => 'nullable|numeric|min:0',
 
+    'daily_wage' => 'nullable|numeric|min:0',
+
     'pf_applicable' => 'nullable|boolean',
 
     'pf_number' => 'nullable|string|max:255',
@@ -44,6 +46,8 @@ class UpdateEmployeePayrollRequest extends FormRequest
     'other_deduction_appliacble' => 'nullable|boolean',
 
     'other_deduction' => 'nullable|numeric|min:0',
+
+    'rest_days' => 'nullable|integer|min:0|max:31',
 
         ];
     }

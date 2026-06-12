@@ -102,6 +102,13 @@ class EmployeeShiftAssignmentController extends Controller
                     ], 422);
                 }
 
+                if ($employee->relay_shift === 'general') {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => "Shift assignment is not allowed for general shift employee '{$employee->name}'."
+                    ], 422);
+                }
+
                 $resolvedEmployeeIds[] = $employee->id;
             }
 
@@ -186,6 +193,14 @@ class EmployeeShiftAssignmentController extends Controller
                         'message' => 'The selected employee is invalid.'
                     ], 422);
                 }
+
+                if ($employee->relay_shift === 'general') {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Shift assignment is not allowed for general shift employees.'
+                    ], 422);
+                }
+
                 $updateData['employee_id'] = $employee->id;
             }
 

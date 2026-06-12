@@ -15,9 +15,12 @@ class UpdateAttendanceRequest extends FormRequest
      public function rules()
      {
           return [
-               'check_in' => 'required|date_format:H:i',
-               'check_out' => 'required|date_format:H:i',
-               'attendance_status' => 'required|in:present,absent,half_day,leave',
+               'employee_id' => 'nullable|exists:employees,id',
+               'date' => 'nullable|date_format:Y-m-d',
+               'check_in' => 'nullable|date_format:H:i',
+               'check_out' => 'nullable|date_format:H:i',
+               'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day,exception',
+               'site_id' => 'nullable|exists:sites,id',
                'remarks' => 'nullable|string'
           ];
      }

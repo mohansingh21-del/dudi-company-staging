@@ -107,4 +107,34 @@ class DepartmentManagementTest extends TestCase
                 'employee_code' => 'EMP002'
             ]);
     }
+
+    public function test_can_list_public_designations()
+    {
+        // One active designation is already created in setUp (the super-admin role)
+        // Let's create an additional active role/designation and one inactive one
+        Role::create([
+            'name' => 'Mining Engineer',
+            'slug' => 'mining-engineer',
+            'is_active' => 1
+        ]);
+
+        Role::create([
+            'name' => 'Inactive Role',
+            'slug' => 'inactive-role',
+            'is_active' => 0
+        ]);
+
+        $response = $this->getJson('/api/v1/designations');
+
+        // Total active roles should be 2 (setUp's role + Mining Engineer)
+        $response->assertStatus(200)
+            ->assertJsonCount(2, 'data')
+            ->assertJsonFragment([
+                'name' => 'Mining Engineer',
+                'status' => 1
+            ])
+            ->assertJsonMissing([
+                'name' => 'Inactive Role'
+            ]);
+    }
 }

@@ -34,6 +34,8 @@ class EmployeePayroll extends Model
 
         'other_deduction',
 
+        'rest_days',
+
         'effective_from',
 
         'is_active'
@@ -46,6 +48,8 @@ class EmployeePayroll extends Model
         'mess_deduction_applicable' => 'boolean',
 
         'other_deduction_appliacble' => 'boolean',
+
+        'rest_days' => 'integer',
 
         'effective_from' => 'date'
     ];

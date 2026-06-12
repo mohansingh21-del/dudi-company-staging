@@ -48,6 +48,8 @@ return new class extends Migration
             $table->decimal('other_deduction', 10, 2)
                 ->default(0);
 
+            $table->integer('rest_days')->default(0);
+
             $table->boolean('is_active')
                 ->default(true);
 

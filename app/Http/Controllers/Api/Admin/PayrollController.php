@@ -150,16 +150,18 @@ class PayrollController extends Controller
                 $penaltyTotal = $penaltyTotals[$employee->id] ?? 0;
 
                 $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
+                $activePayroll = $employee->activePayroll;
+                $restDaysSetting = $activePayroll ? (int)$activePayroll->rest_days : (int)$employee->rest_days;
 
                 $presentDays = $att ? (int) $att->present_days : 0;
                 $absentDays = $att ? (int) $att->absent_days : 0;
                 $halfDays = $att ? (int) $att->half_days : 0;
                 $restDays = $att ? (int) $att->rest_days : 0;
-                $paidLeaveDays = $empLeave['paid'] + $restDays; // rest day is counted as paid leave
+                $paidRestDays = min($restDays, $restDaysSetting);
+                $paidLeaveDays = $empLeave['paid'] + $paidRestDays; // rest day is counted as paid leave
                 $unpaidLeaveDays = $empLeave['unpaid'];
 
                 // ── Salary Calculation (per documentation) ──
-                $activePayroll = $employee->activePayroll;
                 $basicSalary = $activePayroll ? (float) $activePayroll->basic_salary : (float) $employee->basic_salary;
                 $shiftAllowance = 0;
                 $incentives = 0;
@@ -191,8 +193,8 @@ class PayrollController extends Controller
 
                 return [
                     'id' => $employee->id,
-                    'payroll_id' => $payroll?->id,
-                    'payroll_status' => $payroll?->status,
+                    'payroll_id' => $payroll ? $payroll->id : null,
+                    'payroll_status' => $payroll ? $payroll->status : null,
                     'employee_code' => $employee->employee_code,
                     'name' => $employee->name,
                     'department' => optional($employee->department)->name,
@@ -221,7 +223,7 @@ class PayrollController extends Controller
                     'other_deduction' => $payroll ? (float) $payroll->other_deduction : $otherDeduction,
                     'monthly_salary' => $grossSalary,
                     'net_salary' => $payroll ? (float) $payroll->net_salary : $netSalary,
-                    'created_at' => $payroll?->created_at?->toDateTimeString() ?? $employee->created_at->toDateTimeString(),
+                    'created_at' => ($payroll && $payroll->created_at) ? $payroll->created_at->toDateTimeString() : $employee->created_at->toDateTimeString(),
                 ];
             });
 
@@ -357,7 +359,9 @@ class PayrollController extends Controller
                     $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
                     // rest day is counted as paid leave
-                    $paidLeaveDays += $restDays;
+                    $restDaysSetting = $activePayroll ? (int)$activePayroll->rest_days : (int)$employee->rest_days;
+                    $paidRestDays = min($restDays, $restDaysSetting);
+                    $paidLeaveDays += $paidRestDays;
 
                     // ── Leave Deduction (unmarked days = absent) ──
                     $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
@@ -529,7 +533,9 @@ class PayrollController extends Controller
             $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
             // rest day is counted as paid leave
-            $paidLeaveDays += $restDays;
+            $restDaysSetting = $activePayroll ? (int)$activePayroll->rest_days : (int)$employee->rest_days;
+            $paidRestDays = min($restDays, $restDaysSetting);
+            $paidLeaveDays += $paidRestDays;
 
             // Leave Deduction (unmarked days = absent)
             $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);

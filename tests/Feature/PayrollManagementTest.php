@@ -305,10 +305,11 @@ class PayrollManagementTest extends TestCase
             'status' => 'approved'
         ]);
 
-        // Disable PF and Mess deductions for clean net salary verification
+        // Disable PF and Mess deductions for clean net salary verification, set rest_days setting
         $this->employee->update([
             'pf_applicable' => 0,
-            'mess_deduction_applicable' => 0
+            'mess_deduction_applicable' => 0,
+            'rest_days' => 5,
         ]);
 
         // 1. Fetch payroll data (on-the-fly calculation)

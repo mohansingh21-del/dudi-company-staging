@@ -88,4 +88,15 @@ class Employee extends Model
             ->where('is_active', true)
             ->latest();
     }
+
+    public function attendanceProcesseds()
+    {
+        return $this->hasMany(AttendanceProcessed::class);
+    }
+
+    public function getRestDaysAttribute($value)
+    {
+        $activePayroll = $this->activePayroll;
+        return ($activePayroll && $activePayroll->rest_days !== null) ? (int)$activePayroll->rest_days : (int)$value;
+    }
 }

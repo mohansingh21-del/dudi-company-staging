@@ -98,4 +98,22 @@ class DesignationController extends Controller
             'message' => 'Role status updated successfully'
         ]);
     }
+
+    public function getPublicDesignations()
+    {
+        try {
+            $designations = Role::where('is_active', 1)->get();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Designations retrieved successfully',
+                'data' => DesignationResource::collection($designations)
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
 }

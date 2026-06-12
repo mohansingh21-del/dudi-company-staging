@@ -36,6 +36,7 @@ use App\Http\Controllers\Api\Admin\ProductController;
 use App\Http\Controllers\Api\Admin\InventoryController;
 use App\Http\Controllers\Api\Admin\PenaltyController;
 use App\Http\Controllers\Api\Admin\PayrollController;
+use App\Http\Controllers\Api\Admin\EmployeePayrollController;
 
 
 
@@ -128,6 +129,7 @@ Route::prefix('v1')->group(function () {
         Route::get('active-employees', [EmployeeController::class, 'getActiveEmployees']);
         Route::get('sites', [SiteController::class, 'getPublicSites']);
         Route::get('departments', [DepartmentsController::class, 'getPublicDepartments']);
+        Route::get('designations', [DesignationController::class, 'getPublicDesignations']);
         Route::get('products', [ProductController::class, 'getPublicProducts']);
         Route::get('categories', [CategoryController::class, 'getPublicCategories']);
         Route::get('subcategories', [SubCategoryController::class, 'getPublicSubCategories']);
@@ -163,14 +165,19 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('trainingtype', TrainingTypeController::class);
 
             Route::patch('trainingtype/{id}/status', [TrainingTypeController::class, 'toggleStatus']);
-              Route::post('attendance/bulk-upload', [AttendanceController::class, 'bulkUpload']);
-            Route::patch('attendance/bulk-status',[AttendanceController::class, 'bulkUpdateStatus']);
+            Route::post('attendance/bulk-upload', [AttendanceController::class, 'bulkUpload']);
+            Route::patch('attendance/bulk-status', [AttendanceController::class, 'bulkUpdateStatus']);
+            Route::get('attendance/employee/{employee_id}', [AttendanceController::class, 'getEmployeeAttendanceDetails']);
+            Route::post('attendance/correction', [AttendanceController::class, 'update']);
 
             Route::apiResource('attendance', AttendanceController::class);
-            Route::patch('attendance/{id}/status',[AttendanceController::class, 'updateStatus']);
-            
+            Route::patch('attendance/{id}/status', [AttendanceController::class, 'updateStatus']);
+
+            Route::post('leaves/bulk-upload', [LeaveController::class, 'bulkUpload']);
             Route::post('leaves/{id}/approve-reject', [LeaveController::class, 'approveReject']);
             Route::apiResource('leaves', LeaveController::class);
+
+            Route::apiResource('employee-payrolls', EmployeePayrollController::class);
 
 
         });
