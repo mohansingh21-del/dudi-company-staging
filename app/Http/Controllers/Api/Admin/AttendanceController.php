@@ -133,7 +133,7 @@ class AttendanceController extends Controller
     {
         try {
             $data = $request->validated();
-            
+
             $attendance = null;
             $employeeId = $request->input('employee_id');
             $date = $request->input('date');
@@ -1143,7 +1143,7 @@ class AttendanceController extends Controller
                     $restDay = $att ? (int) $att->rest_days : 0;
                     $restDaysSetting = (int) $employee->rest_days; // Uses accessor which automatically gets from activePayroll
                     $paidRestDays = min($restDay, $restDaysSetting);
-                    $leave = $att ? (int) $att->leave_days : 0;
+                    $leave = $empLeave['paid'] + $empLeave['unpaid'];
 
                     $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
 

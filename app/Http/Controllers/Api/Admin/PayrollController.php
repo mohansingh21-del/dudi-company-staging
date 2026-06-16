@@ -151,7 +151,7 @@ class PayrollController extends Controller
 
                 $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
                 $activePayroll = $employee->activePayroll;
-                $restDaysSetting = $activePayroll ? (int)$activePayroll->rest_days : (int)$employee->rest_days;
+                $restDaysSetting = $activePayroll ? (int) $activePayroll->rest_days : (int) $employee->rest_days;
 
                 $presentDays = $att ? (int) $att->present_days : 0;
                 $absentDays = $att ? (int) $att->absent_days : 0;
@@ -206,9 +206,9 @@ class PayrollController extends Controller
                     'year' => $year,
                     'days_in_month' => $daysInMonth,
                     'present_days' => $presentDays,
-                    'absent_days' => $effectiveAbsent,
+                    'absent_days' => $absentDays,
                     'half_days' => $halfDays,
-                    'rest_days' => $restDays,
+                    'rest_days' => "{$restDays}/{$restDaysSetting}",
                     'holidays' => $holidays,
                     'paid_leave_days' => $paidLeaveDays,
                     'unpaid_leave_days' => $unpaidLeaveDays,
@@ -314,6 +314,7 @@ class PayrollController extends Controller
                         ')->first();
 
                     $presentDays = $attendance ? (int) $attendance->present_days : 0;
+                    $absentDays = $attendance ? (int) $attendance->absent_days : 0;
                     $halfDays = $attendance ? (int) $attendance->half_days : 0;
                     $leaveDays = $attendance ? (int) $attendance->leave_days : 0;
                     $restDays = $attendance ? (int) $attendance->rest_days : 0;
@@ -359,13 +360,13 @@ class PayrollController extends Controller
                     $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
                     // rest day is counted as paid leave
-                    $restDaysSetting = $activePayroll ? (int)$activePayroll->rest_days : (int)$employee->rest_days;
+                    $restDaysSetting = $activePayroll ? (int) $activePayroll->rest_days : (int) $employee->rest_days;
                     $paidRestDays = min($restDays, $restDaysSetting);
                     $paidLeaveDays += $paidRestDays;
+                    $unpaidRestDays = max(0, $restDays - $paidRestDays);
 
-                    // ── Leave Deduction (unmarked days = absent) ──
-                    $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
-                    $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+                    // ── Leave Deduction (absent days from attendance) ──
+                    $leaveDeduction = round($perDaySalary * ($absentDays + $unpaidLeaveDays + $unpaidRestDays + ($halfDays * 0.5)), 0);
 
                     // ── Fixed Deductions ──
                     $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
@@ -394,7 +395,7 @@ class PayrollController extends Controller
                             'incentives' => $incentives,
                             'present_days' => $presentDays,
                             'half_days' => $halfDays,
-                            'absent_days' => $effectiveAbsent,
+                            'absent_days' => $absentDays,
                             'leave_days' => $leaveDays,
                             'paid_leave_days' => $paidLeaveDays,
                             'unpaid_leave_days' => $unpaidLeaveDays,
@@ -521,6 +522,7 @@ class PayrollController extends Controller
 
             // ── Salary calculation ──
             $presentDays = $attendance ? (int) $attendance->present_days : 0;
+            $absentDays = $attendance ? (int) $attendance->absent_days : 0;
             $halfDays = $attendance ? (int) $attendance->half_days : 0;
             $restDays = $attendance ? (int) $attendance->rest_days : 0;
 
@@ -533,13 +535,13 @@ class PayrollController extends Controller
             $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
             // rest day is counted as paid leave
-            $restDaysSetting = $activePayroll ? (int)$activePayroll->rest_days : (int)$employee->rest_days;
+            $restDaysSetting = $activePayroll ? (int) $activePayroll->rest_days : (int) $employee->rest_days;
             $paidRestDays = min($restDays, $restDaysSetting);
             $paidLeaveDays += $paidRestDays;
+            $unpaidRestDays = max(0, $restDays - $paidRestDays);
 
-            // Leave Deduction (unmarked days = absent)
-            $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
-            $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+            // Leave Deduction (absent days from attendance)
+            $leaveDeduction = round($perDaySalary * ($absentDays + $unpaidLeaveDays + $unpaidRestDays + ($halfDays * 0.5)), 0);
 
             // Fixed deductions
             $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
@@ -571,7 +573,7 @@ class PayrollController extends Controller
                     'incentives' => $incentives,
                     'present_days' => $presentDays,
                     'half_days' => $halfDays,
-                    'absent_days' => $effectiveAbsent,
+                    'absent_days' => $absentDays,
                     'leave_days' => $paidLeaveDays + $unpaidLeaveDays,
                     'paid_leave_days' => $paidLeaveDays,
                     'unpaid_leave_days' => $unpaidLeaveDays,
@@ -611,7 +613,7 @@ class PayrollController extends Controller
                     ],
                     'attendance' => [
                         'present_days' => $presentDays,
-                        'absent_days' => $effectiveAbsent,
+                        'absent_days' => $absentDays,
                         'half_days' => $halfDays,
                         'rest_days' => $restDays,
                         'holidays' => $holidays,

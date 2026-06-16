@@ -82,6 +82,15 @@ class PayrollManagementTest extends TestCase
             'attendance_status' => 'present'
         ]);
 
+        // 29 absent days
+        for ($i = 2; $i <= 30; $i++) {
+            AttendanceProcessed::create([
+                'employee_id' => $this->employee->id,
+                'date' => sprintf('2026-06-%02d', $i),
+                'attendance_status' => 'absent'
+            ]);
+        }
+
         // 1 penalty in June 2026
         Penalty::create([
             'employee_id' => $this->employee->id,
@@ -323,10 +332,10 @@ class PayrollManagementTest extends TestCase
         $response->assertJsonFragment([
             'employee_code' => 'EMP5001',
             'present_days' => 18,
-            'rest_days' => 5,
+            'rest_days' => '5/5',
             'paid_leave_days' => 5,
             'unpaid_leave_days' => 7,
-            'absent_days' => 7,
+            'absent_days' => 0,
             'leave_deduction' => 5833,
             'net_salary' => 19167
         ]);
@@ -344,7 +353,7 @@ class PayrollManagementTest extends TestCase
             'month' => 6,
             'year' => 2026,
             'present_days' => 18,
-            'absent_days' => 7,
+            'absent_days' => 0,
             'paid_leave_days' => 5,
             'unpaid_leave_days' => 7,
             'leave_deduction' => 5833,
@@ -400,6 +409,15 @@ class PayrollManagementTest extends TestCase
             'date' => '2026-06-01',
             'attendance_status' => 'present'
         ]);
+
+        // 29 absent days
+        for ($i = 2; $i <= 30; $i++) {
+            AttendanceProcessed::create([
+                'employee_id' => $this->employee->id,
+                'date' => sprintf('2026-06-%02d', $i),
+                'attendance_status' => 'absent'
+            ]);
+        }
 
         // Create an active employee payroll record (different configuration)
         \App\Models\EmployeePayroll::create([
