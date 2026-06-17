@@ -49,12 +49,22 @@ class InventoryImport implements ToCollection, WithHeadingRow
             }
 
             if ($productName === '') {
-                $this->errors[] = "Row {$rowNum}: Product name is empty.";
+                $this->errors[] = [
+                    'row' => $rowNum,
+                    'column' => 'product_name',
+                    'message' => 'Product name is empty.',
+                    'value' => ''
+                ];
                 continue;
             }
 
             if ($quantity === '' || !is_numeric($quantity) || (float) $quantity <= 0) {
-                $this->errors[] = "Row {$rowNum}: Quantity must be a valid number greater than 0.";
+                $this->errors[] = [
+                    'row' => $rowNum,
+                    'column' => 'quantity',
+                    'message' => 'Quantity must be a valid number greater than 0.',
+                    'value' => $quantity
+                ];
                 continue;
             }
 
@@ -64,20 +74,35 @@ class InventoryImport implements ToCollection, WithHeadingRow
             $product = Product::where('name', $productName)->first();
 
             if (!$product) {
-                $this->errors[] = "Row {$rowNum}: Product '{$productName}' not found.";
+                $this->errors[] = [
+                    'row' => $rowNum,
+                    'column' => 'product_name',
+                    'message' => "Product '{$productName}' not found.",
+                    'value' => $productName
+                ];
                 continue;
             }
 
             // Min stock validation
             if ($quantity < (float) $product->min_stock) {
-                $this->errors[] = "Row {$rowNum}: The quantity ({$quantity}) must be at least {$product->min_stock} (minimum stock level for '{$productName}').";
+                $this->errors[] = [
+                    'row' => $rowNum,
+                    'column' => 'quantity',
+                    'message' => "The quantity ({$quantity}) must be at least {$product->min_stock} (minimum stock level for '{$productName}').",
+                    'value' => $quantity
+                ];
                 continue;
             }
 
             // Check if product is already in inventory
             $inventoryExists = Inventory::where('product_id', $product->id)->exists();
             if ($inventoryExists) {
-                $this->errors[] = "Row {$rowNum}: Product '{$productName}' is already added to inventory.";
+                $this->errors[] = [
+                    'row' => $rowNum,
+                    'column' => 'product_name',
+                    'message' => "Product '{$productName}' is already added to inventory.",
+                    'value' => $productName
+                ];
                 continue;
             }
 

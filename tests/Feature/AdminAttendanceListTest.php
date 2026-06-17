@@ -187,6 +187,9 @@ class AdminAttendanceListTest extends TestCase
 
     public function test_can_get_monthly_attendance_list_and_stats()
     {
+        $this->employee1->update(['rest_days' => 4]);
+        $this->employee2->update(['rest_days' => 5]);
+
         // Setup processed attendance records for multiple days in June 2026
         AttendanceProcessed::create([
             'employee_id' => $this->employee1->id,
@@ -206,6 +209,14 @@ class AdminAttendanceListTest extends TestCase
             'check_out' => '2026-06-02 18:00:00',
             'working_hours' => 9.0,
             'attendance_status' => 'leave'
+        ]);
+
+        // Add a rest day for employee 1
+        AttendanceProcessed::create([
+            'employee_id' => $this->employee1->id,
+            'shift_id' => $this->shift->id,
+            'date' => '2026-06-03',
+            'attendance_status' => 'rest_day'
         ]);
 
         AttendanceProcessed::create([
@@ -232,6 +243,15 @@ class AdminAttendanceListTest extends TestCase
 
         // Check if both employees are listed (since it returns 1 row per employee in monthly view)
         $this->assertCount(2, $response->json('data'));
+
+        // Assert formatted rest_day values
+        $emp1Data = collect($response->json('data'))->firstWhere('employee_id', $this->employee1->id);
+        $emp2Data = collect($response->json('data'))->firstWhere('employee_id', $this->employee2->id);
+
+        $this->assertNotNull($emp1Data);
+        $this->assertNotNull($emp2Data);
+        $this->assertEquals('1/4', $emp1Data['rest_day']);
+        $this->assertEquals('0/5', $emp2Data['rest_day']);
     }
 
     public function test_can_filter_attendance_list_by_search_site_and_department()
@@ -500,16 +520,38 @@ class AdminAttendanceListTest extends TestCase
         // It should return the attendance record of Amit Sharma on 15 Jun 2026.
         $response = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily&month=6&year=2026');
         $response->assertStatus(200);
-        $this->assertCount(1, $response->json('data'));
-        $this->assertEquals($this->employee1->id, $response->json('data.0.employee_id'));
-        $this->assertEquals('15 Jun 2026', $response->json('data.0.date'));
+        $this->assertCount(2, $response->json('data'));
+
+        $emp1Data = collect($response->json('data'))->firstWhere('employee_id', $this->employee1->id);
+        $emp2Data = collect($response->json('data'))->firstWhere('employee_id', $this->employee2->id);
+
+        $this->assertNotNull($emp1Data);
+        $this->assertEquals($this->employee1->id, $emp1Data['employee_id']);
+        $this->assertEquals('15 Jun 2026', $emp1Data['date']);
+        $this->assertEquals('present', $emp1Data['attendance_status']);
+
+        $this->assertNotNull($emp2Data);
+        $this->assertEquals($this->employee2->id, $emp2Data['employee_id']);
+        $this->assertEquals('15 Jun 2026', $emp2Data['date']);
+        $this->assertEquals('absent', $emp2Data['attendance_status']);
 
         // Also test without month and year parameters
         $response2 = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily');
         $response2->assertStatus(200);
-        $this->assertCount(1, $response2->json('data'));
-        $this->assertEquals($this->employee1->id, $response2->json('data.0.employee_id'));
-        $this->assertEquals('15 Jun 2026', $response2->json('data.0.date'));
+        $this->assertCount(2, $response2->json('data'));
+
+        $emp1Data2 = collect($response2->json('data'))->firstWhere('employee_id', $this->employee1->id);
+        $emp2Data2 = collect($response2->json('data'))->firstWhere('employee_id', $this->employee2->id);
+
+        $this->assertNotNull($emp1Data2);
+        $this->assertEquals($this->employee1->id, $emp1Data2['employee_id']);
+        $this->assertEquals('15 Jun 2026', $emp1Data2['date']);
+        $this->assertEquals('present', $emp1Data2['attendance_status']);
+
+        $this->assertNotNull($emp2Data2);
+        $this->assertEquals($this->employee2->id, $emp2Data2['employee_id']);
+        $this->assertEquals('15 Jun 2026', $emp2Data2['date']);
+        $this->assertEquals('absent', $emp2Data2['attendance_status']);
     }
 
     public function test_monthly_attendance_list_shows_paid_and_unpaid_leaves()
@@ -556,5 +598,39 @@ class AdminAttendanceListTest extends TestCase
         $this->assertEquals(3, $employeeData['paid_leave']);
         $this->assertEquals(2, $employeeData['unpaid_leave']);
         $this->assertEquals(5, $employeeData['leave']); // total leaves
+    }
+
+    public function test_attendance_list_respects_employee_joining_date()
+    {
+        // Create an employee who joins on 2026-06-10
+        $employeeJoinedLate = Employee::create([
+            'employee_code' => 'EMP9009',
+            'name' => 'Late Joiner',
+            'joining_date' => '2026-06-10',
+            'is_active' => 1,
+            'site_id' => $this->site->id,
+            'department_id' => $this->departmentId,
+            'designation_id' => $this->employee1->designation_id,
+        ]);
+
+        // Monthly view for May 2026: Late Joiner should NOT appear
+        $responseMay = $this->getJson('/api/v1/admin/attendance?month=5&year=2026&view_type=monthly');
+        $responseMay->assertStatus(200);
+        $this->assertNull(collect($responseMay->json('data'))->firstWhere('employee_id', $employeeJoinedLate->id));
+
+        // Monthly view for June 2026: Late Joiner SHOULD appear
+        $responseJune = $this->getJson('/api/v1/admin/attendance?month=6&year=2026&view_type=monthly');
+        $responseJune->assertStatus(200);
+        $this->assertNotNull(collect($responseJune->json('data'))->firstWhere('employee_id', $employeeJoinedLate->id));
+
+        // Daily view for 2026-06-05 (before joining): Late Joiner should NOT appear
+        $responseDailyBefore = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-05&view_type=daily');
+        $responseDailyBefore->assertStatus(200);
+        $this->assertNull(collect($responseDailyBefore->json('data'))->firstWhere('employee_id', $employeeJoinedLate->id));
+
+        // Daily view for 2026-06-15 (after joining): Late Joiner SHOULD appear
+        $responseDailyAfter = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily');
+        $responseDailyAfter->assertStatus(200);
+        $this->assertNotNull(collect($responseDailyAfter->json('data'))->firstWhere('employee_id', $employeeJoinedLate->id));
     }
 }

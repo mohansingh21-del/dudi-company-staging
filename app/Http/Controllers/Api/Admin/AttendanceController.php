@@ -814,19 +814,51 @@ class AttendanceController extends Controller
     {
         $request->validate([
             'attendance_ids' => 'required|array|min:1',
-            'attendance_ids.*' => 'exists:attendance_processeds,id',
+            'attendance_ids.*' => 'integer',
             'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
-            'remarks' => 'nullable|string'
+            'remarks' => 'nullable|string',
+            'date' => 'nullable|date_format:Y-m-d',
+            'from_date' => 'nullable|date_format:Y-m-d',
         ]);
+
+        $date = $request->input('date') ?: $request->input('from_date') ?: today()->format('Y-m-d');
+        $dateStr = \Carbon\Carbon::parse($date)->format('Y-m-d');
+
+        $resolvedAttendanceIds = [];
+
+        foreach ($request->attendance_ids as $id) {
+            // 1. Try to find the record in attendance_processeds by id
+            $record = AttendanceProcessed::find($id);
+            if ($record) {
+                $resolvedAttendanceIds[] = $record->id;
+            } else {
+                // 2. If not found, check if it's an employee_id
+                $employee = \App\Models\Employee::find($id);
+                if ($employee) {
+                    // Find or create AttendanceProcessed record for this employee and date
+                    $record = AttendanceProcessed::firstOrCreate([
+                        'employee_id' => $employee->id,
+                        'date' => $dateStr
+                    ], [
+                        'shift_id' => $employee->shift_id,
+                        'attendance_status' => 'absent',
+                        'working_hours' => 0.00,
+                        'late_minutes' => 0,
+                        'early_exit_minutes' => 0,
+                    ]);
+                    $resolvedAttendanceIds[] = $record->id;
+                } else {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => "The selected ID {$id} is invalid."
+                    ], 422);
+                }
+            }
+        }
+
         if ($request->attendance_status === 'present') {
-
-            $attendances = AttendanceProcessed::whereIn(
-                'id',
-                $request->attendance_ids
-            )->get();
-
+            $attendances = AttendanceProcessed::whereIn('id', $resolvedAttendanceIds)->get();
             foreach ($attendances as $attendance) {
-
                 $hasLeave = Leave::where('employee_id', $attendance->employee_id)
                     ->where('status', 'approved')
                     ->whereDate('from_date', '<=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
@@ -836,14 +868,14 @@ class AttendanceController extends Controller
                 if ($hasLeave) {
                     return response()->json([
                         'status' => 422,
-                        'message' => "Cannot mark attendance as Present. Approved leave exists for employee on {$attendance->date}."
+                        'message' => "Cannot mark attendance as Present. Approved leave exists for employee on " . \Carbon\Carbon::parse($attendance->date)->format('Y-m-d') . "."
                     ], 422);
                 }
             }
         }
         AttendanceProcessed::whereIn(
             'id',
-            $request->attendance_ids
+            $resolvedAttendanceIds
         )->update([
                     'attendance_status' => $request->attendance_status,
                     'remarks' => $request->remarks,
@@ -980,7 +1012,7 @@ class AttendanceController extends Controller
             }
 
             // Build Employee Query to calculate total_employees card stat
-            $employeeQuery = \App\Models\Employee::query();
+            $employeeQuery = \App\Models\Employee::query()->whereDate('joining_date', '<=', $endDate->format('Y-m-d'));
             if ($applyActiveFilter) {
                 $employeeQuery->where('is_active', $filterActive);
             }
@@ -1008,7 +1040,8 @@ class AttendanceController extends Controller
                 $statsQuery->whereDate('date', $statsDate->format('Y-m-d'));
             }
 
-            $statsQuery->whereHas('employee', function ($q) use ($request, $statsDate, $viewType, $applyActiveFilter, $filterActive, $attendanceStatusInput) {
+            $statsQuery->whereHas('employee', function ($q) use ($request, $statsDate, $viewType, $applyActiveFilter, $filterActive, $attendanceStatusInput, $endDate) {
+                $q->whereDate('joining_date', '<=', $endDate->format('Y-m-d'));
                 if ($applyActiveFilter) {
                     $q->where('is_active', $filterActive);
                 }
@@ -1070,7 +1103,8 @@ class AttendanceController extends Controller
                     ->toArray();
 
                 // Build Employee query
-                $employeeQuery = \App\Models\Employee::with(['site', 'department']);
+                $employeeQuery = \App\Models\Employee::with(['site', 'department'])
+                    ->whereDate('joining_date', '<=', $endDate->format('Y-m-d'));
                 if ($applyActiveFilter) {
                     $employeeQuery->where('is_active', $filterActive);
                 }
@@ -1176,7 +1210,7 @@ class AttendanceController extends Controller
                         'present' => $present,
                         'absent' => $absent,
                         'half_day' => $halfDay,
-                        'rest_day' => $restDay,
+                        'rest_day' => "{$restDay}/{$restDaysSetting}",
                         'leave' => $leave,
                         'paid_leave' => $empLeave['paid'],
                         'unpaid_leave' => $empLeave['unpaid'],

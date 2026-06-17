@@ -375,15 +375,18 @@ class InventoryController extends Controller
             $warnings = $import->getWarnings();
             $successCount = $import->getSuccessCount();
 
+            if (count($errors) > 0) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Excel validation failed.',
+                    'errors' => $errors
+                ], 422);
+            }
+
             $responseData = [
                 'status' => 200,
                 'message' => "Successfully imported {$successCount} products into inventory."
             ];
-
-            if (count($errors) > 0) {
-                $responseData['message'] = "Import completed with some issues. Successfully imported {$successCount} products.";
-                $responseData['errors'] = $errors;
-            }
 
             if (count($warnings) > 0) {
                 $responseData['warnings'] = $warnings;

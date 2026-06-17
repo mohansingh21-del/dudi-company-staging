@@ -492,13 +492,17 @@ class PayrollManagementTest extends TestCase
 
     public function test_cannot_create_duplicate_employee_payroll_configuration()
     {
-        $employee = Employee::factory()->create([
+        $employee = Employee::create([
             'employee_code' => 'TESTEMP99',
+            'name' => 'Test Employee',
+            'joining_date' => '2026-01-01',
+            'is_active' => 1,
             'basic_salary' => 20000,
+            'designation_id' => $this->role->id,
         ]);
 
         // Attempt to create first employee payroll config
-        $responseStore1 = $this->postJson('/api/v1/admin/employee-payroll', [
+        $responseStore1 = $this->postJson('/api/v1/admin/employee-payrolls', [
             'employee_id' => $employee->id,
             'salary_type' => 'monthly',
             'basic_salary' => 20000,
@@ -506,13 +510,57 @@ class PayrollManagementTest extends TestCase
         $responseStore1->assertStatus(200);
 
         // Attempt to create second employee payroll config (duplicate)
-        $responseStore2 = $this->postJson('/api/v1/admin/employee-payroll', [
+        $responseStore2 = $this->postJson('/api/v1/admin/employee-payrolls', [
             'employee_id' => $employee->id,
             'salary_type' => 'monthly',
             'basic_salary' => 25000,
         ]);
         $responseStore2->assertStatus(422);
-        $responseStore2->assertJsonPath('status', 422);
-        $responseStore2->assertJsonPath('message', 'Payroll configuration already exists for this employee.');
+        $responseStore2->assertJsonValidationErrors(['employee_id']);
+    }
+
+    public function test_payroll_respects_employee_joining_date()
+    {
+        // Create an employee who joins on 2026-06-10
+        $employeeJoinedLate = Employee::create([
+            'employee_code' => 'EMP9010',
+            'name' => 'Late Payroll Joiner',
+            'joining_date' => '2026-06-10',
+            'is_active' => 1,
+            'basic_salary' => 20000,
+            'designation_id' => $this->role->id,
+        ]);
+
+        // 1. List Payroll for May 2026: Late Joiner should NOT appear
+        $responseMay = $this->getJson('/api/v1/admin/payroll?month=5&year=2026');
+        $responseMay->assertStatus(200);
+        $this->assertNull(collect($responseMay->json('data'))->firstWhere('id', $employeeJoinedLate->id));
+
+        // 2. List Payroll for June 2026: Late Joiner SHOULD appear
+        $responseJune = $this->getJson('/api/v1/admin/payroll?month=6&year=2026');
+        $responseJune->assertStatus(200);
+        $this->assertNotNull(collect($responseJune->json('data'))->firstWhere('id', $employeeJoinedLate->id));
+
+        // 3. Generate Payroll for May 2026 with employee_id: should return 404 (No employees found)
+        $responseGenMay = $this->postJson('/api/v1/admin/payroll/generate', [
+            'month' => 5,
+            'year' => 2026,
+            'employee_id' => $employeeJoinedLate->id,
+        ]);
+        $responseGenMay->assertStatus(404);
+
+        // 4. Show Payroll Details for May 2026: should return 404
+        $responseShowMay = $this->getJson("/api/v1/admin/payroll/{$employeeJoinedLate->id}/detail?month=5&year=2026");
+        $responseShowMay->assertStatus(404);
+
+        // 5. Show Payroll Details for June 2026: should return 200
+        \App\Models\EmployeePayroll::create([
+            'employee_id' => $employeeJoinedLate->id,
+            'salary_type' => 'monthly',
+            'basic_salary' => 20000,
+            'is_active' => true,
+        ]);
+        $responseShowJune = $this->getJson("/api/v1/admin/payroll/{$employeeJoinedLate->id}/detail?month=6&year=2026");
+        $responseShowJune->assertStatus(200);
     }
 }

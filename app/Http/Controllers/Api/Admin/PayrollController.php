@@ -33,9 +33,12 @@ class PayrollController extends Controller
             $year = (int) ($request->year ?? now()->year);
             $limit = $request->input('limit', 10);
 
+            $endDate = Carbon::create($year, $month, 1)->endOfMonth();
+
             // ── Build employee query with filters ──
             $employeeQuery = Employee::with(['department', 'designation', 'site', 'activePayroll'])
-                ->where('is_active', true);
+                ->where('is_active', true)
+                ->whereDate('joining_date', '<=', $endDate->format('Y-m-d'));
 
             if ($request->filled('site_id')) {
                 $employeeQuery->where('site_id', $request->site_id);
@@ -280,6 +283,9 @@ class PayrollController extends Controller
             $month = (int) $request->month;
             $year = (int) $request->year;
 
+            $monthStart = Carbon::create($year, $month, 1)->startOfDay();
+            $monthEnd = $monthStart->copy()->endOfMonth();
+
             // Determine target employees
             if ($request->filled('employee_id')) {
                 $employees = Employee::with(['activePayroll'])->where('id', $request->employee_id)->get();
@@ -289,6 +295,11 @@ class PayrollController extends Controller
                 $employees = Employee::with(['activePayroll'])->where('is_active', true)->get();
             }
 
+            // Filter employees based on joining date
+            $employees = $employees->filter(function ($emp) use ($monthEnd) {
+                return Carbon::parse($emp->joining_date)->lte($monthEnd);
+            });
+
             if ($employees->isEmpty()) {
                 return response()->json([
                     'status' => 404,
@@ -297,8 +308,6 @@ class PayrollController extends Controller
             }
 
             $daysInMonth = Carbon::create($year, $month)->daysInMonth;
-            $monthStart = Carbon::create($year, $month, 1)->startOfDay();
-            $monthEnd = $monthStart->copy()->endOfMonth();
 
             $generated = 0;
 
@@ -453,9 +462,12 @@ class PayrollController extends Controller
             $month = (int) $request->month;
             $year = (int) $request->year;
 
+            $monthStart = Carbon::create($year, $month, 1)->startOfDay();
+            $monthEnd = $monthStart->copy()->endOfMonth();
+
             $employee = Employee::with(['department', 'designation', 'site', 'activePayroll'])->find($employeeId);
 
-            if (!$employee) {
+            if (!$employee || Carbon::parse($employee->joining_date)->gt($monthEnd)) {
                 return response()->json([
                     'status' => 404,
                     'message' => 'Employee not found',
@@ -463,7 +475,6 @@ class PayrollController extends Controller
             }
 
             $daysInMonth = Carbon::create($year, $month)->daysInMonth;
-            $monthStart = Carbon::create($year, $month, 1)->startOfDay();
             $monthEnd = $monthStart->copy()->endOfMonth();
 
             // ── Attendance breakdown ──
@@ -778,9 +789,12 @@ class PayrollController extends Controller
             $month = (int) $request->month;
             $year = (int) $request->year;
 
+            $monthStart = Carbon::create($year, $month, 1)->startOfDay();
+            $monthEnd = $monthStart->copy()->endOfMonth();
+
             $employee = Employee::find($employeeId);
 
-            if (!$employee) {
+            if (!$employee || Carbon::parse($employee->joining_date)->gt($monthEnd)) {
                 return response()->json([
                     'status' => 404,
                     'message' => 'Employee not found',
