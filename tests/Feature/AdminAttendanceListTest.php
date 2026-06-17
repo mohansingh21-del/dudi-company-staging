@@ -482,4 +482,79 @@ class AdminAttendanceListTest extends TestCase
         $response->assertStatus(422)
             ->assertJsonPath('message', 'Check-out must be greater than check-in');
     }
+
+    public function test_daily_attendance_using_from_date_without_month_year()
+    {
+        // Setup processed attendance record for 2026-06-15
+        AttendanceProcessed::create([
+            'employee_id' => $this->employee1->id,
+            'shift_id' => $this->shift->id,
+            'date' => '2026-06-15',
+            'check_in' => '2026-06-15 09:00:00',
+            'check_out' => '2026-06-15 18:00:00',
+            'working_hours' => 9.0,
+            'attendance_status' => 'present'
+        ]);
+
+        // Hit the API with view_type=daily and from_date=2026-06-15, with and without month & year parameters.
+        // It should return the attendance record of Amit Sharma on 15 Jun 2026.
+        $response = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily&month=6&year=2026');
+        $response->assertStatus(200);
+        $this->assertCount(1, $response->json('data'));
+        $this->assertEquals($this->employee1->id, $response->json('data.0.employee_id'));
+        $this->assertEquals('15 Jun 2026', $response->json('data.0.date'));
+
+        // Also test without month and year parameters
+        $response2 = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily');
+        $response2->assertStatus(200);
+        $this->assertCount(1, $response2->json('data'));
+        $this->assertEquals($this->employee1->id, $response2->json('data.0.employee_id'));
+        $this->assertEquals('15 Jun 2026', $response2->json('data.0.date'));
+    }
+
+    public function test_monthly_attendance_list_shows_paid_and_unpaid_leaves()
+    {
+        // 1. Create a paid leave type and an approved leave for employee 1
+        $paidLeaveType = \App\Models\LeaveType::create([
+            'name' => 'Paid Sick Leave',
+            'leave_category' => 'paid',
+            'allowed_days' => 10,
+            'is_active' => true,
+        ]);
+        \App\Models\Leave::create([
+            'employee_id' => $this->employee1->id,
+            'leave_type_id' => $paidLeaveType->id,
+            'from_date' => '2026-06-10',
+            'to_date' => '2026-06-12', // 3 days
+            'reason' => 'Fever',
+            'status' => 'approved',
+        ]);
+
+        // 2. Create an unpaid leave type and an approved leave for employee 1
+        $unpaidLeaveType = \App\Models\LeaveType::create([
+            'name' => 'Unpaid Casual Leave',
+            'leave_category' => 'unpaid',
+            'allowed_days' => 5,
+            'is_active' => true,
+        ]);
+        \App\Models\Leave::create([
+            'employee_id' => $this->employee1->id,
+            'leave_type_id' => $unpaidLeaveType->id,
+            'from_date' => '2026-06-20',
+            'to_date' => '2026-06-21', // 2 days
+            'reason' => 'Personal work',
+            'status' => 'approved',
+        ]);
+
+        // Hit the monthly attendance API
+        $response = $this->getJson('/api/v1/admin/attendance?month=6&year=2026&view_type=monthly');
+        $response->assertStatus(200);
+
+        // Verify paid_leave and unpaid_leave columns for Employee 1
+        $employeeData = collect($response->json('data'))->firstWhere('employee_id', $this->employee1->id);
+        $this->assertNotNull($employeeData);
+        $this->assertEquals(3, $employeeData['paid_leave']);
+        $this->assertEquals(2, $employeeData['unpaid_leave']);
+        $this->assertEquals(5, $employeeData['leave']); // total leaves
+    }
 }

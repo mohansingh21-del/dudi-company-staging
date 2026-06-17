@@ -25,7 +25,7 @@ class StoreEmployeePayrollRequest extends FormRequest
     {
        return [
 
-    'employee_id' => 'required|exists:employees,id',
+    'employee_id' => 'required|exists:employees,id|unique:employee_payrolls,employee_id',
 
     'salary_type' => 'required|in:monthly,daily_wage',
 
@@ -48,7 +48,8 @@ class StoreEmployeePayrollRequest extends FormRequest
     'other_deduction_appliacble' => 'nullable|boolean',
 
     'other_deduction' => 'nullable|numeric|min:0',
-
+    'pf_amount' => 'nullable|numeric|min:0',
+    'mess_deduction_amount' => 'nullable|numeric|min:0',
     'rest_days' => 'nullable|integer|min:0|max:31',
 
 ];

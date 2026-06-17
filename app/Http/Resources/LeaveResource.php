@@ -24,6 +24,8 @@ class LeaveResource extends JsonResource
             'to_date' => $toDate->format('d M Y'),
 
             'number_of_days' => $fromDate->diffInDays($toDate) + 1,
+            'paid_leave' => optional($this->leaveType)->leave_category === 'paid' ? ($fromDate->diffInDays($toDate) + 1) : 0,
+            'unpaid_leave' => optional($this->leaveType)->leave_category !== 'paid' ? ($fromDate->diffInDays($toDate) + 1) : 0,
 
             'reason' => $this->reason,
             'status' => $this->status,

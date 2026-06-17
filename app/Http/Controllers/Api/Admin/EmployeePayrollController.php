@@ -113,12 +113,14 @@ class EmployeePayrollController extends Controller
 
             $data = $request->validated();
 
-            EmployeePayroll::where(
-                'employee_id',
-                $data['employee_id']
-            )->update([
-                        'is_active' => false
-                    ]);
+            // Check if payroll configuration already exists for this employee to prevent duplicate rows
+            $alreadyExists = EmployeePayroll::where('employee_id', $data['employee_id'])->exists();
+            if ($alreadyExists) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Payroll configuration already exists for this employee.'
+                ], 422);
+            }
 
             EmployeePayroll::create([
                 'employee_id' => $data['employee_id'],
@@ -133,6 +135,8 @@ class EmployeePayrollController extends Controller
                 'mess_deduction_applicable' => $data['mess_deduction_applicable'] ?? false,
                 'other_deduction_appliacble' => $data['other_deduction_appliacble'] ?? false,
                 'other_deduction' => $data['other_deduction'] ?? 0,
+                'pf_amount' => $data['pf_amount'] ?? 0,
+                'mess_deduction_amount' => $data['mess_deduction_amount'] ?? 0,
                 'rest_days' => $data['rest_days'] ?? 0,
                 'is_active' => true
             ]);
@@ -200,7 +204,9 @@ class EmployeePayrollController extends Controller
                     'message' => 'Payroll configuration not found'
                 ]);
             }
+            $data = $request->validated();
 
+            //dd($data);
             $payroll->update($request->validated());
 
             return response()->json([

@@ -37,7 +37,9 @@ class EmployeePayroll extends Model
         'rest_days',
 
         'effective_from',
-
+        'pf_amount',
+        'mess_deduction_amount',
+        'rest_days',
         'is_active'
     ];
 

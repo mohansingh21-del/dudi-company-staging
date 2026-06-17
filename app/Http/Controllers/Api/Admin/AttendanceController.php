@@ -866,7 +866,23 @@ class AttendanceController extends Controller
             $endDate = null;
             $statsDate = null;
 
-            if ($request->filled('month') && $request->filled('year')) {
+            if ($viewType === 'daily' && $request->filled('from_date')) {
+                try {
+                    $parsedDate = Carbon::parse($request->from_date)->startOfDay();
+                    $statsDate = $parsedDate;
+                    $startDate = $parsedDate->copy()->startOfDay();
+                    if ($request->filled('to_date')) {
+                        $endDate = Carbon::parse($request->to_date)->endOfDay();
+                    } else {
+                        $endDate = $parsedDate->copy()->endOfDay();
+                    }
+                } catch (\Exception $e) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Invalid from_date format.'
+                    ], 422);
+                }
+            } else if ($request->filled('month') && $request->filled('year')) {
                 try {
                     $parsedDate = Carbon::create((int) $request->year, (int) $request->month, 1)->startOfDay();
                     $statsDate = $parsedDate;
@@ -1162,6 +1178,8 @@ class AttendanceController extends Controller
                         'half_day' => $halfDay,
                         'rest_day' => $restDay,
                         'leave' => $leave,
+                        'paid_leave' => $empLeave['paid'],
+                        'unpaid_leave' => $empLeave['unpaid'],
                         'payable_days' => $payableDays,
                     ];
                 });

@@ -33,6 +33,8 @@ return new class extends Migration
 
             $table->string('pf_number')->nullable();
 
+            $table->decimal('pf_amount', 10, 2)->nullable()->default(0);
+
             $table->string('bank_name')->nullable();
 
             $table->string('bank_account_number')->nullable();
@@ -41,6 +43,8 @@ return new class extends Migration
 
             $table->boolean('mess_deduction_applicable')
                 ->default(false);
+
+            $table->decimal('mess_deduction_amount', 10, 2)->nullable()->default(0);
 
             $table->boolean('other_deduction_appliacble')
                 ->default(false);

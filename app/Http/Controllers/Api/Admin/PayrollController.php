@@ -160,6 +160,7 @@ class PayrollController extends Controller
                 $paidRestDays = min($restDays, $restDaysSetting);
                 $paidLeaveDays = $empLeave['paid'] + $paidRestDays; // rest day is counted as paid leave
                 $unpaidLeaveDays = $empLeave['unpaid'];
+                $unpaidRestDays = max(0, $restDays - $paidRestDays);
 
                 // ── Salary Calculation (per documentation) ──
                 $basicSalary = $activePayroll ? (float) $activePayroll->basic_salary : (float) $employee->basic_salary;
@@ -174,16 +175,17 @@ class PayrollController extends Controller
                 $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
                 // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
                 $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+                $payableDays = max(0.0, (float) ($daysInMonth - ($effectiveAbsent + ($halfDays * 0.5))));
 
                 // Fixed deductions
                 $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
                 $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
 
-                $pfDeduction = $pfApplicable ? (float) $employee->pf_amount : 0;
-                $messDeduction = $messDeductionApplicable ? (float) $employee->mess_deduction_amount : 0;
+                $pfDeduction = $pfApplicable ? ($activePayroll && $activePayroll->pf_amount !== null ? (float) $activePayroll->pf_amount : (float) $employee->pf_amount) : 0;
+                $messDeduction = $messDeductionApplicable ? ($activePayroll && $activePayroll->mess_deduction_amount !== null ? (float) $activePayroll->mess_deduction_amount : (float) $employee->mess_deduction_amount) : 0;
 
                 $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
-                $otherDeduction = $otherDeductionApplicable ? ($activePayroll ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
+                $otherDeduction = $otherDeductionApplicable ? ($activePayroll && $activePayroll->other_deduction !== null ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
 
                 // Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction)
                 $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
@@ -210,8 +212,9 @@ class PayrollController extends Controller
                     'half_days' => $halfDays,
                     'rest_days' => "{$restDays}/{$restDaysSetting}",
                     'holidays' => $holidays,
-                    'paid_leave_days' => $paidLeaveDays,
+                    'paid_leave_days' => $empLeave['paid'],
                     'unpaid_leave_days' => $unpaidLeaveDays,
+                    'payable_days' => $payableDays,
                     'penalty_amount' => (float) $penaltyTotal,
                     'basic_salary' => $basicSalary,
                     'shift_allowance' => $shiftAllowance,
@@ -220,9 +223,9 @@ class PayrollController extends Controller
                     'leave_deduction' => $leaveDeduction,
                     'pf_deduction' => $pfDeduction,
                     'mess_deduction' => $messDeduction,
-                    'other_deduction' => $payroll ? (float) $payroll->other_deduction : $otherDeduction,
+                    'other_deduction' => $otherDeduction,
                     'monthly_salary' => $grossSalary,
-                    'net_salary' => $payroll ? (float) $payroll->net_salary : $netSalary,
+                    'net_salary' => $netSalary,
                     'created_at' => ($payroll && $payroll->created_at) ? $payroll->created_at->toDateTimeString() : $employee->created_at->toDateTimeString(),
                 ];
             });
@@ -363,20 +366,21 @@ class PayrollController extends Controller
                     $restDaysSetting = $activePayroll ? (int) $activePayroll->rest_days : (int) $employee->rest_days;
                     $paidRestDays = min($restDays, $restDaysSetting);
                     $paidLeaveDays += $paidRestDays;
-                    $unpaidRestDays = max(0, $restDays - $paidRestDays);
 
-                    // ── Leave Deduction (absent days from attendance) ──
-                    $leaveDeduction = round($perDaySalary * ($absentDays + $unpaidLeaveDays + $unpaidRestDays + ($halfDays * 0.5)), 0);
+                    // Unmarked days count as absent: effective_absent = total - accounted days
+                    $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
+                    // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
+                    $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
 
                     // ── Fixed Deductions ──
                     $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
                     $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
 
-                    $pfDeduction = $pfApplicable ? (float) $employee->pf_amount : 0;
-                    $messDeduction = $messDeductionApplicable ? (float) $employee->mess_deduction_amount : 0;
+                    $pfDeduction = $pfApplicable ? ($activePayroll && $activePayroll->pf_amount !== null ? (float) $activePayroll->pf_amount : (float) $employee->pf_amount) : 0;
+                    $messDeduction = $messDeductionApplicable ? ($activePayroll && $activePayroll->mess_deduction_amount !== null ? (float) $activePayroll->mess_deduction_amount : (float) $employee->mess_deduction_amount) : 0;
 
                     $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
-                    $otherDeduction = $otherDeductionApplicable ? ($activePayroll ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
+                    $otherDeduction = $otherDeductionApplicable ? ($activePayroll && $activePayroll->other_deduction !== null ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
 
                     // ── Penalty ──
                     $penaltyTotal = Penalty::where('employee_id', $employee->id)
@@ -537,21 +541,24 @@ class PayrollController extends Controller
             // rest day is counted as paid leave
             $restDaysSetting = $activePayroll ? (int) $activePayroll->rest_days : (int) $employee->rest_days;
             $paidRestDays = min($restDays, $restDaysSetting);
+            $approvedPaidLeaves = $paidLeaveDays;
             $paidLeaveDays += $paidRestDays;
-            $unpaidRestDays = max(0, $restDays - $paidRestDays);
 
-            // Leave Deduction (absent days from attendance)
-            $leaveDeduction = round($perDaySalary * ($absentDays + $unpaidLeaveDays + $unpaidRestDays + ($halfDays * 0.5)), 0);
+            // Unmarked days count as absent: effective_absent = total - accounted days
+            $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
+            // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
+            $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+            $payableDays = max(0.0, (float) ($daysInMonth - ($effectiveAbsent + ($halfDays * 0.5))));
 
             // Fixed deductions
             $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
             $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
 
-            $pfDeduction = $pfApplicable ? (float) $employee->pf_amount : 0;
-            $messDeduction = $messDeductionApplicable ? (float) $employee->mess_deduction_amount : 0;
+            $pfDeduction = $pfApplicable ? ($activePayroll && $activePayroll->pf_amount !== null ? (float) $activePayroll->pf_amount : (float) $employee->pf_amount) : 0;
+            $messDeduction = $messDeductionApplicable ? ($activePayroll && $activePayroll->mess_deduction_amount !== null ? (float) $activePayroll->mess_deduction_amount : (float) $employee->mess_deduction_amount) : 0;
 
             $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
-            $otherDeduction = $otherDeductionApplicable ? ($activePayroll ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
+            $otherDeduction = $otherDeductionApplicable ? ($activePayroll && $activePayroll->other_deduction !== null ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
 
             // Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction)
             $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
@@ -617,8 +624,9 @@ class PayrollController extends Controller
                         'half_days' => $halfDays,
                         'rest_days' => $restDays,
                         'holidays' => $holidays,
-                        'paid_leave_days' => $paidLeaveDays,
+                        'paid_leave_days' => $approvedPaidLeaves,
                         'unpaid_leave_days' => $unpaidLeaveDays,
+                        'payable_days' => $payableDays,
                     ],
                     'earnings' => [
                         'basic_salary' => $basicSalary,

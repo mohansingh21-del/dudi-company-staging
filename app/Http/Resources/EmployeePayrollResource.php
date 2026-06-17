@@ -42,7 +42,8 @@ class EmployeePayrollResource extends JsonResource
             'other_deduction_appliacble' => $this->other_deduction_appliacble,
 
             'other_deduction' => $this->other_deduction,
-
+            'pf_amount' => $this->pf_amount,
+            'mess_deduction_amount' => $this->mess_deduction_amount,
             'rest_days' => $this->rest_days,
 
             'is_active' => $this->is_active
