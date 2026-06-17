@@ -1240,67 +1240,248 @@ class AttendanceController extends Controller
                 ]);
             }
 
-            // Main Attendance Query
-            $query = AttendanceProcessed::with(['employee.site', 'shift'])
-                ->whereBetween('date', [
-                    $startDate->format('Y-m-d'),
-                    $endDate->format('Y-m-d')
-                ])
-                ->whereHas('employee', function ($q) use ($request, $applyActiveFilter, $filterActive) {
-                    if ($applyActiveFilter) {
-                        $q->where('is_active', $filterActive);
-                    }
-                    if ($request->filled('site_id')) {
-                        $q->where('site_id', $request->site_id);
-                    }
-                    if ($request->filled('department_id')) {
-                        $q->where('department_id', $request->department_id);
-                    }
-                    if ($request->filled('search')) {
-                        $search = $request->search;
-                        $q->where(function ($sq) use ($search) {
-                            $sq->where('name', 'LIKE', "%{$search}%")
-                                ->orWhere('employee_code', 'LIKE', "%{$search}%");
-                        });
-                    }
-                });
+            // Build Employee Query to paginate all employees
+            $employeeQuery = \App\Models\Employee::with([
+                'site',
+                'currentShiftAssignment.shift',
+                'attendanceProcesseds' => function ($q) use ($startDate, $endDate) {
+                    $q->whereBetween('date', [
+                        $startDate->format('Y-m-d'),
+                        $endDate->format('Y-m-d')
+                    ]);
+                }
+            ]);
 
-            if ($attendanceStatusInput) {
-                $query->where('attendance_status', $attendanceStatusInput);
+            // Filter out employees registered after the start date
+            $employeeQuery->whereDate('joining_date', '<=', $startDate->format('Y-m-d'));
+
+            if ($applyActiveFilter) {
+                $employeeQuery->where('is_active', $filterActive);
+            }
+            if ($request->filled('site_id')) {
+                $employeeQuery->where('site_id', $request->site_id);
+            }
+            if ($request->filled('department_id')) {
+                $employeeQuery->where('department_id', $request->department_id);
+            }
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $employeeQuery->where(function ($q) use ($search) {
+                    $q->where('name', 'LIKE', "%{$search}%")
+                      ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                });
             }
 
-            $attendance = $query->latest('date')->paginate($limit);
+            // Apply granular status filter
+            if ($attendanceStatusInput) {
+                if ($attendanceStatusInput === 'absent') {
+                    $isSunday = $startDate->dayOfWeek === \Carbon\Carbon::SUNDAY;
+                    // Check if the date is a general holiday
+                    $isGeneralHoliday = \App\Models\Holiday::where('holiday_date', $startDate->format('Y-m-d'))
+                        ->where('is_active', true)
+                        ->whereNull('site_id')
+                        ->exists();
 
-            $data = collect($attendance->items())->map(function ($item) {
-                return [
-                    'id' => $item->id,
-                    'employee_id' => $item->employee_id,
-                    'shift_id' => $item->shift_id,
-                    'employee_name' => $item->employee->name ?? null,
-                    'employee_code' => $item->employee->employee_code ?? null,
-                    'site_name' => $item->employee->site->site_name ?? null,
-                    'shift_name' => $item->shift->shift_name ?? null,
-                    'date' => $item->date
-                        ? \Carbon\Carbon::parse($item->date)->format('d M Y')
-                        : null,
-                    'check_in' => $item->check_in
-                        ? \Carbon\Carbon::parse($item->check_in)->format('H:i')
-                        : null,
-                    'check_out' => $item->check_out
-                        ? \Carbon\Carbon::parse($item->check_out)->format('H:i')
-                        : null,
-                    'working_hours' => $item->working_hours,
-                    'late_minutes' => $item->late_minutes,
-                    'early_exit_minutes' => $item->early_exit_minutes,
-                    'attendance_status' => $item->attendance_status,
-                    'attendance_status_label' => $item->attendance_status
-                        ? ucwords(str_replace('_', ' ', $item->attendance_status))
-                        : null,
-                    'remarks' => $item->remarks,
-                    'created_at' => $item->created_at,
-                    'updated_at' => $item->updated_at,
-                ];
-            });
+                    if ($isSunday || $isGeneralHoliday) {
+                        // On Sunday or General Holiday, only show employees who are explicitly processed as 'absent'
+                        $employeeQuery->whereHas('attendanceProcesseds', function ($sq) use ($startDate, $endDate) {
+                            $sq->whereBetween('date', [
+                                $startDate->format('Y-m-d'),
+                                $endDate->format('Y-m-d')
+                            ])->where('attendance_status', 'absent');
+                        });
+                    } else {
+                        // On other days, show employees who are explicitly processed as 'absent',
+                        // OR who have no record AND no approved leave AND no site-specific holiday.
+                        $employeeQuery->where(function ($q) use ($startDate, $endDate) {
+                            $q->whereHas('attendanceProcesseds', function ($sq) use ($startDate, $endDate) {
+                                $sq->whereBetween('date', [
+                                    $startDate->format('Y-m-d'),
+                                    $endDate->format('Y-m-d')
+                                ])->where('attendance_status', 'absent');
+                            })->orWhere(function ($q2) use ($startDate, $endDate) {
+                                $q2->whereDoesntHave('attendanceProcesseds', function ($sq) use ($startDate, $endDate) {
+                                    $sq->whereBetween('date', [
+                                        $startDate->format('Y-m-d'),
+                                        $endDate->format('Y-m-d')
+                                    ]);
+                                })
+                                ->whereDoesntHave('leaves', function ($sq) use ($startDate, $endDate) {
+                                    $sq->where('status', 'approved')
+                                       ->whereDate('from_date', '<=', $startDate->format('Y-m-d'))
+                                       ->whereDate('to_date', '>=', $startDate->format('Y-m-d'));
+                                })
+                                ->whereDoesntHave('site.holidays', function ($sq) use ($startDate) {
+                                    $sq->where('holiday_date', $startDate->format('Y-m-d'))->where('is_active', true);
+                                });
+                            });
+                        });
+                    }
+                } elseif ($attendanceStatusInput === 'leave') {
+                    // Show employees who are explicitly processed as 'leave',
+                    // OR who have no record AND have an approved leave.
+                    $employeeQuery->where(function ($q) use ($startDate, $endDate) {
+                        $q->whereHas('attendanceProcesseds', function ($sq) use ($startDate, $endDate) {
+                            $sq->whereBetween('date', [
+                                $startDate->format('Y-m-d'),
+                                $endDate->format('Y-m-d')
+                            ])->where('attendance_status', 'leave');
+                        })->orWhere(function ($q2) use ($startDate, $endDate) {
+                            $q2->whereDoesntHave('attendanceProcesseds', function ($sq) use ($startDate, $endDate) {
+                                $sq->whereBetween('date', [
+                                    $startDate->format('Y-m-d'),
+                                    $endDate->format('Y-m-d')
+                                ]);
+                            })
+                            ->whereHas('leaves', function ($sq) use ($startDate, $endDate) {
+                                $sq->where('status', 'approved')
+                                   ->whereDate('from_date', '<=', $startDate->format('Y-m-d'))
+                                   ->whereDate('to_date', '>=', $startDate->format('Y-m-d'));
+                            });
+                        });
+                    });
+                } elseif ($attendanceStatusInput === 'rest_day') {
+                    // Show employees who are explicitly processed as 'rest_day',
+                    // OR who have no record on a Sunday.
+                    $isSunday = $startDate->dayOfWeek === \Carbon\Carbon::SUNDAY;
+                    if ($isSunday) {
+                        $employeeQuery->where(function ($q) use ($startDate, $endDate) {
+                            $q->whereHas('attendanceProcesseds', function ($sq) use ($startDate, $endDate) {
+                                $sq->whereBetween('date', [
+                                    $startDate->format('Y-m-d'),
+                                    $endDate->format('Y-m-d')
+                                ])->where('attendance_status', 'rest_day');
+                            })->orWhereDoesntHave('attendanceProcesseds', function ($sq) use ($startDate, $endDate) {
+                                $sq->whereBetween('date', [
+                                    $startDate->format('Y-m-d'),
+                                    $endDate->format('Y-m-d')
+                                ]);
+                            });
+                        });
+                    } else {
+                        $employeeQuery->whereHas('attendanceProcesseds', function ($sq) use ($startDate, $endDate) {
+                            $sq->whereBetween('date', [
+                                $startDate->format('Y-m-d'),
+                                $endDate->format('Y-m-d')
+                            ])->where('attendance_status', 'rest_day');
+                        });
+                    }
+                } else {
+                    $employeeQuery->whereHas('attendanceProcesseds', function ($sq) use ($startDate, $endDate, $attendanceStatusInput) {
+                        $sq->whereBetween('date', [
+                            $startDate->format('Y-m-d'),
+                            $endDate->format('Y-m-d')
+                        ])->where('attendance_status', $attendanceStatusInput);
+                    });
+                }
+            }
+
+            $employees = $employeeQuery->orderBy('name')->paginate($limit);
+
+            $dates = [];
+            $currentDate = $startDate->copy();
+            while ($currentDate->lte($endDate)) {
+                $dates[] = $currentDate->format('Y-m-d');
+                $currentDate->addDay();
+            }
+
+            $data = [];
+            foreach ($employees->items() as $employee) {
+                // Group processed records by date for this employee using a formatted date string key
+                $empRecords = $employee->attendanceProcesseds->keyBy(function ($item) {
+                    return \Carbon\Carbon::parse($item->date)->format('Y-m-d');
+                });
+
+                foreach ($dates as $dateStr) {
+                    $carbonDate = \Carbon\Carbon::parse($dateStr);
+                    // Check if date is before employee joining date, if so skip
+                    if ($carbonDate->lt(\Carbon\Carbon::parse($employee->joining_date))) {
+                        continue;
+                    }
+
+                    $item = $empRecords->get($dateStr);
+
+                    if ($item) {
+                        // Use existing processed record
+                        $data[] = [
+                            'id' => $item->id,
+                            'employee_id' => $employee->id,
+                            'shift_id' => $item->shift_id,
+                            'employee_name' => $employee->name,
+                            'employee_code' => $employee->employee_code,
+                            'site_name' => $employee->site->site_name ?? null,
+                            'shift_name' => $item->shift?->shift_name ?? null,
+                            'date' => $carbonDate->format('d M Y'),
+                            'check_in' => $item->check_in ? \Carbon\Carbon::parse($item->check_in)->format('H:i') : null,
+                            'check_out' => $item->check_out ? \Carbon\Carbon::parse($item->check_out)->format('H:i') : null,
+                            'working_hours' => $item->working_hours,
+                            'late_minutes' => $item->late_minutes,
+                            'early_exit_minutes' => $item->early_exit_minutes,
+                            'attendance_status' => $item->attendance_status,
+                            'attendance_status_label' => $item->attendance_status
+                                ? ucwords(str_replace('_', ' ', $item->attendance_status))
+                                : null,
+                            'remarks' => $item->remarks,
+                            'created_at' => $item->created_at,
+                            'updated_at' => $item->updated_at,
+                        ];
+                    } else {
+                        // Determine default status
+                        $hasLeave = \App\Models\Leave::where('employee_id', $employee->id)
+                            ->where('status', 'approved')
+                            ->whereDate('from_date', '<=', $dateStr)
+                            ->whereDate('to_date', '>=', $dateStr)
+                            ->exists();
+
+                        $isHoliday = \App\Models\Holiday::where('holiday_date', $dateStr)
+                            ->where('is_active', true)
+                            ->where(function ($q) use ($employee) {
+                                $q->whereNull('site_id')
+                                  ->orWhere('site_id', $employee->site_id);
+                            })
+                            ->exists();
+
+                        $isWeekend = false;
+                        $dayOfWeek = $carbonDate->dayOfWeek; // 0 (Sunday) to 6 (Saturday)
+                        if ($dayOfWeek === \Carbon\Carbon::SUNDAY) {
+                            $isWeekend = true;
+                        }
+
+                        $status = 'absent';
+                        if ($hasLeave) {
+                            $status = 'leave';
+                        } elseif ($isHoliday) {
+                            $status = 'holiday';
+                        } elseif ($isWeekend) {
+                            $status = 'rest_day';
+                        }
+
+                        $shiftId = $employee->currentShiftAssignment?->shift_id;
+                        $shiftName = $employee->currentShiftAssignment?->shift?->shift_name;
+
+                        $data[] = [
+                            'id' => null,
+                            'employee_id' => $employee->id,
+                            'shift_id' => $shiftId,
+                            'employee_name' => $employee->name,
+                            'employee_code' => $employee->employee_code,
+                            'site_name' => $employee->site->site_name ?? null,
+                            'shift_name' => $shiftName,
+                            'date' => $carbonDate->format('d M Y'),
+                            'check_in' => null,
+                            'check_out' => null,
+                            'working_hours' => 0.0,
+                            'late_minutes' => 0,
+                            'early_exit_minutes' => 0,
+                            'attendance_status' => $status,
+                            'attendance_status_label' => ucwords(str_replace('_', ' ', $status)),
+                            'remarks' => null,
+                            'created_at' => null,
+                            'updated_at' => null,
+                        ];
+                    }
+                }
+            }
 
             return response()->json([
                 'status' => 200,
@@ -1314,12 +1495,12 @@ class AttendanceController extends Controller
                 ],
                 'data' => $data,
                 'pagination' => [
-                    'current_page' => $attendance->currentPage(),
-                    'last_page' => $attendance->lastPage(),
-                    'per_page' => $attendance->perPage(),
-                    'total' => $attendance->total(),
-                    'from' => $attendance->firstItem(),
-                    'to' => $attendance->lastItem(),
+                    'current_page' => $employees->currentPage(),
+                    'last_page' => $employees->lastPage(),
+                    'per_page' => $employees->perPage(),
+                    'total' => $employees->total(),
+                    'from' => $employees->firstItem(),
+                    'to' => $employees->lastItem(),
                 ]
             ]);
         } catch (\Throwable $th) {

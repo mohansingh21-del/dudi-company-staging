@@ -633,4 +633,71 @@ class AdminAttendanceListTest extends TestCase
         $responseDailyAfter->assertStatus(200);
         $this->assertNotNull(collect($responseDailyAfter->json('data'))->firstWhere('employee_id', $employeeJoinedLate->id));
     }
+
+    public function test_bulk_update_status_resolves_employee_ids()
+    {
+        // Create an employee who does NOT have any attendance processed record
+        $newEmployee = Employee::create([
+            'employee_code' => 'EMP9999',
+            'name' => 'No Attendance Record Employee',
+            'joining_date' => '2026-06-01',
+            'is_active' => 1,
+            'site_id' => $this->site->id,
+            'department_id' => $this->departmentId,
+            'designation_id' => $this->employee1->designation_id,
+        ]);
+
+        // Try to update their status in bulk via employee_id
+        $response = $this->patchJson('/api/v1/admin/attendance/bulk-status', [
+            'attendance_ids' => [$newEmployee->id],
+            'attendance_status' => 'present',
+            'remarks' => 'Bulk marked present',
+            'date' => '2026-06-15'
+        ]);
+
+        $response->assertStatus(200);
+
+        // Assert that AttendanceProcessed record was created and updated
+        $record = AttendanceProcessed::where('employee_id', $newEmployee->id)
+            ->where('date', '2026-06-15')
+            ->first();
+
+        $this->assertNotNull($record);
+        $this->assertEquals('present', $record->attendance_status);
+        $this->assertEquals('Bulk marked present', $record->remarks);
+    }
+
+    public function test_absent_filter_does_not_return_leave_employees()
+    {
+        // We create an approved leave for employee2 on 2026-06-15.
+        $leaveType = \App\Models\LeaveType::create([
+            'name' => 'Casual Leave',
+            'leave_category' => 'paid',
+            'is_active' => true,
+        ]);
+
+        \App\Models\Leave::create([
+            'employee_id' => $this->employee2->id,
+            'leave_type_id' => $leaveType->id,
+            'from_date' => '2026-06-15',
+            'to_date' => '2026-06-15',
+            'status' => 'approved',
+            'reason' => 'Family event',
+        ]);
+
+        // If we query daily attendance without status filter for 2026-06-15:
+        // both employee1 (default absent/present) and employee2 (leave) should come.
+        $responseAll = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily');
+        $responseAll->assertStatus(200);
+        $dataAll = collect($responseAll->json('data'));
+        $this->assertNotNull($dataAll->firstWhere('employee_id', $this->employee2->id));
+        $this->assertEquals('leave', $dataAll->firstWhere('employee_id', $this->employee2->id)['attendance_status']);
+
+        // If we query with attendance_status = 'absent' for 2026-06-15:
+        // employee2 (who is on leave) should NOT be returned!
+        $responseAbsent = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily&attendance_status=absent');
+        $responseAbsent->assertStatus(200);
+        $dataAbsent = collect($responseAbsent->json('data'));
+        $this->assertNull($dataAbsent->firstWhere('employee_id', $this->employee2->id));
+    }
 }
