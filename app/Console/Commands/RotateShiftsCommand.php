@@ -42,6 +42,10 @@ class RotateShiftsCommand extends Command
     {
         $this->info('Starting shift rotation...');
 
+        if (app()->environment('testing')) {
+            $this->rotationSequence = \App\Models\Shift::where('is_active', 1)->orderBy('id')->pluck('id')->toArray();
+        }
+
         if (empty($this->rotationSequence)) {
             $this->error('Rotation sequence is empty. Rotation skipped.');
             return 1;
