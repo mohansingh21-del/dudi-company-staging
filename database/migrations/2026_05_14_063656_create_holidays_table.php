@@ -13,17 +13,13 @@ return new class extends Migration
      */
     public function up()
     {
-        Schema::disableForeignKeyConstraints();
         Schema::create('holidays', function (Blueprint $table) {
             $table->id();
-            $table->string('holiday_name');
-            $table->date('holiday_date');
-            $table->foreignId('site_id')->constrained('sites')->cascadeOnDelete();
-            $table->string('holiday_type')->nullable();
+            $table->date('date')->unique();
+            $table->string('title');
             $table->boolean('is_active')->default(1);
             $table->timestamps();
         });
-        Schema::enableForeignKeyConstraints();
     }
 
     /**

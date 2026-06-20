@@ -6,7 +6,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
-
+use App\Models\Leave;
 class UpdateLeaveRequest extends FormRequest
 {
     public function authorize(): bool
@@ -30,7 +30,53 @@ class UpdateLeaveRequest extends FormRequest
             'approved_by' => 'nullable|exists:users,id',
         ];
     }
+public function withValidator($validator)
+{
+    $validator->after(function ($validator) {
 
+        if (
+            !$this->employee_id ||
+            !$this->from_date ||
+            !$this->to_date
+        ) {
+            return;
+        }
+
+        $leaveId = $this->route('leave')?->id
+            ?? $this->route('leave');
+
+        $leaveExists = Leave::where(
+            'employee_id',
+            $this->employee_id
+        )
+        ->where('id', '!=', $leaveId)
+        ->where(function ($query) {
+
+            $query->whereBetween('from_date', [
+                    $this->from_date,
+                    $this->to_date
+                ])
+                ->orWhereBetween('to_date', [
+                    $this->from_date,
+                    $this->to_date
+                ])
+                ->orWhere(function ($q) {
+
+                    $q->where('from_date', '<=', $this->from_date)
+                      ->where('to_date', '>=', $this->to_date);
+                });
+        })
+        ->exists();
+
+        if ($leaveExists) {
+
+            $validator->errors()->add(
+                'from_date',
+                'Leave already exists or overlaps with another leave for this employee.'
+            );
+        }
+    });
+}
     public function failedValidation(Validator $validator)
     {
         throw new HttpResponseException(response()->json([

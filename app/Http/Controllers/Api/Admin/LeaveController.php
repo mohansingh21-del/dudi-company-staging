@@ -10,7 +10,8 @@ use App\Http\Requests\UpdateLeaveRequest;
 use App\Http\Resources\LeaveResource;
 use App\Http\Requests\ApproveLeaveRequest;
 use Illuminate\Support\Facades\Auth;
-
+use App\Imports\LeaveImport;
+use Maatwebsite\Excel\Facades\Excel;
 class LeaveController extends Controller
 {
     public function index(Request $request)
@@ -85,7 +86,40 @@ class LeaveController extends Controller
     ]);
 }
     }
+   public function bulkUpload(Request $request)
+{
+    $request->validate([
+        'file' => 'required|file|mimes:xlsx,xls,csv'
+    ]);
 
+    try {
+
+        $import = new LeaveImport();
+
+        Excel::import($import, $request->file('file'));
+
+        if (count($import->getErrors()) > 0) {
+
+            return response()->json([
+                'status' => 422,
+                'message' => 'Some rows failed validation',
+                'errors' => $import->getErrors()
+            ], 422);
+        }
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Leaves uploaded successfully'
+        ], 200);
+
+    } catch (\Exception $e) {
+
+        return response()->json([
+            'status' => 500,
+            'message' => $e->getMessage()
+        ], 500);
+    }
+}
     public function store(StoreLeaveRequest $request)
     {
         $leave = Leave::create([

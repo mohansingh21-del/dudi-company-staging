@@ -165,7 +165,7 @@ class FuelEntryController extends Controller
                     'fuel_type' => $fuelEntry->fuel_type,
                     'fuel_quantity' => $fuelEntry->quantity,
                     'amount' => $fuelEntry->amount,
-                    'entry_date' => $fuelEntry->transaction_date ? $fuelEntry->transaction_date->toDateString() : null,
+                    'entry_date' => optional($fuelEntry->transaction_date)->toDateString(),
                     'fuel_station' => $fuelEntry->fuel_station,
                     'current_odometer' => $fuelEntry->current_odometer,
                     'mileage' => $fuelEntry->mileage,

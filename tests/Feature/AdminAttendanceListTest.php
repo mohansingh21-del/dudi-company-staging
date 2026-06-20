@@ -522,6 +522,16 @@ class AdminAttendanceListTest extends TestCase
         $response->assertStatus(200);
         $this->assertCount(2, $response->json('data'));
 
+        $response->assertJsonFragment([
+            'summary' => [
+                'total_employees' => 2,
+                'present' => 1,
+                'absent' => 1,
+                'half_day' => 0,
+                'leaves' => 0,
+            ]
+        ]);
+
         $emp1Data = collect($response->json('data'))->firstWhere('employee_id', $this->employee1->id);
         $emp2Data = collect($response->json('data'))->firstWhere('employee_id', $this->employee2->id);
 
@@ -539,6 +549,16 @@ class AdminAttendanceListTest extends TestCase
         $response2 = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily');
         $response2->assertStatus(200);
         $this->assertCount(2, $response2->json('data'));
+
+        $response2->assertJsonFragment([
+            'summary' => [
+                'total_employees' => 2,
+                'present' => 1,
+                'absent' => 1,
+                'half_day' => 0,
+                'leaves' => 0,
+            ]
+        ]);
 
         $emp1Data2 = collect($response2->json('data'))->firstWhere('employee_id', $this->employee1->id);
         $emp2Data2 = collect($response2->json('data'))->firstWhere('employee_id', $this->employee2->id);

@@ -12,11 +12,7 @@ class InventoryResource extends JsonResource
             'id' => $this->id,
             'product_id' => $this->product_id,
             'product_name' => optional($this->product)->name,
-'category_name' => optional(
-    optional(
-        optional($this->product)->subCategory
-    )->category
-)->name,           
+            'category_name' => optional(optional(optional($this->product)->subCategory)->category)->name,      
             'sub_category_name' => optional(optional($this->product)->subCategory)->name,
             'total_stock' => (float) $this->quantity,
             'left_quantity' => (float) $this->left_quantity,

@@ -4,8 +4,7 @@ namespace App\Imports;
 
 use App\Models\AttendanceProcessed;
 use App\Models\Employee;
-use App\Models\EmployeeShiftAssignment;
-use App\Models\Shift;
+use App\Models\EmployeePayroll;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -17,138 +16,211 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
 {
     public function collection(Collection $rows)
     {
+        $errors = [];
+        $data = [];
+        $restCounter = [];
+
+        /*
+        |--------------------------------------------------------------------------
+        | STEP 1: NORMALIZE + VALIDATE
+        |--------------------------------------------------------------------------
+        */
         foreach ($rows as $index => $row) {
+
+            $rowNumber = $index + 2;
 
             if (empty($row['employee_code'])) {
                 continue;
             }
 
-            $employee = Employee::where(
-                'employee_code',
-                trim($row['employee_code'])
-            )->first();
+            $employee = Employee::where('employee_code', trim($row['employee_code']))->first();
 
             if (!$employee) {
-                throw ValidationException::withMessages([
-                    "row_" . ($index + 2) =>
-                    "Employee code {$row['employee_code']} not found."
-                ]);
+                $errors["row_{$rowNumber}"][] =
+                    "Employee code {$row['employee_code']} not found.";
+                continue;
             }
 
-            $attendanceDate = Carbon::createFromFormat(
-                'd/m/Y',
-                $row['date']
-            );
+            $payroll = EmployeePayroll::where('employee_id', $employee->id)
+                ->where('is_active', 1)
+                ->first();
 
-            // Duplicate attendance check
-            $alreadyExists = AttendanceProcessed::where(
-                'employee_id',
-                $employee->id
-            )
-                ->whereDate('date', $attendanceDate)
+            try {
+                $date = Carbon::createFromFormat('d/m/Y', trim($row['date']));
+            } catch (\Exception $e) {
+                $errors["row_{$rowNumber}"][] = "Invalid date format.";
+                continue;
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | CLEAN STATUS + TIME
+            |--------------------------------------------------------------------------
+            */
+            $status = strtolower(trim($row['status'] ?? 'present'));
+            $status = str_replace(['-', '_'], ' ', $status);
+            $status = preg_replace('/\s+/', ' ', $status);
+
+            $statusMap = [
+                'present'   => 'present',
+                'absent'    => 'absent',
+                'half day'  => 'half_day',
+                'half_day'  => 'half_day',
+                'leave'     => 'leave',
+                'rest day'  => 'rest_day',
+                'rest_day'  => 'rest_day',
+            ];
+
+            $status = $statusMap[$status] ?? $status;
+
+            $checkInRaw = trim((string) ($row['check_in'] ?? ''));
+            $checkOutRaw = trim((string) ($row['check_out'] ?? ''));
+
+            $checkInRaw = ($checkInRaw === '' ? null : $checkInRaw);
+            $checkOutRaw = ($checkOutRaw === '' ? null : $checkOutRaw);
+
+            /*
+            |--------------------------------------------------------------------------
+            | DUPLICATE CHECK
+            |--------------------------------------------------------------------------
+            */
+            $exists = AttendanceProcessed::where('employee_id', $employee->id)
+                ->whereDate('date', $date)
                 ->exists();
 
-            if ($alreadyExists) {
-                throw ValidationException::withMessages([
-                    "row_" . ($index + 2) =>
-                    "Attendance already exists for Employee {$employee->employee_code} on {$attendanceDate->format('d-m-Y')}"
-                ]);
+            if ($exists) {
+                $errors["row_{$rowNumber}"][] =
+                    "Attendance already exists for {$employee->employee_code}.";
+                continue;
             }
 
-            $checkIn = Carbon::parse(
-                $attendanceDate->format('Y-m-d') . ' ' . $row['check_in']
-            );
+            /*
+            |--------------------------------------------------------------------------
+            | PRESENT VALIDATION
+            |--------------------------------------------------------------------------
+            */
+            if ($status === 'present') {
 
-            $checkOut = Carbon::parse(
-                $attendanceDate->format('Y-m-d') . ' ' . $row['check_out']
-            );
-
-            if ($checkOut->lessThanOrEqualTo($checkIn)) {
-                throw ValidationException::withMessages([
-                    "row_" . ($index + 2) =>
-                    "Check-out must be greater than check-in."
-                ]);
+                if (!$checkInRaw || !$checkOutRaw) {
+                    $errors["row_{$rowNumber}"][] =
+                        "Check In/Out required for Present.";
+                    continue;
+                }
             }
 
-            $workingHours = round(
-                $checkIn->diffInMinutes($checkOut) / 60,
-                2
-            );
+            /*
+            |--------------------------------------------------------------------------
+            | HALF DAY VALIDATION (FIXED)
+            |--------------------------------------------------------------------------
+            */
+            if ($status === 'half_day') {
 
-            // Employee shift
-            //  $shift = Shift::find($employee->shift_id);
-            // $shiftAssignment = EmployeeShiftAssignment::where('employee_id', $employee->id)
-            //     ->whereDate('from_date', '<=', $attendanceDate)
-            //     ->where(function ($query) use ($attendanceDate) {
-            //         $query->whereNull('to_date')
-            //             ->orWhereDate('to_date', '>=', $attendanceDate);
-            //     })
-            //     ->first();
-            $shiftAssignment = EmployeeShiftAssignment::where('employee_id', $employee->id)->first();
-            $shift = $shiftAssignment
-                ? Shift::find($shiftAssignment->shift_id)
-                : null;
-            $lateMinutes = 0;
-            $earlyExitMinutes = 0;
-            if (!$shiftAssignment) {
-                throw ValidationException::withMessages([
-                    "row_" . ($index + 2) =>
-                    "No shift assignment found for Employee {$employee->employee_code} on {$attendanceDate->format('d-m-Y')}"
-                ]);
+                if (!$checkInRaw || !$checkOutRaw) {
+                    $errors["row_{$rowNumber}"][] =
+                        "Half Day requires check-in and check-out.";
+                    continue;
+                }
             }
-            if ($shift) {
 
-                $shiftStart = Carbon::parse(
-                    $attendanceDate->format('Y-m-d') . ' ' . $shift->start_time
-                );
+            /*
+            |--------------------------------------------------------------------------
+            | STORE TEMP DATA
+            |--------------------------------------------------------------------------
+            */
+            $data[] = [
+                'row' => $rowNumber,
+                'employee' => $employee,
+                'payroll' => $payroll,
+                'date' => $date,
+                'status' => $status,
+                'check_in' => $checkInRaw,
+                'check_out' => $checkOutRaw,
+                'remarks' => $row['remarks'] ?? null,
+            ];
+        }
 
-                $shiftEnd = Carbon::parse(
-                    $attendanceDate->format('Y-m-d') . ' ' . $shift->end_time
-                );
+        /*
+        |--------------------------------------------------------------------------
+        | STOP IF ERRORS
+        |--------------------------------------------------------------------------
+        */
+        if (!empty($errors)) {
+            throw ValidationException::withMessages($errors);
+        }
 
-                $lateMinutes = max(
-                    0,
-                    $shiftStart->diffInMinutes($checkIn, false)
-                );
+        /*
+        |--------------------------------------------------------------------------
+        | STEP 2: INSERT
+        |--------------------------------------------------------------------------
+        */
+        foreach ($data as $item) {
 
-                $lateMinutes = abs(min(0, $lateMinutes));
+            $employee = $item['employee'];
+            $date = $item['date'];
+            $status = $item['status'];
 
-                $earlyExitMinutes = max(
-                    0,
-                    $checkOut->diffInMinutes($shiftEnd, false) * -1
+            $checkIn = null;
+            $checkOut = null;
+            $workingHours = 0;
+
+            /*
+            |--------------------------------------------------------------------------
+            | PRESENT / HALF DAY TIME HANDLING (FIXED)
+            |--------------------------------------------------------------------------
+            */
+            if (in_array($status, ['present', 'half_day'])) {
+
+                $checkIn = Carbon::createFromFormat('H:i', $item['check_in']);
+                $checkOut = Carbon::createFromFormat('H:i', $item['check_out']);
+
+                $workingHours = round(
+                    $checkIn->diffInMinutes($checkOut) / 60,
+                    2
                 );
             }
-            $hasApprovedLeave = \App\Models\Leave::where('employee_id', $employee->id)
-    ->where('status', 'approved')
-    ->whereDate('from_date', '<=', $attendanceDate->format('Y-m-d'))
-    ->whereDate('to_date', '>=', $attendanceDate->format('Y-m-d'))
-    ->exists();
 
-$status = $row['status'] ?? 'present';
+            /*
+            |--------------------------------------------------------------------------
+            | STATUS MAP (FINAL)
+            |--------------------------------------------------------------------------
+            */
+            switch ($status) {
 
-if (
-    strtolower($status) === 'present' &&
-    $hasApprovedLeave
-) {
-    throw ValidationException::withMessages([
-        "row_" . ($index + 2) =>
-        "Cannot mark Present. Employee {$employee->employee_code} has approved leave on {$attendanceDate->format('d-m-Y')}."
-    ]);
-}
+                case 'present':
+                    $attendanceStatus = 'present';
+                    break;
+
+                case 'absent':
+                    $attendanceStatus = 'absent';
+                    break;
+
+                case 'half_day':
+                    $attendanceStatus = 'half_day';
+                    break;
+
+                case 'leave':
+                    $attendanceStatus = 'leave';
+                    break;
+
+                case 'rest_day':
+                    $attendanceStatus = 'rest_day';
+                    break;
+
+                default:
+                    $attendanceStatus = 'present';
+                    break;
+            }
+
             AttendanceProcessed::create([
                 'employee_id' => $employee->id,
-                'shift_id' => $shiftAssignment->shift_id,
-                'date' => $attendanceDate,
-
+                'date' => $date,
                 'check_in' => $checkIn,
                 'check_out' => $checkOut,
-
                 'working_hours' => $workingHours,
-                'late_minutes' => $lateMinutes,
-                'early_exit_minutes' => $earlyExitMinutes,
-
-                'attendance_status' => $row['status'] ?? 'present',
-                'remarks' => $row['remarks'] ?? null,
+                'late_minutes' => 0,
+                'early_exit_minutes' => 0,
+                'attendance_status' => $attendanceStatus,
+                'remarks' => $item['remarks'],
             ]);
         }
     }
@@ -156,35 +228,22 @@ if (
     public function rules(): array
     {
         return [
+            '*.employee_code' => ['required', 'exists:employees,employee_code'],
+            '*.date' => ['required', 'date_format:d/m/Y', 'before_or_equal:today'],
+            '*.check_in' => ['nullable'],
+            '*.check_out' => ['nullable'],
+            '*.status' => ['nullable'],
+            '*.remarks' => ['nullable'],
+        ];
+    }
 
-            '*.employee_code' => [
-                'required',
-                'exists:employees,employee_code'
-            ],
-
-            '*.date' => [
-                'required',
-                'date_format:d/m/Y',
-                'before_or_equal:today'
-            ],
-
-            '*.check_in' => [
-                'required'
-            ],
-
-            '*.check_out' => [
-                'required'
-            ],
-
-            '*.remarks' => [
-                'nullable',
-                'string'
-            ],
-
-            '*.status' => [
-                'nullable',
-                'string'
-            ]
+    public function customValidationMessages()
+    {
+        return [
+            '*.employee_code.required' => 'Employee Code is required.',
+            '*.employee_code.exists' => 'Employee Code does not exist.',
+            '*.date.required' => 'Date is required.',
+            '*.date.date_format' => 'Date must be in d/m/Y format.',
         ];
     }
 }

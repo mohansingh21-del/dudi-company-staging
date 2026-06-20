@@ -55,37 +55,46 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
                     ? Carbon::createFromFormat('d/m/Y', $row['joining_date'])
                     : null,
 
-                'employee_type' => $row['employee_type'],
-                'salary_type' => $row['salary_type'],
 
-                'basic_salary' => $row['basic_salary'] ?? null,
-                'daily_wage' => $row['daily_wage'] ?? null,
-
+              
                 'department_id' => $department ? $department->id : null,
                 'designation_id' => $designation ? $designation->id : null,
 
 
-                'pf_applicable' => (int) ($row['pf_applicable'] ?? 0),
-                'pf_number' => $row['pf_number'] ?? null,
-
-                'bank_name' => $row['bank_name'] ?? null,
-                'bank_account_number' => $row['bank_account_number'] ?? null,
-                'ifsc_code' => $row['ifsc_code'] ?? null,
-
-                'mess_deduction_applicable' => (int) ($row['mess_deduction_applicable'] ?? 0),
-                'other_deduction_appliacble' => (int) ($row['other_deduction_appliacble'] ?? 0),
-                'other_deduction' => $row['other_deduction'] ?? 0,
-
+               
+              
                 'is_active' => (int) ($row['status'] ?? 1),
-                'pf_amount' => $row['pf_amount'] ?? null,
 
-                'mess_deduction_amount' => $row['mess_deduction_amount'] ?? null,
                 'relay_shift' => $row['relay_shift'],
-                'rest_days' => $row['rest_days'],
             ]);
         }
     }
+      public function customValidationMessages()
+{
+    return [
 
+        '*.employee_code.required' =>
+            'Employee Code is required.',
+
+        '*.employee_code.unique' =>
+            'Employee Code already exists.',
+
+        '*.name.required' =>
+            'Employee Name is required.',
+
+        '*.joining_date.required' =>
+            'Joining Date is required.',
+
+        '*.joining_date.date_format' =>
+            'Joining Date must be in d/m/Y format.',
+
+        '*.mobile.unique' =>
+            'Mobile number already exists.',
+
+       
+       
+    ];
+}
     /* ===============================
         VALIDATION RULES
     =============================== */
@@ -110,9 +119,7 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
 
             '*.joining_date' => 'required|date_format:d/m/Y',
 
-            '*.employee_type' => 'required|in:permanent,daily_wage',
 
-            '*.salary_type' => 'required|in:monthly,daily_wage',
 
             '*.basic_salary' => 'nullable|numeric|min:0',
 

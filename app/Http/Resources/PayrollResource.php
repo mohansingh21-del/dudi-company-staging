@@ -39,8 +39,8 @@ class PayrollResource extends JsonResource
             'net_salary'        => (float) $this->net_salary,
             'status'            => $this->status,
             'generated_by'      => $this->generated_by,
-            'created_at'        => $this->created_at ? $this->created_at->toDateTimeString() : null,
-            'updated_at'        => $this->updated_at ? $this->updated_at->toDateTimeString() : null,
+            'created_at'        => optional($this->created_at)->toDateTimeString(),
+            'updated_at'        => optional($this->updated_at)->toDateTimeString(),
         ];
     }
 }

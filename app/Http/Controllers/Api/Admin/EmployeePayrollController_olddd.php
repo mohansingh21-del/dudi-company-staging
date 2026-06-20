@@ -113,14 +113,12 @@ class EmployeePayrollController extends Controller
 
             $data = $request->validated();
 
-              // Check if payroll configuration already exists for this employee to prevent duplicate rows
-            $alreadyExists = EmployeePayroll::where('employee_id', $data['employee_id'])->exists();
-            if ($alreadyExists) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Payroll configuration already exists for this employee.'
-                ], 422);
-            }
+            EmployeePayroll::where(
+                'employee_id',
+                $data['employee_id']
+            )->update([
+                        'is_active' => false
+                    ]);
 
             EmployeePayroll::create([
                 'employee_id' => $data['employee_id'],
@@ -140,7 +138,6 @@ class EmployeePayrollController extends Controller
                 'rest_days' => $data['rest_days'] ?? 0,
                 'is_active' => true
             ]);
-
 
             return response()->json([
                 'status' => 200,

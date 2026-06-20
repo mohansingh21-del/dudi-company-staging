@@ -13,11 +13,9 @@ return new class extends Migration
      */
     public function up()
     {
-        if (!Schema::hasColumn('employees', 'emergency_contact')) {
-            Schema::table('employees', function (Blueprint $table) {
-                $table->string('emergency_contact')->nullable()->after('mobile');
-            });
-        }
+        Schema::table('employees', function (Blueprint $table) {
+            $table->string('emergency_contact')->nullable()->after('phone');
+        });
     }
 
     /**

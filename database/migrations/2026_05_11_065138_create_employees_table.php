@@ -12,7 +12,6 @@ return new class extends Migration {
      */
     public function up()
     {
-        Schema::disableForeignKeyConstraints();
         Schema::create('employees', function (Blueprint $table) {
            $table->id(); 
            $table->string('employee_code')->unique(); 
@@ -38,9 +37,7 @@ return new class extends Migration {
            $table->string('bank_account_number')->nullable();
            $table->string('ifsc_code')->nullable();
            $table->boolean('mess_deduction_applicable')->default(false);
-           $table->boolean('other_deduction_appliacble')->default(false)->nullable();
-           $table->decimal('other_deduction', 10, 2)->default(0)->nullable();
-           $table->boolean('is_active')->default(true);
+           $table->enum('status', [ 'active', 'inactive', 'resigned' ])->default('active');
            $table->enum('relay_shift', ['general','relay_1','relay_2','relay_3'])->default('general');
 
            $table->decimal('pf_amount', 10, 2)->default(0);
@@ -50,7 +47,6 @@ return new class extends Migration {
            $table->integer('rest_days')->default(0);
            $table->timestamps();
         });
-        Schema::enableForeignKeyConstraints();
     }
 
     /**

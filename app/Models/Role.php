@@ -19,4 +19,8 @@ class Role extends Model
     {
         return $this->belongsToMany(User::class);
     }
+    public function salaryStructure()
+    {
+        return $this->hasOne(SalaryStructure::class);
+    }
 }

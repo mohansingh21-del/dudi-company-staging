@@ -33,11 +33,17 @@ class AuthController extends Controller
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;
+        $role = $user->roles->first();
+           $user->unsetRelation('roles');
 
         return response()->json([
+           'status' => 200,
+            'message' => 'Login successful',
             'access_token' => $token,
             'token_type' => 'Bearer',
-            'user' => $user
+            'user' => $user,
+            'role_id' => optional($role)->id,
+            'role' => optional($role)->name,
         ]);
     }
 

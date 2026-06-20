@@ -8,7 +8,6 @@ return new class extends Migration
 {
     public function up()
     {
-        Schema::dropIfExists('password_reset_otps');
         Schema::create('password_reset_otps', function (Blueprint $table) {
             $table->id();
             $table->string('email')->index();
