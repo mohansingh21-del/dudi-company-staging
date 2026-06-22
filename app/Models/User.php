@@ -39,7 +39,14 @@ class User extends Authenticatable
 
     public function employee()
     {
-        return $this->hasOne(Employee::class);
+        return $this->hasOneThrough(
+            Employee::class,
+            RoleUser::class,
+            'user_id',
+            'role_user_id',
+            'id',
+            'id'
+        );
     }
 
     public function attendances()

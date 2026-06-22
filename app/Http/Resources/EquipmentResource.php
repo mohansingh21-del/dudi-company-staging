@@ -9,13 +9,11 @@ class EquipmentResource extends JsonResource
     public function toArray($request)
     {
         return [
-
             'id' => $this->id,
 
             'equipment_category' => $this->name,
 
             'status' => $this->is_active
-
         ];
     }
 }

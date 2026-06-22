@@ -13,9 +13,15 @@ return new class extends Migration
      */
     public function up()
     {
-        Schema::table('employees', function (Blueprint $table) {
-            $table->string('emergency_contact')->nullable()->after('phone');
-        });
+        if (!Schema::hasColumn('employees', 'emergency_contact')) {
+            Schema::table('employees', function (Blueprint $table) {
+                if (Schema::hasColumn('employees', 'phone')) {
+                    $table->string('emergency_contact')->nullable()->after('phone');
+                } else {
+                    $table->string('emergency_contact')->nullable();
+                }
+            });
+        }
     }
 
     /**
@@ -25,8 +31,10 @@ return new class extends Migration
      */
     public function down()
     {
-        Schema::table('employees', function (Blueprint $table) {
-            $table->dropColumn('emergency_contact');
-        });
+        if (Schema::hasColumn('employees', 'emergency_contact')) {
+            Schema::table('employees', function (Blueprint $table) {
+                $table->dropColumn('emergency_contact');
+            });
+        }
     }
 };

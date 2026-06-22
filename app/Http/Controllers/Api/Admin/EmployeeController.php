@@ -245,7 +245,7 @@ class EmployeeController extends Controller
                 'status' => 200,
                 'message' => 'Employees imported successfully'
             ]);
-        } catch (ValidationException $e) {
+        } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
 
             $formattedErrors = [];
 
@@ -372,6 +372,62 @@ class EmployeeController extends Controller
 
     public function getPublicEmployees(Request $request, $id = null)
     {
+        if ($request->has('role')) {
+            $request->validate([
+                'role' => 'required|string|in:Supervisor,Site Incharge,supervisor,site-incharge,site_incharge'
+            ]);
+
+            try {
+                $roleName = $request->input('role');
+                $targetSlug = \Illuminate\Support\Str::slug($roleName);
+
+                $role = \App\Models\Role::where('slug', $targetSlug)
+                    ->orWhere('slug', $roleName)
+                    ->orWhere('name', $roleName)
+                    ->first();
+
+                if (!$role) {
+                    return response()->json([
+                        'status' => 404,
+                        'message' => 'Role not found'
+                    ], 404);
+                }
+
+                $query = Employee::where('designation_id', $role->id)
+                    ->where('is_active', 1)
+                    ->with(['department', 'designation', 'site', 'supervisor']);
+
+                if ($request->filled('search')) {
+                    $search = $request->search;
+                    $query->where(function ($q) use ($search) {
+                        $q->where('name', 'LIKE', "%{$search}%")
+                            ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                    });
+                }
+
+                if ($request->filled('department_id')) {
+                    $query->where('department_id', $request->department_id);
+                }
+
+                if ($request->filled('site_id')) {
+                    $query->where('site_id', $request->site_id);
+                }
+
+                $employees = $query->latest()->get();
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Employees fetched successfully',
+                    'data' => EmployeeResource::collection($employees)
+                ]);
+            } catch (\Throwable $th) {
+                return response()->json([
+                    'status' => 500,
+                    'message' => $th->getMessage()
+                ], 500);
+            }
+        }
+
         try {
 
             $excludedRelayShifts = ['general'];
@@ -387,6 +443,9 @@ class EmployeeController extends Controller
 
                         $query->where('shift_id', $id);
                     });
+                $employees = Employee::where('is_active', 1)->whereNotIn('relay_shift', $excludedRelayShifts)->whereHas('shiftAssignments', function ($query) use ($id) {
+                    $query->where('shift_id', $id);
+                });
             } else {
 
                 $employees = Employee::where('is_active', 1)

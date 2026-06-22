@@ -41,6 +41,8 @@ use App\Http\Controllers\Api\Admin\EquipmentController;
 use App\Http\Controllers\Api\Admin\EquipmentNameController;
 use App\Http\Controllers\Api\Admin\IncidentTypeController;
 use App\Http\Controllers\Api\Admin\IncidentController;
+use App\Http\Controllers\Api\Admin\EquipmentAllocationController;
+use App\Http\Controllers\Api\Admin\ShiftPlanController;
 
 
 /*
@@ -136,6 +138,9 @@ Route::prefix('v1')->group(function () {
         Route::get('products', [ProductController::class, 'getPublicProducts']);
         Route::get('categories', [CategoryController::class, 'getPublicCategories']);
         Route::get('subcategories', [SubCategoryController::class, 'getPublicSubCategories']);
+        Route::get('machine-categories', [EquipmentAllocationController::class, 'categories']);
+        Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
+
 
         // ADMIN ONLY
         Route::middleware(['role:super-admin'])->prefix('admin')->group(function () {
@@ -335,5 +340,22 @@ Route::prefix('v1')->group(function () {
 
             // KEEP YOUR EXISTING VEHICLE ROUTES HERE
             // NO CHANGES REQUIRED
+
+            /*
+            |--------------------------------------------------------------------------
+            | Shift Plan/Equipment Allocation/Employee deployment
+            |--------------------------------------------------------------------------
+            */
+
+            Route::get('shift-plans/overview', [ShiftPlanController::class, 'overview']);
+            Route::patch('shift-plans/{id}/status', [ShiftPlanController::class, 'updateStatus']);
+            Route::apiResource('shift-plans', ShiftPlanController::class);
+
+            Route::prefix('shift-plans/{shift_plan_id}')->group(function () {
+                Route::get('equipment/available', [EquipmentAllocationController::class, 'available']);
+                Route::get('equipment', [EquipmentAllocationController::class, 'index']);
+                Route::post('equipment', [EquipmentAllocationController::class, 'allocate']);
+                Route::delete('equipment/{allocation_id}', [EquipmentAllocationController::class, 'destroy']);
+            });
         });
 });
