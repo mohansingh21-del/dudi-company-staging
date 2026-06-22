@@ -93,9 +93,9 @@ class EmployeeController extends Controller
             if ($request->filled('status')) {
                 $employees->where('status', $request->status);
             }
- $excludedRelayShifts = ['general']; // relay_shift values to exclude
-           
-         
+            $excludedRelayShifts = ['general']; // relay_shift values to exclude
+
+
             $employees = $employees->whereNotIn('relay_shift', $excludedRelayShifts)
                 ->latest()
                 ->paginate($limit);
@@ -122,91 +122,91 @@ class EmployeeController extends Controller
         }
     }
     public function index(Request $request)
-{
-    try {
+    {
+        try {
 
-        $employees = Employee::with([
-            'department',
-            'designation',
-            'site',
-            'supervisor'
-        ]);
+            $employees = Employee::with([
+                'department',
+                'designation',
+                'site',
+                'supervisor'
+            ]);
 
-        // Search
-        if ($request->filled('search')) {
+            // Search
+            if ($request->filled('search')) {
 
-            $search = $request->search;
+                $search = $request->search;
 
-            $employees->where(function ($query) use ($search) {
+                $employees->where(function ($query) use ($search) {
 
-                $query->where('name', 'LIKE', "%{$search}%")
-                    ->orWhere('employee_code', 'LIKE', "%{$search}%")
-                    ->orWhere('mobile', 'LIKE', "%{$search}%")
-                    ->orWhereHas('department', function ($q) use ($search) {
-                        $q->where('name', 'LIKE', "%{$search}%");
-                    })
-                    ->orWhereHas('designation', function ($q) use ($search) {
-                        $q->where('name', 'LIKE', "%{$search}%");
-                    });
-            });
-        }
+                    $query->where('name', 'LIKE', "%{$search}%")
+                        ->orWhere('employee_code', 'LIKE', "%{$search}%")
+                        ->orWhere('mobile', 'LIKE', "%{$search}%")
+                        ->orWhereHas('department', function ($q) use ($search) {
+                            $q->where('name', 'LIKE', "%{$search}%");
+                        })
+                        ->orWhereHas('designation', function ($q) use ($search) {
+                            $q->where('name', 'LIKE', "%{$search}%");
+                        });
+                });
+            }
 
-        // Filters
-        if ($request->filled('department_id')) {
-            $employees->where('department_id', $request->department_id);
-        }
+            // Filters
+            if ($request->filled('department_id')) {
+                $employees->where('department_id', $request->department_id);
+            }
 
-        if ($request->filled('designation_id')) {
-            $employees->where('designation_id', $request->designation_id);
-        }
+            if ($request->filled('designation_id')) {
+                $employees->where('designation_id', $request->designation_id);
+            }
 
-        if ($request->filled('site_id')) {
-            $employees->where('site_id', $request->site_id);
-        }
+            if ($request->filled('site_id')) {
+                $employees->where('site_id', $request->site_id);
+            }
 
-        if ($request->filled('status')) {
-            $employees->where('status', $request->status);
-        }
+            if ($request->filled('status')) {
+                $employees->where('status', $request->status);
+            }
 
-        $employees = $employees->latest();
+            $employees = $employees->latest();
 
-        // If limit exists => paginate
-        if ($request->filled('limit')) {
+            // If limit exists => paginate
+            if ($request->filled('limit')) {
 
-            $employees = $employees->paginate($request->limit);
+                $employees = $employees->paginate($request->limit);
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Employee list fetched successfully',
+                    'data' => EmployeeResource::collection($employees),
+                    'pagination' => [
+                        'current_page' => $employees->currentPage(),
+                        'last_page' => $employees->lastPage(),
+                        'per_page' => $employees->perPage(),
+                        'total' => $employees->total(),
+                        'from' => $employees->firstItem(),
+                        'to' => $employees->lastItem(),
+                    ]
+                ]);
+            }
+
+            // No limit => return all data
+            $employees = $employees->get();
 
             return response()->json([
                 'status' => 200,
                 'message' => 'Employee list fetched successfully',
-                'data' => EmployeeResource::collection($employees),
-                'pagination' => [
-                    'current_page' => $employees->currentPage(),
-                    'last_page' => $employees->lastPage(),
-                    'per_page' => $employees->perPage(),
-                    'total' => $employees->total(),
-                    'from' => $employees->firstItem(),
-                    'to' => $employees->lastItem(),
-                ]
+                'data' => EmployeeResource::collection($employees)
+            ]);
+
+        } catch (\Throwable $th) {
+
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
             ]);
         }
-
-        // No limit => return all data
-        $employees = $employees->get();
-
-        return response()->json([
-            'status' => 200,
-            'message' => 'Employee list fetched successfully',
-            'data' => EmployeeResource::collection($employees)
-        ]);
-
-    } catch (\Throwable $th) {
-
-        return response()->json([
-            'status' => 500,
-            'message' => $th->getMessage()
-        ]);
     }
-}
     public function store(StoreEmployeeRequest $request)
     {
         ///////dd($request->all());
@@ -376,14 +376,70 @@ class EmployeeController extends Controller
 
     public function getPublicEmployees(Request $request, $id = null)
     {
+        if ($request->has('role')) {
+            $request->validate([
+                'role' => 'required|string|in:Supervisor,Site Incharge,supervisor,site-incharge,site_incharge'
+            ]);
+
+            try {
+                $roleName = $request->input('role');
+                $targetSlug = \Illuminate\Support\Str::slug($roleName);
+
+                $role = \App\Models\Role::where('slug', $targetSlug)
+                    ->orWhere('slug', $roleName)
+                    ->orWhere('name', $roleName)
+                    ->first();
+
+                if (!$role) {
+                    return response()->json([
+                        'status' => 404,
+                        'message' => 'Role not found'
+                    ], 404);
+                }
+
+                $query = Employee::where('designation_id', $role->id)
+                    ->where('is_active', 1)
+                    ->with(['department', 'designation', 'site', 'supervisor']);
+
+                if ($request->filled('search')) {
+                    $search = $request->search;
+                    $query->where(function ($q) use ($search) {
+                        $q->where('name', 'LIKE', "%{$search}%")
+                            ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                    });
+                }
+
+                if ($request->filled('department_id')) {
+                    $query->where('department_id', $request->department_id);
+                }
+
+                if ($request->filled('site_id')) {
+                    $query->where('site_id', $request->site_id);
+                }
+
+                $employees = $query->latest()->get();
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Employees fetched successfully',
+                    'data' => EmployeeResource::collection($employees)
+                ]);
+            } catch (\Throwable $th) {
+                return response()->json([
+                    'status' => 500,
+                    'message' => $th->getMessage()
+                ], 500);
+            }
+        }
+
         try {
             $excludedRelayShifts = ['general']; // relay_shift values to exclude
             $limit = $request->input('limit', null);
 
             if ($id !== null) {
                 $employees = Employee::where('is_active', 1)->whereNotIn('relay_shift', $excludedRelayShifts)->whereHas('shiftAssignments', function ($query) use ($id) {
-                        $query->where('shift_id', $id);
-                    });
+                    $query->where('shift_id', $id);
+                });
             } else {
                 $employees = Employee::where('is_active', 1)->whereNotIn('relay_shift', $excludedRelayShifts)->whereDoesntHave('shiftAssignments');
             }
@@ -450,7 +506,7 @@ class EmployeeController extends Controller
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
                     $q->where('name', 'LIKE', "%{$search}%")
-                      ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                        ->orWhere('employee_code', 'LIKE', "%{$search}%");
                 });
             }
 

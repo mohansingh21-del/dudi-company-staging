@@ -23,7 +23,11 @@ class UpdateShiftRequest extends FormRequest
             'name' => [
                 'required',
                 Rule::unique('shifts', 'shift_name')->ignore($departmentId)
-            ]
+            ],
+            'start_time' => 'required',
+            'end_time' => 'required',
+            'minimum_working_hours' => 'nullable|numeric|min:0|max:24',
+            'is_night_shift' => 'nullable|boolean',
         ];
     }
 

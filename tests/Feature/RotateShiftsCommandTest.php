@@ -15,35 +15,38 @@ class RotateShiftsCommandTest extends TestCase
     public function test_rotate_shifts_command_only_rotates_non_general_relay_shift_employees()
     {
         // Roster rotation sequence is defined as [1, 3, 2]
-        $shift1 = Shift::create([
-            'id' => 1,
+        $shift1 = new Shift([
             'shift_name' => 'Shift 1',
             'start_time' => '08:00:00',
             'end_time' => '16:00:00',
             'minimum_working_hours' => 8.00,
             'is_night_shift' => 0,
-            'is_active' => 1
         ]);
+        $shift1->id = 1;
+        $shift1->is_active = 1;
+        $shift1->save();
 
-        $shift3 = Shift::create([
-            'id' => 3,
+        $shift3 = new Shift([
             'shift_name' => 'Shift 3',
             'start_time' => '16:00:00',
             'end_time' => '00:00:00',
             'minimum_working_hours' => 8.00,
             'is_night_shift' => 0,
-            'is_active' => 1
         ]);
+        $shift3->id = 3;
+        $shift3->is_active = 1;
+        $shift3->save();
 
-        $shift2 = Shift::create([
-            'id' => 2,
+        $shift2 = new Shift([
             'shift_name' => 'Shift 2',
             'start_time' => '00:00:00',
             'end_time' => '08:00:00',
             'minimum_working_hours' => 8.00,
             'is_night_shift' => 1,
-            'is_active' => 1
         ]);
+        $shift2->id = 2;
+        $shift2->is_active = 1;
+        $shift2->save();
 
         // Create an employee with relay_shift = 'general' (should NOT be rotated)
         $employeeGeneral = Employee::create([
