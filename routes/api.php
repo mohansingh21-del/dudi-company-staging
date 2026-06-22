@@ -40,6 +40,7 @@ use App\Http\Controllers\Api\Admin\EmployeePayrollController;
 use App\Http\Controllers\Api\Admin\EquipmentController;
 use App\Http\Controllers\Api\Admin\EquipmentNameController;
 use App\Http\Controllers\Api\Admin\IncidentTypeController;
+use App\Http\Controllers\Api\Admin\IncidentController;
 
 
 /*
@@ -187,6 +188,7 @@ Route::prefix('v1')->group(function () {
             Route::patch('equipment-names/{id}/status', [EquipmentNameController::class, 'toggleStatus']);
             Route::apiResource('incident-types', IncidentTypeController::class);
             Route::patch('incident-types/{id}/status', [IncidentTypeController::class, 'toggleStatus']);
+            Route::apiResource('incidents', IncidentController::class);
         });
 
         // NORMAL USER

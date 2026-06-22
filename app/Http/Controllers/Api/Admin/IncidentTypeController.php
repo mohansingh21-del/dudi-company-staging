@@ -241,6 +241,22 @@ class IncidentTypeController extends Controller
 
         ]);
     }
+    public function show(int $id)
+    {
+        $dept = IncidentType::find($id);
+
+        if (!$dept) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Equipment not found'
+            ]);
+        }
+
+        return response()->json([
+            'status' => 200,
+            'data' => new IncidentTypeResource($dept)
+        ]);
+    }
     public function toggleStatus(Request $request, int $id)
     {
 
