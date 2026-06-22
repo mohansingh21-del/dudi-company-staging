@@ -29,8 +29,8 @@ class UpdateEquipmentRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'name.required' => 'Equipment name is required.',
-            'name.unique' => 'Equipment name already exists.',
+            'name.required' => 'Equipment is required.',
+            'name.unique' => 'Equipment already exists.',
         ];
     }
 
