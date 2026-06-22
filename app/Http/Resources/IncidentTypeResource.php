@@ -4,18 +4,18 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Resources\Json\JsonResource;
 
-class EquipmentResource extends JsonResource
+class IncidentTypeResource extends JsonResource
 {
     public function toArray($request)
     {
         return [
-
             'id' => $this->id,
 
-            'equipment_category' => $this->name,
+            'incident_type' => $this->incident_type,
 
-            'status' => $this->is_active
+            'description' => $this->description,
 
+            'status' => $this->is_active,
         ];
     }
 }
