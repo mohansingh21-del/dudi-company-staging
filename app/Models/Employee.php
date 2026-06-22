@@ -10,12 +10,16 @@ class Employee extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['employee_code', 'name', 'father_name', 'dob', 'gender', 'mobile', 'address', 'emergency_contact', 'joining_date', 'employee_type', 'department_id', 'designation_id', 'site_id', 'supervisor_id', 'salary_type', 'basic_salary', 'pf_applicable', 'pf_number', 'bank_name', 'bank_account_number', 'ifsc_code', 'mess_deduction_applicable', 'other_deduction_appliacble', 'other_deduction', 'is_active', 'relay_shift', 'pf_amount', 'mess_deduction_amount', 'rest_days'];
+    protected $fillable = ['role_user_id', 'employee_code', 'name', 'father_name', 'dob', 'gender', 'mobile', 'address', 'emergency_contact', 'joining_date', 'employee_type', 'department_id', 'designation_id', 'site_id', 'supervisor_id', 'salary_type', 'basic_salary', 'pf_applicable', 'pf_number', 'bank_name', 'bank_account_number', 'ifsc_code', 'mess_deduction_applicable', 'other_deduction_appliacble', 'other_deduction', 'is_active', 'relay_shift', 'pf_amount', 'mess_deduction_amount', 'rest_days'];
 
     protected $casts = [
         'dob' => 'date:Y-m-d',
         'joining_date' => 'date:Y-m-d',
     ];
+    public function roleUser()
+    {
+        return $this->belongsTo(RoleUser::class, 'role_user_id');
+    }
     public function department()
     {
         return $this->belongsTo(Department::class);

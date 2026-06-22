@@ -36,7 +36,7 @@ class EquipmentController extends Controller
             return response()->json([
                 'status' => 200,
                 'message' => 'Equipment list fetched successfully',
-                'data' =>  EquipmentResource::collection($departments),
+                'data' => EquipmentResource::collection($departments),
                 'pagination' => [
                     'current_page' => $departments->currentPage(),
                     'last_page' => $departments->lastPage(),

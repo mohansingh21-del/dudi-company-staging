@@ -9,6 +9,8 @@ class EquipmentName extends Model
 {
     use HasFactory;
 
+    protected $table = 'equipment_names';
+
     protected $fillable = [
         'equipment_id',
         'equipment_name',
@@ -25,6 +27,17 @@ class EquipmentName extends Model
         return $this->belongsTo(
             Equipment::class,
             'equipment_id'
+        );
+    }
+
+    /**
+     * Shift allocations referencing this machine instance.
+     */
+    public function allocations()
+    {
+        return $this->hasMany(
+            ShiftEquipmentAllocation::class,
+            'equipment_name_id'
         );
     }
 }

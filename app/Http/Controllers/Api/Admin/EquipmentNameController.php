@@ -354,4 +354,52 @@ class EquipmentNameController extends Controller
 
         ]);
     }
+
+    public function getPublicEquipmentNames(Request $request, $id)
+    {
+        try {
+            $query = EquipmentName::where('is_active', 1)
+                ->where('equipment_id', $id)
+                ->with('equipment');
+
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('equipment_name', 'LIKE', "%{$search}%");
+                });
+            }
+
+            $limit = $request->input('limit', null);
+
+            if ($limit) {
+                $equipmentNames = $query->latest()->paginate($limit);
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Equipment names fetched successfully',
+                    'data' => EquipmentNameResource::collection($equipmentNames),
+                    'pagination' => [
+                        'current_page' => $equipmentNames->currentPage(),
+                        'last_page' => $equipmentNames->lastPage(),
+                        'per_page' => $equipmentNames->perPage(),
+                        'total' => $equipmentNames->total(),
+                        'from' => $equipmentNames->firstItem(),
+                        'to' => $equipmentNames->lastItem(),
+                    ]
+                ]);
+            }
+
+            $equipmentNames = $query->latest()->get();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Equipment names fetched successfully',
+                'data' => EquipmentNameResource::collection($equipmentNames)
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
 }
