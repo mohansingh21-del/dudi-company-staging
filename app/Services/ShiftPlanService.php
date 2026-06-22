@@ -78,30 +78,14 @@ class ShiftPlanService
     }
 
     /**
-     * Create a new shift plan.
+     * Create or Update a shift plan.
      *
      * @param  array  $data
+     * @param  int|null  $id
      * @return array
      */
-    public function createShiftPlan(array $data)
+    public function saveShiftPlan(array $data, $id = null)
     {
-        $data['created_by'] = Auth::id();
-        $data['status'] = 'draft';
-        $data['equipment_count'] = 0;
-
-        // Auto-generate unique Shift Reference Number
-        $datePart = \Carbon\Carbon::parse($data['planning_date'])->format('Ymd');
-        $siteId = $data['site_id'];
-        $shiftId = $data['shift_id'];
-        
-        $referenceNo = 'SP-' . $datePart . '-' . $siteId . '-' . $shiftId . '-' . strtoupper(\Illuminate\Support\Str::random(4));
-        
-        while (ShiftPlan::where('reference_no', $referenceNo)->exists()) {
-            $referenceNo = 'SP-' . $datePart . '-' . $siteId . '-' . $shiftId . '-' . strtoupper(\Illuminate\Support\Str::random(4));
-        }
-        
-        $data['reference_no'] = $referenceNo;
-
         // Map employee IDs to user IDs
         if (isset($data['supervisor_id'])) {
             $data['supervisor_id'] = $this->resolveEmployeeToUserId($data['supervisor_id']);
@@ -110,13 +94,61 @@ class ShiftPlanService
             $data['site_incharge_id'] = $this->resolveEmployeeToUserId($data['site_incharge_id']);
         }
 
-        $shiftPlan = ShiftPlan::create($data);
+        if ($id) {
+            $shiftPlan = ShiftPlan::find($id);
 
-        return [
-            'status' => 201,
-            'message' => 'Shift Plan created successfully.',
-            'data' => $shiftPlan,
-        ];
+            if (!$shiftPlan) {
+                return [
+                    'status' => 404,
+                    'message' => 'Shift Plan not found.',
+                    'data' => null,
+                ];
+            }
+
+            $shiftPlan->update($data);
+
+            return [
+                'status' => 200,
+                'message' => 'Shift Plan updated successfully.',
+                'data' => $shiftPlan,
+            ];
+        } else {
+            $data['created_by'] = Auth::id();
+            $data['status'] = 'draft';
+            $data['equipment_count'] = 0;
+
+            // Auto-generate unique Shift Reference Number
+            $datePart = \Carbon\Carbon::parse($data['planning_date'])->format('Ymd');
+            $siteId = $data['site_id'];
+            $shiftId = $data['shift_id'];
+
+            $referenceNo = 'SP-' . $datePart . '-' . $siteId . '-' . $shiftId . '-' . strtoupper(\Illuminate\Support\Str::random(4));
+
+            while (ShiftPlan::where('reference_no', $referenceNo)->exists()) {
+                $referenceNo = 'SP-' . $datePart . '-' . $siteId . '-' . $shiftId . '-' . strtoupper(\Illuminate\Support\Str::random(4));
+            }
+
+            $data['reference_no'] = $referenceNo;
+
+            $shiftPlan = ShiftPlan::create($data);
+
+            return [
+                'status' => 201,
+                'message' => 'Shift Plan created successfully.',
+                'data' => $shiftPlan,
+            ];
+        }
+    }
+
+    /**
+     * Create a new shift plan.
+     *
+     * @param  array  $data
+     * @return array
+     */
+    public function createShiftPlan(array $data)
+    {
+        return $this->saveShiftPlan($data);
     }
 
     /**
@@ -159,31 +191,7 @@ class ShiftPlanService
      */
     public function updateShiftPlan($id, array $data)
     {
-        $shiftPlan = ShiftPlan::find($id);
-
-        if (!$shiftPlan) {
-            return [
-                'status' => 404,
-                'message' => 'Shift Plan not found.',
-                'data' => null,
-            ];
-        }
-
-        // Map employee IDs to user IDs
-        if (isset($data['supervisor_id'])) {
-            $data['supervisor_id'] = $this->resolveEmployeeToUserId($data['supervisor_id']);
-        }
-        if (isset($data['site_incharge_id'])) {
-            $data['site_incharge_id'] = $this->resolveEmployeeToUserId($data['site_incharge_id']);
-        }
-
-        $shiftPlan->update($data);
-
-        return [
-            'status' => 200,
-            'message' => 'Shift Plan updated successfully.',
-            'data' => $shiftPlan,
-        ];
+        return $this->saveShiftPlan($data, $id);
     }
 
     /**
@@ -236,12 +244,12 @@ class ShiftPlanService
             $search = $filters['search'];
             $query->where(function ($q) use ($search) {
                 $q->where('reference_no', 'LIKE', "%{$search}%")
-                  ->orWhereHas('shift', function ($sub) use ($search) {
-                      $sub->where('shift_name', 'LIKE', "%{$search}%");
-                  })
-                  ->orWhereHas('site', function ($sub) use ($search) {
-                      $sub->where('site_name', 'LIKE', "%{$search}%");
-                  });
+                    ->orWhereHas('shift', function ($sub) use ($search) {
+                        $sub->where('shift_name', 'LIKE', "%{$search}%");
+                    })
+                    ->orWhereHas('site', function ($sub) use ($search) {
+                        $sub->where('site_name', 'LIKE', "%{$search}%");
+                    });
             });
         }
 
@@ -249,8 +257,8 @@ class ShiftPlanService
         $totalScheduledShifts = $query->count();
         $totalTargetBcm = (float) $query->sum('target_bcm');
         $totalActualBcm = (float) $query->sum('actual_bcm');
-        $currentEfficiency = $totalTargetBcm > 0 
-            ? round(($totalActualBcm / $totalTargetBcm) * 100) 
+        $currentEfficiency = $totalTargetBcm > 0
+            ? round(($totalActualBcm / $totalTargetBcm) * 100)
             : 0;
 
         // Get unique shifts in this query to calculate active personnel
@@ -262,10 +270,10 @@ class ShiftPlanService
                     $startStr = $startDate->format('Y-m-d');
                     $endStr = $endDate->format('Y-m-d');
                     $q->where('from_date', '<=', $endStr)
-                      ->where(function ($sub) use ($startStr) {
-                          $sub->whereNull('to_date')
-                              ->orWhere('to_date', '>=', $startStr);
-                      });
+                        ->where(function ($sub) use ($startStr) {
+                            $sub->whereNull('to_date')
+                                ->orWhere('to_date', '>=', $startStr);
+                        });
                 })
                 ->distinct('employee_id')
                 ->count('employee_id');

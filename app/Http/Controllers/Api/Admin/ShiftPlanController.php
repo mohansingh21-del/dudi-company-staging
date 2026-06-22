@@ -108,7 +108,7 @@ class ShiftPlanController extends Controller
     public function store(StoreShiftPlanRequest $request)
     {
         try {
-            $result = $this->service->createShiftPlan($request->validated());
+            $result = $this->service->saveShiftPlan($request->validated());
 
             return response()->json([
                 'status' => 201,
@@ -162,7 +162,7 @@ class ShiftPlanController extends Controller
     public function update(UpdateShiftPlanRequest $request, $id)
     {
         try {
-            $result = $this->service->updateShiftPlan($id, $request->validated());
+            $result = $this->service->saveShiftPlan($request->validated(), $id);
 
             if ($result['status'] === 404) {
                 return response()->json([
