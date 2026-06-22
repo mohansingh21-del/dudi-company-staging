@@ -14,6 +14,17 @@ class EquipmentNameResource extends JsonResource
      */
     public function toArray($request)
     {
-        return parent::toArray($request);
+        return [
+            'id' => $this->id,
+            'equipment_category_id' => $this->equipment?->id,
+            'equipment_category_name' => $this->equipment?->name,
+
+            'equipment_id' => $this->equipment_id,
+            'equipment_name' => $this->equipment_name,
+            'is_active' => $this->is_active,
+
+            'created_at' => $this->created_at,
+            'updated_at' => $this->updated_at,
+        ];
     }
 }
