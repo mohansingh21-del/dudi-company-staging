@@ -37,7 +37,8 @@ use App\Http\Controllers\Api\Admin\InventoryController;
 use App\Http\Controllers\Api\Admin\PenaltyController;
 use App\Http\Controllers\Api\Admin\PayrollController;
 use App\Http\Controllers\Api\Admin\EmployeePayrollController;
-
+use App\Http\Controllers\Api\Admin\EquipmentController;
+use App\Http\Controllers\Api\Admin\EquipmentNameController;
 
 
 /*
@@ -178,8 +179,11 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('leaves', LeaveController::class);
 
             Route::apiResource('employee-payrolls', EmployeePayrollController::class);
+            Route::apiResource('equipments', EquipmentController::class);
 
-
+            Route::patch('equipments/{id}/status', [EquipmentController::class, 'toggleStatus']);
+            Route::apiResource('equipment-names', EquipmentNameController::class);
+            Route::patch('equipment-names/{id}/status', [EquipmentNameController::class, 'toggleStatus']);
         });
 
         // NORMAL USER
