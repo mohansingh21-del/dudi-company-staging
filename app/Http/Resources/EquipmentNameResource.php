@@ -21,7 +21,7 @@ class EquipmentNameResource extends JsonResource
 
             'equipment_id' => $this->equipment_id,
             'equipment_name' => $this->equipment_name,
-            'is_active' => $this->is_active,
+            'status' => $this->is_active,
 
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,

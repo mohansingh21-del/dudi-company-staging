@@ -39,6 +39,7 @@ use App\Http\Controllers\Api\Admin\PayrollController;
 use App\Http\Controllers\Api\Admin\EmployeePayrollController;
 use App\Http\Controllers\Api\Admin\EquipmentController;
 use App\Http\Controllers\Api\Admin\EquipmentNameController;
+use App\Http\Controllers\Api\Admin\IncidentTypeController;
 
 
 /*
@@ -124,7 +125,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);
-
+        Route::get('incident-types', [IncidentTypeController::class, 'publicIndex']);
         Route::get('shifts', [ShiftController::class, 'getPublicShifts']);
         Route::get('employees', [EmployeeController::class, 'getPublicEmployees']);
         Route::get('active-employees', [EmployeeController::class, 'getActiveEmployees']);
@@ -184,6 +185,8 @@ Route::prefix('v1')->group(function () {
             Route::patch('equipments/{id}/status', [EquipmentController::class, 'toggleStatus']);
             Route::apiResource('equipment-names', EquipmentNameController::class);
             Route::patch('equipment-names/{id}/status', [EquipmentNameController::class, 'toggleStatus']);
+            Route::apiResource('incident-types', IncidentTypeController::class);
+            Route::patch('incident-types/{id}/status', [IncidentTypeController::class, 'toggleStatus']);
         });
 
         // NORMAL USER
