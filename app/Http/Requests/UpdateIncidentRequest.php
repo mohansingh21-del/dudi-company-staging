@@ -20,10 +20,16 @@ class UpdateIncidentRequest extends FormRequest
 
             'incident_date' => [
                 'required',
-                'date',
-                'before_or_equal:today'
-            ],
+                'date_format:d/m/Y',
+                function ($attribute, $value, $fail) {
 
+                    $date = \Carbon\Carbon::createFromFormat('d/m/Y', $value);
+
+                    if ($date->isFuture()) {
+                        $fail('Incident date cannot be a future date.');
+                    }
+                }
+            ],
             'shift_id' => [
                 'required',
                 'exists:shifts,id'
@@ -54,22 +60,11 @@ class UpdateIncidentRequest extends FormRequest
 
             ],
 
-            'status' => [
 
-                'required',
-
-                Rule::in([
-                    'Reported',
-                    'Under Review',
-                    'Action Required',
-                    'Investigation Closed'
-                ])
-
-            ],
 
             'location_id' => [
                 'required',
-                'exists:locations,id'
+                'exists:sites,id'
             ],
 
             'person_involved_id' => [

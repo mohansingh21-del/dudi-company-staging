@@ -138,7 +138,7 @@ Route::prefix('v1')->group(function () {
         Route::get('products', [ProductController::class, 'getPublicProducts']);
         Route::get('categories', [CategoryController::class, 'getPublicCategories']);
         Route::get('subcategories', [SubCategoryController::class, 'getPublicSubCategories']);
-        Route::get('machine-categories', [EquipmentAllocationController::class, 'categories']);
+        Route::get('machine-categories', [EquipmentController::class, 'listCategories']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
 
 

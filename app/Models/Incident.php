@@ -18,6 +18,8 @@ class Incident extends Model
         'severity',
         'status',
         'location_id',
+        'equipment_id',
+        'equipment_name_id',
         'person_involved_id',
         'incident_description',
         'action_taken',
@@ -53,5 +55,17 @@ class Incident extends Model
     public function person()
     {
         return $this->belongsTo(Employee::class, 'person_involved_id');
+    }
+    public function equipment()
+    {
+        return $this->belongsTo(Equipment::class);
+    }
+
+    public function equipmentName()
+    {
+        return $this->belongsTo(
+            EquipmentName::class,
+            'equipment_name_id'
+        );
     }
 }

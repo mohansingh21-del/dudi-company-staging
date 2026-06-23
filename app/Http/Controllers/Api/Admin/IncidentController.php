@@ -9,6 +9,7 @@ use App\Http\Requests\UpdateIncidentRequest;
 use App\Http\Resources\IncidentResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class IncidentController extends Controller
 {
@@ -21,10 +22,16 @@ class IncidentController extends Controller
             $incidents = Incident::with([
                 'shift',
                 'incidentType',
-                'location'
+                'location',
+                'equipment',
+                'equipmentName'
             ]);
 
-            // Search
+            /*
+        |--------------------------------------------------------------------------
+        | SEARCH
+        |--------------------------------------------------------------------------
+        */
             if ($request->filled('search')) {
 
                 $search = $request->search;
@@ -35,72 +42,251 @@ class IncidentController extends Controller
                         ->orWhere('incident_description', 'LIKE', "%{$search}%")
 
                         ->orWhereHas('incidentType', function ($q) use ($search) {
-
-                            $q->where(
-                                'incident_type',
-                                'LIKE',
-                                "%{$search}%"
-                            );
+                            $q->where('incident_type', 'LIKE', "%{$search}%");
                         })
 
                         ->orWhereHas('location', function ($q) use ($search) {
-
-                            $q->where(
-                                'name',
-                                'LIKE',
-                                "%{$search}%"
-                            );
+                            $q->where('name', 'LIKE', "%{$search}%");
                         });
                 });
             }
 
-            // Date From
-            if ($request->filled('date_from')) {
+            /*
+        |--------------------------------------------------------------------------
+        | DATE FILTERS
+        |--------------------------------------------------------------------------
+        */
+            $dateFrom = $request->date_from
+                ? Carbon::createFromFormat('d/m/Y', $request->date_from)->toDateString()
+                : null;
 
-                $incidents->whereDate(
-                    'incident_date',
-                    '>=',
-                    $request->date_from
-                );
+            $dateTo = $request->date_to
+                ? Carbon::createFromFormat('d/m/Y', $request->date_to)->toDateString()
+                : null;
+
+            if ($dateFrom) {
+                $incidents->whereDate('incident_date', '>=', $dateFrom);
             }
 
-            // Date To
-            if ($request->filled('date_to')) {
-
-                $incidents->whereDate(
-                    'incident_date',
-                    '<=',
-                    $request->date_to
-                );
+            if ($dateTo) {
+                $incidents->whereDate('incident_date', '<=', $dateTo);
             }
 
-            // Shift Filter
+            /*
+        |--------------------------------------------------------------------------
+        | FILTERS
+        |--------------------------------------------------------------------------
+        */
             if ($request->filled('shift_id')) {
-
-                $incidents->where(
-                    'shift_id',
-                    $request->shift_id
-                );
+                $incidents->where('shift_id', $request->shift_id);
             }
 
-            // Location Filter
             if ($request->filled('location_id')) {
-
-                $incidents->where(
-                    'location_id',
-                    $request->location_id
-                );
+                $incidents->where('location_id', $request->location_id);
             }
 
-            // Incident Type Filter
             if ($request->filled('incident_type_id')) {
-
-                $incidents->where(
-                    'incident_type_id',
-                    $request->incident_type_id
-                );
+                $incidents->where('incident_type_id', $request->incident_type_id);
             }
 
+            /*
+        |--------------------------------------------------------------------------
+        | DASHBOARD BASE QUERY
+        |--------------------------------------------------------------------------
+        */
+            $dashboardQuery = clone $incidents;
+
+            $totalIncidents = (clone $dashboardQuery)->count();
+            $totalSafe = max($totalIncidents, 1);
+
+            /*
+        |--------------------------------------------------------------------------
+        | CURRENT STREAK (DAYS SINCE LAST INCIDENT)
+        |--------------------------------------------------------------------------
+        */
+            $lastIncident = (clone $dashboardQuery)
+                ->latest('incident_date')
+                ->first();
+
+            $currentStreak = $lastIncident
+                ? Carbon::parse($lastIncident->incident_date)->diffInDays(now())
+                : 0;
+
+            /*
+        |--------------------------------------------------------------------------
+        | BEST HISTORICAL SAFETY RECORD (LONGEST GAP)
+        |--------------------------------------------------------------------------
+        */
+            $dates = (clone $dashboardQuery)
+                ->orderBy('incident_date', 'asc')
+                ->pluck('incident_date');
+
+            $longestStreak = 0;
+            $previousDate = null;
+
+            foreach ($dates as $date) {
+
+                if ($previousDate) {
+
+                    $diff = Carbon::parse($previousDate)
+                        ->diffInDays(Carbon::parse($date));
+
+                    if ($diff > $longestStreak) {
+                        $longestStreak = $diff;
+                    }
+                }
+
+                $previousDate = $date;
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | KPIs
+        |--------------------------------------------------------------------------
+        */
+            $criticalActionsOpen = (clone $dashboardQuery)
+                ->where('status', 'Under Review')
+                ->count();
+
+            /*
+        |--------------------------------------------------------------------------
+        | SAFETY RECORD
+        |--------------------------------------------------------------------------
+        */
+            $safetyRecord = 'Green';
+
+            $hasCritical = (clone $dashboardQuery)
+                ->where('severity', 'CRITICAL')
+                ->exists();
+
+            $hasHigh = (clone $dashboardQuery)
+                ->where('severity', 'HIGH')
+                ->exists();
+
+            if ($hasCritical) {
+                $safetyRecord = 'Red';
+            } elseif ($hasHigh) {
+                $safetyRecord = 'Yellow';
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | INCIDENT DISTRIBUTION (WITH %)
+        |--------------------------------------------------------------------------
+        */
+            $incidentDistribution = [];
+
+            $incidentData = (clone $dashboardQuery)
+                ->join('incident_types', 'incidents.incident_type_id', '=', 'incident_types.id')
+                ->selectRaw('incident_types.incident_type, COUNT(*) as total')
+                ->groupBy('incident_types.incident_type')
+                ->get();
+
+            foreach ($incidentData as $item) {
+
+                $incidentDistribution[$item->incident_type] = [
+                    'count' => (int) $item->total,
+                    'percentage' => round(($item->total / $totalSafe) * 100, 2)
+                ];
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | SHIFT DISTRIBUTION
+        |--------------------------------------------------------------------------
+        */
+            $shiftDistribution = [];
+
+            $shiftData = (clone $dashboardQuery)
+                ->join('shifts', 'incidents.shift_id', '=', 'shifts.id')
+                ->selectRaw('shifts.shift_name, COUNT(*) as total')
+                ->groupBy('shifts.shift_name')
+                ->get();
+
+            foreach ($shiftData as $item) {
+
+                $shiftDistribution[$item->shift_name] = [
+                    'count' => (int) $item->total,
+                    'percentage' => round(($item->total / $totalSafe) * 100, 2)
+                ];
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | LOCATION DISTRIBUTION
+        |--------------------------------------------------------------------------
+        */
+            $locationDistribution = [];
+
+            $locationData = (clone $dashboardQuery)
+                ->join('sites', 'incidents.location_id', '=', 'sites.id')
+                ->selectRaw('sites.site_name, COUNT(*) as total')
+                ->groupBy('sites.site_name')
+                ->get();
+
+            foreach ($locationData as $item) {
+
+                $locationDistribution[$item->site_name] = [
+                    'count' => (int) $item->total,
+                    'percentage' => round(($item->total / $totalSafe) * 100, 2)
+                ];
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | SEVERITY DISTRIBUTION
+        |--------------------------------------------------------------------------
+        */
+            $severityDistribution = [
+                'LOW' => ['count' => 0, 'percentage' => 0],
+                'MEDIUM' => ['count' => 0, 'percentage' => 0],
+                'HIGH' => ['count' => 0, 'percentage' => 0],
+                'CRITICAL' => ['count' => 0, 'percentage' => 0],
+            ];
+
+            $severityData = (clone $dashboardQuery)
+                ->selectRaw('severity, COUNT(*) as total')
+                ->groupBy('severity')
+                ->get();
+
+            foreach ($severityData as $item) {
+
+                $severityDistribution[$item->severity] = [
+                    'count' => (int) $item->total,
+                    'percentage' => round(($item->total / $totalSafe) * 100, 2)
+                ];
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | STATUS DISTRIBUTION
+        |--------------------------------------------------------------------------
+        */
+            $statusDistribution = [
+                'Reported' => ['count' => 0, 'percentage' => 0],
+                'Under Review' => ['count' => 0, 'percentage' => 0],
+                'Action Required' => ['count' => 0, 'percentage' => 0],
+                'Investigation Closed' => ['count' => 0, 'percentage' => 0],
+            ];
+
+            $statusData = (clone $dashboardQuery)
+                ->selectRaw('status, COUNT(*) as total')
+                ->groupBy('status')
+                ->get();
+
+            foreach ($statusData as $item) {
+
+                $statusDistribution[$item->status] = [
+                    'count' => (int) $item->total,
+                    'percentage' => round(($item->total / $totalSafe) * 100, 2)
+                ];
+            }
+
+            /*
+        |--------------------------------------------------------------------------
+        | PAGINATION (LIST ONLY)
+        |--------------------------------------------------------------------------
+        */
             $incidents = $incidents
                 ->latest()
                 ->paginate($limit);
@@ -108,53 +294,60 @@ class IncidentController extends Controller
             return response()->json([
 
                 'status' => 200,
+                'message' => 'Incident list fetched successfully',
 
-                'message' =>
-                'Incident list fetched successfully',
+                'dashboard' => [
 
-                'data' =>
-                IncidentResource::collection($incidents),
+                    'total_incidents' => $totalIncidents,
+
+                    'days_since_last_incident' => $currentStreak,
+
+                    'best_safety_record_days' => $longestStreak,
+
+                    'safety_record' => $safetyRecord,
+
+                    'critical_actions_open' => $criticalActionsOpen,
+
+                    'incident_distribution' => $incidentDistribution,
+
+                    'shift_distribution' => $shiftDistribution,
+
+                    'location_distribution' => $locationDistribution,
+
+                    'severity_distribution' => $severityDistribution,
+
+                    'status_distribution' => $statusDistribution,
+                ],
+
+                'data' => IncidentResource::collection($incidents),
 
                 'pagination' => [
-
-                    'current_page' =>
-                    $incidents->currentPage(),
-
-                    'last_page' =>
-                    $incidents->lastPage(),
-
-                    'per_page' =>
-                    $incidents->perPage(),
-
-                    'total' =>
-                    $incidents->total(),
-
-                    'from' =>
-                    $incidents->firstItem(),
-
-                    'to' =>
-                    $incidents->lastItem()
-
+                    'current_page' => $incidents->currentPage(),
+                    'last_page' => $incidents->lastPage(),
+                    'per_page' => $incidents->perPage(),
+                    'total' => $incidents->total(),
+                    'from' => $incidents->firstItem(),
+                    'to' => $incidents->lastItem(),
                 ]
 
             ]);
         } catch (\Throwable $th) {
 
             return response()->json([
-
                 'status' => 500,
-
                 'message' => $th->getMessage()
-
             ]);
         }
     }
     public function show($id)
     {
+
         $incident = Incident::with([
             'shift',
             'incidentType',
             'location',
+            'equipment',
+            'equipmentName',
             'person',
             'media'
         ])->find($id);
@@ -223,7 +416,9 @@ class IncidentController extends Controller
 
                 'location_id' => $request->location_id,
 
+                'equipment_id' => $request->equipment_id,
 
+                'equipment_name_id' => $request->equipment_name_id,
                 'person_involved_id' => $request->person_involved_id,
 
 
@@ -344,12 +539,13 @@ class IncidentController extends Controller
                 'severity' =>
                 $request->severity,
 
-                'status' =>
-                $request->status,
+
 
                 'location_id' =>
                 $request->location_id,
+                'equipment_id' => $request->equipment_id,
 
+                'equipment_name_id' => $request->equipment_name_id,
                 'person_involved_id' =>
                 $request->person_involved_id,
 

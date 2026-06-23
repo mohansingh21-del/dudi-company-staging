@@ -72,7 +72,24 @@ class StoreIncidentRequest extends FormRequest
                 'exists:sites,id'
             ],
 
+            'equipment_id' => [
+                'required',
+                'exists:equipments,id'
+            ],
 
+            'equipment_name_id' => [
+
+                'required',
+
+                Rule::exists('equipment_names', 'id')
+                    ->where(function ($query) {
+
+                        $query->where(
+                            'equipment_id',
+                            request('equipment_id')
+                        );
+                    })
+            ],
             'person_involved_id' => [
                 'nullable',
                 'exists:employees,id'
