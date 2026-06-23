@@ -40,7 +40,7 @@ class StoreShiftPlanRequest extends FormRequest
             'target_bcm' => 'required|numeric|gt:0',
             'supervisor_id' => 'required|exists:employees,id',
             'site_incharge_id' => 'required|exists:employees,id',
-            'status' => 'nullable|in:draft,planned,active,closed',
+            'status' => 'nullable|in:draft,published,planned,active,closed',
             'actual_bcm' => 'nullable|numeric|min:0',
         ];
     }

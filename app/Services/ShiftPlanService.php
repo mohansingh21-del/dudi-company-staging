@@ -26,8 +26,30 @@ class ShiftPlanService
             'creator.employee'
         ]);
 
-        // Filter by Date
-        if (!empty($filters['date'])) {
+        // Filter by Date or Period
+        if (!empty($filters['period'])) {
+            $refDate = !empty($filters['date'])
+                ? \Carbon\Carbon::parse($filters['date'])
+                : \Carbon\Carbon::now();
+
+            $period = strtolower($filters['period']);
+            if ($period === 'quarterly') {
+                $startDate = $refDate->copy()->startOfQuarter()->startOfDay();
+                $endDate = $refDate->copy()->endOfQuarter()->endOfDay();
+            } elseif ($period === 'yearly' || $period === 'yearly' || $period === 'annual') {
+                $startDate = $refDate->copy()->startOfYear()->startOfDay();
+                $endDate = $refDate->copy()->endOfYear()->endOfDay();
+            } else {
+                // monthly
+                $startDate = $refDate->copy()->startOfMonth()->startOfDay();
+                $endDate = $refDate->copy()->endOfMonth()->endOfDay();
+            }
+
+            $query->whereBetween('planning_date', [
+                $startDate->format('Y-m-d'),
+                $endDate->format('Y-m-d')
+            ]);
+        } elseif (!empty($filters['date'])) {
             $query->whereDate('planning_date', $filters['date']);
         }
 
@@ -164,7 +186,8 @@ class ShiftPlanService
             'site',
             'supervisor.employee',
             'siteIncharge.employee',
-            'creator.employee'
+            'creator.employee',
+            'equipmentAllocations.equipmentName.equipment'
         ])->find($id);
 
         if (!$shiftPlan) {
@@ -366,6 +389,167 @@ class ShiftPlanService
         return [
             'status' => 200,
             'message' => 'Shift Plan status updated successfully.',
+            'data' => $shiftPlan,
+        ];
+    }
+
+    /**
+     * Perform validation checks for publishing a shift plan.
+     *
+     * @param  int  $id
+     * @return array
+     */
+    public function validatePublish($id)
+    {
+        $shiftPlan = ShiftPlan::find($id);
+
+        if (!$shiftPlan) {
+            return [
+                'status' => 404,
+                'message' => 'Shift Plan not found.',
+                'data' => null,
+            ];
+        }
+
+        $preconditionPassed = $shiftPlan->status === 'draft';
+
+        $hasExcavator = $shiftPlan->equipmentAllocations()->whereHas('equipmentName.equipment', function ($q) {
+            $q->whereRaw('LOWER(name) = ?', ['excavator']);
+        })->exists();
+
+        $hasWorkforce = $shiftPlan->workforceDeployments()->active()->exists();
+        $supervisorAssigned = !is_null($shiftPlan->supervisor_id);
+        $siteInchargeAssigned = !is_null($shiftPlan->site_incharge_id);
+        $targetBcmAvailable = !is_null($shiftPlan->target_bcm) && $shiftPlan->target_bcm > 0;
+
+        $canPublish = $preconditionPassed
+            && $hasExcavator
+            && $hasWorkforce
+            && $supervisorAssigned
+            && $siteInchargeAssigned
+            && $targetBcmAvailable;
+
+        return [
+            'status' => 200,
+            'message' => 'Shift plan validation completed.',
+            'data' => [
+                'shift_plan_id' => $shiftPlan->id,
+                'can_publish' => $canPublish,
+                'current_status' => $shiftPlan->status,
+                'validations' => [
+                    'precondition_draft' => [
+                        'status' => $preconditionPassed,
+                        'message' => $preconditionPassed ? 'Shift is in Draft status.' : 'Shift plan must be in Draft status to be published.'
+                    ],
+                    'equipment_allocated' => [
+                        'status' => $hasExcavator,
+                        'message' => $hasExcavator ? 'At least one Excavator allocated.' : 'At Least One Excavator Must Be Allocated.'
+                    ],
+                    'workforce_deployed' => [
+                        'status' => $hasWorkforce,
+                        'message' => $hasWorkforce ? 'Workforce assigned to shift.' : 'No Workforce Assigned To Shift.'
+                    ],
+                    'supervisor_assigned' => [
+                        'status' => $supervisorAssigned,
+                        'message' => $supervisorAssigned ? 'Supervisor assigned.' : 'Supervisor must be assigned to the shift.'
+                    ],
+                    'site_incharge_assigned' => [
+                        'status' => $siteInchargeAssigned,
+                        'message' => $siteInchargeAssigned ? 'Site Incharge assigned.' : 'Site Incharge must be assigned to the shift.'
+                    ],
+                    'target_bcm_defined' => [
+                        'status' => $targetBcmAvailable,
+                        'message' => $targetBcmAvailable ? 'Production target (BCM) defined.' : 'Production target (BCM) must be defined.'
+                    ]
+                ]
+            ]
+        ];
+    }
+
+    /**
+     * Publish a shift plan.
+     *
+     * @param  int  $id
+     * @param  int  $userId
+     * @return array
+     */
+    public function publish($id, $userId)
+    {
+        $shiftPlan = ShiftPlan::find($id);
+
+        if (!$shiftPlan) {
+            return [
+                'status' => 404,
+                'message' => 'Shift Plan not found.',
+                'data' => null,
+            ];
+        }
+
+        // Precondition
+        if ($shiftPlan->status !== 'draft') {
+            return [
+                'status' => 422,
+                'message' => 'Shift plan must be in Draft status to be published.',
+                'data' => null,
+            ];
+        }
+
+        // Validation checks
+        $hasExcavator = $shiftPlan->equipmentAllocations()->whereHas('equipmentName.equipment', function ($q) {
+            $q->whereRaw('LOWER(name) = ?', ['excavator']);
+        })->exists();
+
+        if (!$hasExcavator) {
+            return [
+                'status' => 422,
+                'message' => 'At Least One Excavator Must Be Allocated.',
+                'data' => null,
+            ];
+        }
+
+        $hasWorkforce = $shiftPlan->workforceDeployments()->active()->exists();
+        if (!$hasWorkforce) {
+            return [
+                'status' => 422,
+                'message' => 'No Workforce Assigned To Shift.',
+                'data' => null,
+            ];
+        }
+
+        if (is_null($shiftPlan->supervisor_id)) {
+            return [
+                'status' => 422,
+                'message' => 'Supervisor must be assigned to the shift.',
+                'data' => null,
+            ];
+        }
+
+        if (is_null($shiftPlan->site_incharge_id)) {
+            return [
+                'status' => 422,
+                'message' => 'Site Incharge must be assigned to the shift.',
+                'data' => null,
+            ];
+        }
+
+        if (is_null($shiftPlan->target_bcm) || $shiftPlan->target_bcm <= 0) {
+            return [
+                'status' => 422,
+                'message' => 'Production target (BCM) must be defined.',
+                'data' => null,
+            ];
+        }
+
+        // Update status and record publication details
+        $shiftPlan->update([
+            'status' => 'published',
+            'published_by' => $userId,
+            'published_at' => now(),
+        ]);
+
+        return [
+            'status' => 200,
+            'message' => 'Shift Published Successfully.',
             'data' => $shiftPlan,
         ];
     }

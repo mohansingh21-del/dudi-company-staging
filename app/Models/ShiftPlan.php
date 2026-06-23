@@ -23,6 +23,8 @@ class ShiftPlan extends Model
         'created_by',
         'reference_no',
         'actual_bcm',
+        'published_by',
+        'published_at',
     ];
 
     protected $casts = [
@@ -30,6 +32,7 @@ class ShiftPlan extends Model
         'target_bcm'    => 'decimal:2',
         'actual_bcm'    => 'decimal:2',
         'equipment_count' => 'integer',
+        'published_at'  => 'datetime',
     ];
 
     /*
@@ -63,9 +66,19 @@ class ShiftPlan extends Model
         return $this->belongsTo(User::class, 'created_by');
     }
 
+    public function publisher()
+    {
+        return $this->belongsTo(User::class, 'published_by');
+    }
+
     public function equipmentAllocations()
     {
         return $this->hasMany(ShiftEquipmentAllocation::class, 'shift_plan_id');
+    }
+
+    public function workforceDeployments()
+    {
+        return $this->hasMany(ShiftWorkforceDeployment::class, 'shift_plan_id');
     }
 
     /*

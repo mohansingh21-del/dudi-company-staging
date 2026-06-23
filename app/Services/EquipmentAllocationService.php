@@ -20,7 +20,7 @@ class EquipmentAllocationService
      */
     public function listCategories()
     {
-        $categories = Equipment::all();
+        $categories = Equipment::where('is_active', 1)->get();
 
         $data = $categories->map(function ($category) {
             return [

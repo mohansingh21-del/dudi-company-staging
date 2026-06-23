@@ -74,7 +74,7 @@ class ShiftPlanController extends Controller
     public function index(Request $request)
     {
         try {
-            $filters = $request->only(['date', 'shift_id', 'site_id', 'status', 'search', 'limit']);
+            $filters = $request->only(['date', 'period', 'shift_id', 'site_id', 'status', 'search', 'limit']);
             $result = $this->service->listShiftPlans($filters);
 
             $paginated = $result['data'];
@@ -225,7 +225,7 @@ class ShiftPlanController extends Controller
     {
         try {
             $request->validate([
-                'status' => 'required|in:draft,planned,active,closed',
+                'status' => 'required|in:draft,published,planned,active,closed',
             ]);
 
             $result = $this->service->updateStatus($id, $request->status);
@@ -249,6 +249,52 @@ class ShiftPlanController extends Controller
                 'message' => 'Validation failed',
                 'errors' => $e->errors()
             ], 422);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+                'data' => [],
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /admin/shift-plans/{id}/validate-publish
+     * Runs validation checks for publishing a shift plan.
+     */
+    public function validatePublish($id)
+    {
+        try {
+            $result = $this->service->validatePublish($id);
+
+            return response()->json($result, $result['status']);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+                'data' => [],
+            ], 500);
+        }
+    }
+
+    /**
+     * POST /admin/shift-plans/{id}/publish
+     * Confirms and publishes the shift plan.
+     */
+    public function publish($id)
+    {
+        try {
+            $result = $this->service->publish($id, auth()->id());
+
+            if ($result['status'] === 200) {
+                return response()->json([
+                    'status' => 200,
+                    'message' => $result['message'],
+                    'data' => new ShiftPlanResource($result['data']),
+                ], 200);
+            }
+
+            return response()->json($result, $result['status']);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,

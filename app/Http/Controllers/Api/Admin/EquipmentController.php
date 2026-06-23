@@ -167,4 +167,23 @@ class EquipmentController extends Controller
             ], 500);
         }
     }
+
+    public function listCategories()
+    {
+        $categories = Equipment::where('is_active', 1)->get();
+
+        $data = $categories->map(function ($category) {
+            return [
+                'category_id' => $category->id,
+                'category_name' => $category->name,
+                'is_active' => $category->is_active,
+            ];
+        });
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Machine categories retrieved successfully.',
+            'data' => $data->values()->toArray(),
+        ]);
+    }
 }

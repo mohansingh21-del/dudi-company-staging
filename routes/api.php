@@ -42,6 +42,7 @@ use App\Http\Controllers\Api\Admin\EquipmentNameController;
 use App\Http\Controllers\Api\Admin\IncidentTypeController;
 use App\Http\Controllers\Api\Admin\EquipmentAllocationController;
 use App\Http\Controllers\Api\Admin\ShiftPlanController;
+use App\Http\Controllers\Api\Admin\WorkforceDeploymentController;
 
 
 /*
@@ -137,7 +138,7 @@ Route::prefix('v1')->group(function () {
         Route::get('products', [ProductController::class, 'getPublicProducts']);
         Route::get('categories', [CategoryController::class, 'getPublicCategories']);
         Route::get('subcategories', [SubCategoryController::class, 'getPublicSubCategories']);
-        Route::get('machine-categories', [EquipmentAllocationController::class, 'categories']);
+        Route::get('machine-categories', [EquipmentController::class, 'listCategories']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
 
 
@@ -346,6 +347,8 @@ Route::prefix('v1')->group(function () {
             */
 
             Route::get('shift-plans/overview', [ShiftPlanController::class, 'overview']);
+            Route::get('shift-plans/{id}/validate-publish', [ShiftPlanController::class, 'validatePublish']);
+            Route::post('shift-plans/{id}/publish', [ShiftPlanController::class, 'publish']);
             Route::patch('shift-plans/{id}/status', [ShiftPlanController::class, 'updateStatus']);
             Route::apiResource('shift-plans', ShiftPlanController::class);
 
@@ -354,6 +357,18 @@ Route::prefix('v1')->group(function () {
                 Route::get('equipment', [EquipmentAllocationController::class, 'index']);
                 Route::post('equipment', [EquipmentAllocationController::class, 'allocate']);
                 Route::delete('equipment/{allocation_id}', [EquipmentAllocationController::class, 'destroy']);
+
+                /*
+                |--------------------------------------------------------------
+                | Workforce Deployment
+                |--------------------------------------------------------------
+                */
+                Route::post('workforce/load-relay', [WorkforceDeploymentController::class, 'loadRelay']);
+                Route::get('workforce/available-employees', [WorkforceDeploymentController::class, 'availableEmployees']);
+                Route::post('workforce/borrow', [WorkforceDeploymentController::class, 'borrow']);
+                Route::get('workforce/summary', [WorkforceDeploymentController::class, 'summary']);
+                Route::get('workforce', [WorkforceDeploymentController::class, 'index']);
+                Route::delete('workforce/{deployment_id}', [WorkforceDeploymentController::class, 'destroy']);
             });
         });
 });
