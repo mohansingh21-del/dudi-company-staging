@@ -37,11 +37,9 @@ class CreateIncidentsTable extends Migration
             ]);
 
             $table->enum('status', [
-                'Reported',
                 'Under Review',
-                'Action Required',
                 'Investigation Closed'
-            ])->default('Reported');
+            ])->default('Under Review');
 
 
             $table->foreignId('location_id')

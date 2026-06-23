@@ -21,8 +21,15 @@ class StoreIncidentRequest extends FormRequest
 
             'incident_date' => [
                 'required',
-                'date',
-                'before_or_equal:today'
+                'date_format:d/m/Y',
+                function ($attribute, $value, $fail) {
+
+                    $date = \Carbon\Carbon::createFromFormat('d/m/Y', $value);
+
+                    if ($date->isFuture()) {
+                        $fail('Incident date cannot be a future date.');
+                    }
+                }
             ],
 
 
@@ -51,15 +58,13 @@ class StoreIncidentRequest extends FormRequest
             ],
 
 
-            'status' => [
-                'required',
-                Rule::in([
-                    'Reported',
-                    'Under Review',
-                    'Action Required',
-                    'Investigation Closed'
-                ])
-            ],
+            // 'status' => [
+            //     'required',
+            //     Rule::in([
+            //         'Under Review',
+            //         'Investigation Closed'
+            //     ])
+            // ],
 
 
             'location_id' => [

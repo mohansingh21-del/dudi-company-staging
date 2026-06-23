@@ -204,7 +204,10 @@ class IncidentController extends Controller
                 'incident_no' => $incidentNo,
 
 
-                'incident_date' => $request->incident_date,
+                'incident_date' => \Carbon\Carbon::createFromFormat(
+                    'd/m/Y',
+                    $request->incident_date
+                )->format('Y-m-d'),
 
 
                 'shift_id' => $request->shift_id,
@@ -216,7 +219,6 @@ class IncidentController extends Controller
                 'severity' => $request->severity,
 
 
-                'status' => $request->status,
 
 
                 'location_id' => $request->location_id,
@@ -237,7 +239,7 @@ class IncidentController extends Controller
             ]);
 
 
-
+            ///// dd($request->file('media'));
 
 
             if ($request->hasFile('media')) {
@@ -272,22 +274,22 @@ class IncidentController extends Controller
             return response()->json([
 
 
-                'success' => true,
+                'status' => 200,
+
+                'message' => 'Incident logged successfully.',
 
 
                 'incident_no' => $incidentNo,
 
 
-                'status' => $incident->status,
 
 
                 'severity' => $incident->severity,
 
 
-                'message' => 'Incident logged successfully.'
 
 
-            ], 201);
+            ], 200);
         } catch (\Throwable $e) {
 
 
@@ -328,8 +330,10 @@ class IncidentController extends Controller
 
             $incident->update([
 
-                'incident_date' =>
-                $request->incident_date,
+                'incident_date' => \Carbon\Carbon::createFromFormat(
+                    'd/m/Y',
+                    $request->incident_date
+                )->format('Y-m-d'),
 
                 'shift_id' =>
                 $request->shift_id,

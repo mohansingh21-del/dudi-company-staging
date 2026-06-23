@@ -134,13 +134,13 @@ class IncidentTypeController extends Controller
 
         return response()->json([
 
-            'status' => 201,
+            'status' => 200,
 
             'message' => 'Incident type created successfully',
 
             //'data' => new IncidentTypeResource($type)
 
-        ], 201);
+        ], 200);
     }
 
 
