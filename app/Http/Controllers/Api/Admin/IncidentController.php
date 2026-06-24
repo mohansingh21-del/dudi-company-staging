@@ -47,6 +47,13 @@ class IncidentController extends Controller
 
                         ->orWhereHas('location', function ($q) use ($search) {
                             $q->where('name', 'LIKE', "%{$search}%");
+                        })
+                        ->orWhereHas('equipment', function ($q) use ($search) {
+                            $q->where('name', 'LIKE', "%{$search}%");
+                        })
+
+                        ->orWhereHas('equipmentName', function ($q) use ($search) {
+                            $q->where('equipment_name', 'LIKE', "%{$search}%");
                         });
                 });
             }
@@ -71,7 +78,6 @@ class IncidentController extends Controller
             if ($dateTo) {
                 $incidents->whereDate('incident_date', '<=', $dateTo);
             }
-
             /*
         |--------------------------------------------------------------------------
         | FILTERS
@@ -87,6 +93,13 @@ class IncidentController extends Controller
 
             if ($request->filled('incident_type_id')) {
                 $incidents->where('incident_type_id', $request->incident_type_id);
+            }
+            if ($request->filled('equipment_id')) {
+                $incidents->where('equipment_id', $request->equipment_id);
+            }
+
+            if ($request->filled('equipment_name_id')) {
+                $incidents->where('equipment_name_id', $request->equipment_name_id);
             }
 
             /*
@@ -263,9 +276,7 @@ class IncidentController extends Controller
         |--------------------------------------------------------------------------
         */
             $statusDistribution = [
-                'Reported' => ['count' => 0, 'percentage' => 0],
                 'Under Review' => ['count' => 0, 'percentage' => 0],
-                'Action Required' => ['count' => 0, 'percentage' => 0],
                 'Investigation Closed' => ['count' => 0, 'percentage' => 0],
             ];
 
