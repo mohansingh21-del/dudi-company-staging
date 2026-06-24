@@ -43,6 +43,7 @@ use App\Http\Controllers\Api\Admin\IncidentTypeController;
 use App\Http\Controllers\Api\Admin\IncidentController;
 use App\Http\Controllers\Api\Admin\EquipmentAllocationController;
 use App\Http\Controllers\Api\Admin\ShiftPlanController;
+use App\Http\Controllers\Api\Admin\WorkforceDeploymentController;
 
 
 /*
@@ -352,6 +353,7 @@ Route::prefix('v1')->group(function () {
             */
 
             Route::get('shift-plans/overview', [ShiftPlanController::class, 'overview']);
+            Route::post('shift-plans/{id}/publish', [ShiftPlanController::class, 'publish']);
             Route::patch('shift-plans/{id}/status', [ShiftPlanController::class, 'updateStatus']);
             Route::apiResource('shift-plans', ShiftPlanController::class);
 
@@ -360,6 +362,18 @@ Route::prefix('v1')->group(function () {
                 Route::get('equipment', [EquipmentAllocationController::class, 'index']);
                 Route::post('equipment', [EquipmentAllocationController::class, 'allocate']);
                 Route::delete('equipment/{allocation_id}', [EquipmentAllocationController::class, 'destroy']);
+
+                /*
+                |--------------------------------------------------------------
+                | Workforce Deployment
+                |--------------------------------------------------------------
+                */
+                Route::post('workforce/load-relay', [WorkforceDeploymentController::class, 'loadRelay']);
+                Route::get('workforce/available-employees', [WorkforceDeploymentController::class, 'availableEmployees']);
+                Route::post('workforce/borrow', [WorkforceDeploymentController::class, 'borrow']);
+                Route::get('workforce/summary', [WorkforceDeploymentController::class, 'summary']);
+                Route::get('workforce', [WorkforceDeploymentController::class, 'index']);
+                Route::delete('workforce/{deployment_id}', [WorkforceDeploymentController::class, 'destroy']);
             });
         });
 });

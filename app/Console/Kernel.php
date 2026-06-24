@@ -8,8 +8,9 @@ use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 class Kernel extends ConsoleKernel
 {
     protected $commands = [
-    \App\Console\Commands\RotateShiftsCommand::class,
-];
+        \App\Console\Commands\RotateShiftsCommand::class,
+        \App\Console\Commands\RemoveExpiredBorrowedEmployeesCommand::class,
+    ];
     /**
      * Define the application's command schedule.
      *
@@ -20,6 +21,7 @@ class Kernel extends ConsoleKernel
     {
         // $schedule->command('inspire')->hourly();
         $schedule->command('roster:rotate')->sundays()->at('00:00');
+        $schedule->command('borrowed:cleanup')->everyMinute();
     }
 
     /**

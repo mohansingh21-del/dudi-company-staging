@@ -61,7 +61,7 @@ class ShiftController extends Controller
         if ($this->isShiftOverlapping($request->start_time, $request->end_time)) {
             return response()->json([
                 'status' => 422,
-                'message' => 'Shift timings overlap with an existing shift.'
+                'message' => 'Shift start time cannot be same as an existing shift.'
             ], 422);
         }
 
@@ -111,7 +111,7 @@ class ShiftController extends Controller
         if ($this->isShiftOverlapping($request->start_time, $request->end_time, $id)) {
             return response()->json([
                 'status' => 422,
-                'message' => 'Shift timings overlap with an existing shift.'
+                'message' => 'Shift start time cannot be same as an existing shift.'
             ], 422);
         }
 
@@ -218,47 +218,15 @@ class ShiftController extends Controller
 
     private function isShiftOverlapping($startTime, $endTime, $excludeId = null)
     {
-        $timeToMinutes = function ($time) {
-            $parts = explode(':', $time);
-            return intval($parts[0]) * 60 + intval($parts[1]);
-        };
+        $formattedStartTime = \Carbon\Carbon::parse($startTime)->format('H:i:00');
 
-        $getMinutesRange = function ($startStr, $endStr) use ($timeToMinutes) {
-            $start = $timeToMinutes($startStr);
-            $end = $timeToMinutes($endStr);
-            $minutes = [];
-            if ($start < $end) {
-                for ($m = $start; $m < $end; $m++) {
-                    $minutes[$m] = true;
-                }
-            } else {
-                for ($m = $start; $m < 1440; $m++) {
-                    $minutes[$m] = true;
-                }
-                for ($m = 0; $m < $end; $m++) {
-                    $minutes[$m] = true;
-                }
-            }
-            return $minutes;
-        };
+        $query = Shift::where('is_active', 1)
+            ->where('start_time', $formattedStartTime);
 
-        $newRange = $getMinutesRange($startTime, $endTime);
-
-        $query = Shift::where('is_active', 1);
         if ($excludeId !== null) {
             $query->where('id', '!=', $excludeId);
         }
-        $existingShifts = $query->get();
 
-        foreach ($existingShifts as $existingShift) {
-            $existingRange = $getMinutesRange($existingShift->start_time, $existingShift->end_time);
-            foreach ($newRange as $min => $val) {
-                if (isset($existingRange[$min])) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
+        return $query->exists();
     }
 }
