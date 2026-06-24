@@ -171,6 +171,20 @@ class ShiftPlanListPeriodFilterTest extends TestCase
         // Test Monthly filter: Should contain SP-TODAY but not SP-NEXT-MONTH or SP-NEXT-YEAR (unless month boundaries overlap)
         $responseMonthly = $this->getJson("/api/v1/admin/shift-plans?period=monthly&date={$today->format('Y-m-d')}");
         $responseMonthly->assertStatus(200);
+        $responseMonthly->assertJsonStructure([
+            'status',
+            'message',
+            'data',
+            'summary' => [
+                'total_scheduled_shifts',
+                'active_personnel',
+                'target_bcm',
+                'actual_bcm',
+                'current_efficiency',
+            ],
+            'pagination'
+        ]);
+
         $dataMonthly = $responseMonthly->json('data');
         // Let's assert that the reference number is SP-TODAY
         $refCodesMonthly = collect($dataMonthly)->pluck('reference_no')->toArray();
@@ -181,6 +195,20 @@ class ShiftPlanListPeriodFilterTest extends TestCase
         // Test Yearly filter: Should contain SP-TODAY and SP-NEXT-MONTH (if in the same year) but not SP-NEXT-YEAR
         $responseYearly = $this->getJson("/api/v1/admin/shift-plans?period=yearly&date={$today->format('Y-m-d')}");
         $responseYearly->assertStatus(200);
+        $responseYearly->assertJsonStructure([
+            'status',
+            'message',
+            'data',
+            'summary' => [
+                'total_scheduled_shifts',
+                'active_personnel',
+                'target_bcm',
+                'actual_bcm',
+                'current_efficiency',
+            ],
+            'pagination'
+        ]);
+
         $dataYearly = $responseYearly->json('data');
         $refCodesYearly = collect($dataYearly)->pluck('reference_no')->toArray();
         $this->assertContains('SP-TODAY', $refCodesYearly);

@@ -48,7 +48,7 @@ class UpdateShiftPlanRequest extends FormRequest
             'target_bcm' => 'sometimes|required|numeric|gt:0',
             'supervisor_id' => 'sometimes|required|exists:employees,id',
             'site_incharge_id' => 'sometimes|required|exists:employees,id',
-            'status' => 'sometimes|nullable|in:draft,published,planned,active,closed',
+            'status' => 'sometimes|nullable|in:draft,published,in_progress,planned,active,closed',
             'actual_bcm' => 'sometimes|nullable|numeric|min:0',
         ];
     }

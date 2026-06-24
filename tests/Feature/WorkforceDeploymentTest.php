@@ -197,7 +197,7 @@ class WorkforceDeploymentTest extends TestCase
 
         $shiftPlan = ShiftPlan::create([
             'planning_date' => $planningDate,
-            'shift_id' => $this->shiftA->id,
+            'shift_id' => $this->shiftB->id,
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
@@ -207,17 +207,17 @@ class WorkforceDeploymentTest extends TestCase
             'reference_no' => 'SP-TEST-001'
         ]);
 
-        // Employee 1 on Shift A
+        // Employee 1 on Shift B
         EmployeeShiftAssignment::create([
             'employee_id' => $this->employee1->id,
-            'shift_id' => $this->shiftA->id,
+            'shift_id' => $this->shiftB->id,
             'from_date' => $planningDate
         ]);
 
-        // Employee 2 on Shift B
+        // Employee 2 on Shift A
         EmployeeShiftAssignment::create([
             'employee_id' => $this->employee2->id,
-            'shift_id' => $this->shiftB->id,
+            'shift_id' => $this->shiftA->id,
             'from_date' => $planningDate
         ]);
 
@@ -226,7 +226,7 @@ class WorkforceDeploymentTest extends TestCase
 
         $response->assertStatus(200);
         
-        // Should only show employee2 (since they are assigned to Shift B, which is != Shift A)
+        // Should only show employee2 (since they are assigned to Shift A, which is != Shift B)
         // Should not show employee1 (same shift) or employee3 (inactive)
         $response->assertJsonCount(1, 'data');
         $this->assertEquals($this->employee2->id, $response->json('data.0.employee_id'));
@@ -238,39 +238,39 @@ class WorkforceDeploymentTest extends TestCase
 
         $shiftPlan = ShiftPlan::create([
             'planning_date' => $planningDate,
-            'shift_id' => $this->shiftA->id,
+            'shift_id' => $this->shiftB->id,
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
             'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
-            'status' => 'active',
+            'status' => 'planned',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
         ]);
 
-        // Employee 1 on Shift A
+        // Employee 1 on Shift B
         EmployeeShiftAssignment::create([
             'employee_id' => $this->employee1->id,
-            'shift_id' => $this->shiftA->id,
-            'from_date' => $planningDate
-        ]);
-
-        // Employee 2 on Shift B
-        EmployeeShiftAssignment::create([
-            'employee_id' => $this->employee2->id,
             'shift_id' => $this->shiftB->id,
             'from_date' => $planningDate
         ]);
 
+        // Employee 2 on Shift A
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee2->id,
+            'shift_id' => $this->shiftA->id,
+            'from_date' => $planningDate
+        ]);
+
         // GET /available-employees?shift_id=X
-        // Filter by Shift B
-        $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/available-employees?shift_id={$this->shiftB->id}");
+        // Filter by Shift A
+        $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/available-employees?shift_id={$this->shiftA->id}");
         $response->assertStatus(200);
         $response->assertJsonCount(1, 'data');
         $this->assertEquals($this->employee2->id, $response->json('data.0.employee_id'));
 
-        // Filter by Shift A (even though current shift plan is Shift A)
-        $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/available-employees?shift_id={$this->shiftA->id}");
+        // Filter by Shift B (even though current shift plan is Shift B)
+        $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/available-employees?shift_id={$this->shiftB->id}");
         $response->assertStatus(200);
         $response->assertJsonCount(1, 'data');
         $this->assertEquals($this->employee1->id, $response->json('data.0.employee_id'));
@@ -282,7 +282,7 @@ class WorkforceDeploymentTest extends TestCase
 
         $shiftPlan = ShiftPlan::create([
             'planning_date' => $planningDate,
-            'shift_id' => $this->shiftA->id,
+            'shift_id' => $this->shiftB->id,
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
@@ -292,10 +292,10 @@ class WorkforceDeploymentTest extends TestCase
             'reference_no' => 'SP-TEST-001'
         ]);
 
-        // Employee 2 on Shift B
+        // Employee 2 on Shift A
         EmployeeShiftAssignment::create([
             'employee_id' => $this->employee2->id,
-            'shift_id' => $this->shiftB->id,
+            'shift_id' => $this->shiftA->id,
             'from_date' => $planningDate
         ]);
 
@@ -552,19 +552,19 @@ class WorkforceDeploymentTest extends TestCase
     {
         $planningDate = '2026-06-23';
 
-        // 1. Assign Employee 1 and Employee 2 to Shift A
+        // 1. Assign Employee 1 and Employee 2 to Shift B
         EmployeeShiftAssignment::create([
             'employee_id' => $this->employee1->id,
-            'shift_id' => $this->shiftA->id,
+            'shift_id' => $this->shiftB->id,
             'from_date' => $planningDate
         ]);
         EmployeeShiftAssignment::create([
             'employee_id' => $this->employee2->id,
-            'shift_id' => $this->shiftA->id,
+            'shift_id' => $this->shiftB->id,
             'from_date' => $planningDate
         ]);
 
-        // 2. Create Employee 4 (active) and assign to Shift B (available for borrowing)
+        // 2. Create Employee 4 (active) and assign to Shift A (available for borrowing)
         $employee4 = Employee::create([
             'employee_code' => 'EMP-004',
             'name' => 'Gaurav Rawat',
@@ -576,7 +576,7 @@ class WorkforceDeploymentTest extends TestCase
 
         EmployeeShiftAssignment::create([
             'employee_id' => $employee4->id,
-            'shift_id' => $this->shiftB->id,
+            'shift_id' => $this->shiftA->id,
             'from_date' => $planningDate
         ]);
 
@@ -590,10 +590,10 @@ class WorkforceDeploymentTest extends TestCase
             'reason' => 'Sick leave'
         ]);
 
-        // 4. Create Shift Plan for Shift A
+        // 4. Create Shift Plan for Shift B
         $shiftPlan = ShiftPlan::create([
             'planning_date' => $planningDate,
-            'shift_id' => $this->shiftA->id,
+            'shift_id' => $this->shiftB->id,
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
@@ -702,5 +702,86 @@ class WorkforceDeploymentTest extends TestCase
         $response2->assertJsonCount(0, 'data');
         $this->assertEquals(0, $response2->json('stats.present'));
         $this->assertEquals(1, $response2->json('stats.leave'));
+    }
+
+    public function test_cannot_borrow_from_active_shift_plan()
+    {
+        $planningDate = '2026-06-23';
+
+        // Target shift plan (Shift B)
+        $targetPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shiftB->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'planned',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TARGET'
+        ]);
+
+        // Home shift plan (Shift A) - Active (working phase)
+        $homePlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shiftA->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-HOME'
+        ]);
+
+        // Employee 2 assigned to Shift A
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee2->id,
+            'shift_id' => $this->shiftA->id,
+            'from_date' => $planningDate
+        ]);
+
+        // Try to borrow from active shift plan
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$targetPlan->id}/workforce/borrow", [
+            'employee_ids' => [$this->employee2->id],
+            'borrowing_reason' => 'Test active'
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonFragment(['message' => 'Cannot borrow employees from a shift that is already in the working phase.']);
+    }
+
+    public function test_cannot_borrow_from_shift_b_if_target_starts_before_b()
+    {
+        $planningDate = '2026-06-23';
+
+        // Target shift plan (Shift A starts at 08:00:00)
+        $targetPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shiftA->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'planned',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TARGET'
+        ]);
+
+        // Employee 2 assigned to Shift B (starts at 16:00:00)
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee2->id,
+            'shift_id' => $this->shiftB->id,
+            'from_date' => $planningDate
+        ]);
+
+        // Try to borrow from Shift B into Shift A (target starts before selected)
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$targetPlan->id}/workforce/borrow", [
+            'employee_ids' => [$this->employee2->id],
+            'borrowing_reason' => 'Test shift B time limit'
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonFragment(['message' => 'Cannot borrow employees from B when the target shift starts before B.']);
     }
 }

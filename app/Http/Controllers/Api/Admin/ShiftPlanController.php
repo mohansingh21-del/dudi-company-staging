@@ -74,7 +74,7 @@ class ShiftPlanController extends Controller
     public function index(Request $request)
     {
         try {
-            $filters = $request->only(['date', 'period', 'shift_id', 'site_id', 'status', 'search', 'limit']);
+            $filters = $request->only(['date', 'period', 'shift_id', 'site_id', 'status', 'search', 'limit', 'start_date', 'end_date']);
             $result = $this->service->listShiftPlans($filters);
 
             $paginated = $result['data'];
@@ -83,6 +83,7 @@ class ShiftPlanController extends Controller
                 'status' => 200,
                 'message' => $result['message'],
                 'data' => ShiftPlanResource::collection($paginated->items()),
+                'summary' => $result['summary'] ?? null,
                 'pagination' => [
                     'current_page' => $paginated->currentPage(),
                     'last_page' => $paginated->lastPage(),
@@ -109,6 +110,14 @@ class ShiftPlanController extends Controller
     {
         try {
             $result = $this->service->saveShiftPlan($request->validated());
+ 
+            if ($result['status'] === 422) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $result['message'],
+                    'data' => null,
+                ], 422);
+            }
 
             return response()->json([
                 'status' => 201,
@@ -163,7 +172,7 @@ class ShiftPlanController extends Controller
     {
         try {
             $result = $this->service->saveShiftPlan($request->validated(), $id);
-
+ 
             if ($result['status'] === 404) {
                 return response()->json([
                     'status' => 404,
@@ -172,6 +181,14 @@ class ShiftPlanController extends Controller
                 ], 404);
             }
 
+            if ($result['status'] === 422) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $result['message'],
+                    'data' => null,
+                ], 422);
+            }
+ 
             return response()->json([
                 'status' => 200,
                 'message' => $result['message'],
@@ -225,7 +242,7 @@ class ShiftPlanController extends Controller
     {
         try {
             $request->validate([
-                'status' => 'required|in:draft,published,planned,active,closed',
+                'status' => 'required|in:draft,published,in_progress,planned,active,closed',
             ]);
 
             $result = $this->service->updateStatus($id, $request->status);
@@ -249,25 +266,6 @@ class ShiftPlanController extends Controller
                 'message' => 'Validation failed',
                 'errors' => $e->errors()
             ], 422);
-        } catch (\Throwable $th) {
-            return response()->json([
-                'status' => 500,
-                'message' => $th->getMessage(),
-                'data' => [],
-            ], 500);
-        }
-    }
-
-    /**
-     * GET /admin/shift-plans/{id}/validate-publish
-     * Runs validation checks for publishing a shift plan.
-     */
-    public function validatePublish($id)
-    {
-        try {
-            $result = $this->service->validatePublish($id);
-
-            return response()->json($result, $result['status']);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,

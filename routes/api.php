@@ -347,7 +347,6 @@ Route::prefix('v1')->group(function () {
             */
 
             Route::get('shift-plans/overview', [ShiftPlanController::class, 'overview']);
-            Route::get('shift-plans/{id}/validate-publish', [ShiftPlanController::class, 'validatePublish']);
             Route::post('shift-plans/{id}/publish', [ShiftPlanController::class, 'publish']);
             Route::patch('shift-plans/{id}/status', [ShiftPlanController::class, 'updateStatus']);
             Route::apiResource('shift-plans', ShiftPlanController::class);

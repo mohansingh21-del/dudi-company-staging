@@ -25,13 +25,13 @@ class WorkforceDeploymentService
      */
     public function loadRelayWorkforce($shiftPlanId, $relayShift = null, $limit = 15)
     {
-        $shiftPlan = ShiftPlan::find($shiftPlanId);
+        $shiftPlan = ShiftPlan::with('shift')->find($shiftPlanId);
 
         if (!$shiftPlan) {
             return [
-                'status'  => 404,
+                'status' => 404,
                 'message' => 'Shift Plan not found.',
-                'data'    => [],
+                'data' => [],
             ];
         }
 
@@ -87,13 +87,7 @@ class WorkforceDeploymentService
         $newDeployments = [];
         $userId = Auth::id();
 
-        DB::transaction(function () use (
-            $employees,
-            $shiftPlanId,
-            $skipIds,
-            $userId,
-            &$newDeployments
-        ) {
+        DB::transaction(function () use ($employees, $shiftPlanId, $skipIds, $userId, &$newDeployments) {
             foreach ($employees as $employee) {
                 // Idempotent: skip if already deployed or previously removed
                 if (in_array($employee->id, $skipIds)) {
@@ -109,12 +103,12 @@ class WorkforceDeploymentService
 
                 $deployment = ShiftWorkforceDeployment::create([
                     'shift_plan_id' => $shiftPlanId,
-                    'employee_id'   => $employee->id,
-                    'relay_shift'   => $employee->relay_shift,
-                    'designation'   => $designationName,
-                    'is_borrowed'   => false,
-                    'deployed_by'   => $userId,
-                    'status'        => 'active',
+                    'employee_id' => $employee->id,
+                    'relay_shift' => $employee->relay_shift,
+                    'designation' => $designationName,
+                    'is_borrowed' => false,
+                    'deployed_by' => $userId,
+                    'status' => 'active',
                 ]);
 
                 $newDeployments[] = $deployment;
@@ -130,12 +124,12 @@ class WorkforceDeploymentService
         $listResult = $this->getWorkforceList($shiftPlanId, $limit);
 
         return [
-            'status'     => 200,
-            'message'    => count($newDeployments) > 0
+            'status' => 200,
+            'message' => count($newDeployments) > 0
                 ? count($newDeployments) . ' employee(s) deployed successfully.'
                 : 'All eligible employees are already deployed.',
-            'data'       => $listResult['data'],
-            'stats'      => $listResult['stats'],
+            'data' => $listResult['data'],
+            'stats' => $listResult['stats'],
             'pagination' => $listResult['pagination'],
         ];
     }
@@ -151,44 +145,58 @@ class WorkforceDeploymentService
      */
     public function getAvailableEmployeesForBorrowing($shiftPlanId, $search = null, $shiftId = null)
     {
-        $shiftPlan = ShiftPlan::find($shiftPlanId);
- 
+        $shiftPlan = ShiftPlan::with('shift')->find($shiftPlanId);
+
         if (!$shiftPlan) {
             return [
-                'status'  => 404,
+                'status' => 404,
                 'message' => 'Shift Plan not found.',
-                'data'    => [],
+                'data' => [],
             ];
         }
- 
+
         $planningDate = $shiftPlan->planning_date->format('Y-m-d');
- 
+
+        if ($shiftId) {
+            $selectedShift = \App\Models\Shift::find($shiftId);
+            if ($selectedShift) {
+                $validationError = $this->validateBorrowingFromShift($selectedShift, $shiftPlan);
+                if ($validationError) {
+                    return [
+                        'status' => 422,
+                        'message' => $validationError,
+                        'data' => [],
+                    ];
+                }
+            }
+        }
+
         // Find all shift_plan IDs for the same date
         $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
             ->pluck('id')
             ->toArray();
- 
+
         // Find employee IDs that are already actively deployed on any shift for this date
         $deployedEmployeeIds = ShiftWorkforceDeployment::whereIn('shift_plan_id', $sameDatePlanIds)
             ->active()
             ->pluck('employee_id')
             ->toArray();
- 
+
         // Fetch employee IDs who are on approved leave on this planning date
         $onLeaveEmployeeIds = \App\Models\Leave::where('status', 'approved')
             ->whereDate('from_date', '<=', $planningDate)
             ->whereDate('to_date', '>=', $planningDate)
             ->pluck('employee_id')
             ->toArray();
- 
+
         // Fetch employee IDs who are marked as absent, leave, or rest_day in processed attendance
         $absentEmployeeIds = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)
             ->whereIn('attendance_status', ['absent', 'leave', 'rest_day'])
             ->pluck('employee_id')
             ->toArray();
- 
+
         $unavailableEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
- 
+
         // Query available employees assigned to OTHER shifts on this date (excluding leave/absent/already deployed)
         $query = Employee::where('is_active', true)
             ->whereNotIn('id', $unavailableEmployeeIds)
@@ -210,11 +218,30 @@ class WorkforceDeploymentService
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'LIKE', "%{$search}%")
-                  ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                    ->orWhere('employee_code', 'LIKE', "%{$search}%");
             });
         }
 
         $employees = $query->get();
+
+        // Exclude employees whose home shift is invalid for borrowing
+        $employees = $employees->filter(function ($emp) use ($shiftPlan) {
+            $planningDate = $shiftPlan->planning_date->format('Y-m-d');
+            $activeAssignment = $emp->shiftAssignments
+                ->filter(function ($assignment) use ($planningDate) {
+                    return $assignment->from_date <= $planningDate
+                        && (is_null($assignment->to_date) || $assignment->to_date >= $planningDate);
+                })
+                ->first();
+
+            if ($activeAssignment && $activeAssignment->shift) {
+                $validationError = $this->validateBorrowingFromShift($activeAssignment->shift, $shiftPlan);
+                if ($validationError) {
+                    return false;
+                }
+            }
+            return true;
+        });
 
         $result = $employees->map(function ($emp) use ($planningDate) {
             $designationName = null;
@@ -225,7 +252,7 @@ class WorkforceDeploymentService
             // Find their home shift assignment on this date to get their original shift name
             $activeAssignment = $emp->shiftAssignments
                 ->filter(function ($assignment) use ($planningDate) {
-                    return $assignment->from_date <= $planningDate 
+                    return $assignment->from_date <= $planningDate
                         && (is_null($assignment->to_date) || $assignment->to_date >= $planningDate);
                 })
                 ->first();
@@ -235,20 +262,20 @@ class WorkforceDeploymentService
                 : null;
 
             return [
-                'employee_id'         => $emp->id,
-                'employee_code'       => $emp->employee_code,
-                'employee_name'       => $emp->name,
-                'home_relay_shift'    => $emp->relay_shift,
-                'shift_name'          => $shiftName, // The original shift name they are assigned to
-                'designation'         => $designationName,
+                'employee_id' => $emp->id,
+                'employee_code' => $emp->employee_code,
+                'employee_name' => $emp->name,
+                'home_relay_shift' => $emp->relay_shift,
+                'shift_name' => $shiftName, // The original shift name they are assigned to
+                'designation' => $designationName,
                 'availability_status' => 'Available',
             ];
         });
 
         return [
-            'status'  => 200,
+            'status' => 200,
             'message' => 'Available employees fetched successfully.',
-            'data'    => $result->values(),
+            'data' => $result->values(),
         ];
     }
 
@@ -266,13 +293,13 @@ class WorkforceDeploymentService
      */
     public function borrowEmployees($shiftPlanId, array $employeeIds, $reason, $userId, $limit = 15)
     {
-        $shiftPlan = ShiftPlan::find($shiftPlanId);
+        $shiftPlan = ShiftPlan::with('shift')->find($shiftPlanId);
 
         if (!$shiftPlan) {
             return [
-                'status'  => 404,
+                'status' => 404,
                 'message' => 'Shift Plan not found.',
-                'data'    => null,
+                'data' => null,
             ];
         }
 
@@ -309,8 +336,8 @@ class WorkforceDeploymentService
 
         $unavailableEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
 
-        // Pre-fetch all requested employees with designation (single query)
-        $employees = Employee::with('designation')
+        // Pre-fetch all requested employees with designation and shift assignments (single query)
+        $employees = Employee::with(['designation', 'shiftAssignments.shift'])
             ->whereIn('id', $employeeIds)
             ->get()
             ->keyBy('id');
@@ -318,20 +345,7 @@ class WorkforceDeploymentService
         $deployments = [];
         $errors = [];
 
-        DB::transaction(function () use (
-            $employeeIds,
-            $employees,
-            $alreadyDeployedIds,
-            $existingDeployments,
-            $unavailableEmployeeIds,
-            $onLeaveEmployeeIds,
-            $absentRecords,
-            $shiftPlanId,
-            $reason,
-            $userId,
-            &$deployments,
-            &$errors
-        ) {
+        DB::transaction(function () use ($employeeIds, $employees, $alreadyDeployedIds, $existingDeployments, $unavailableEmployeeIds, $onLeaveEmployeeIds, $absentRecords, $shiftPlanId, $reason, $userId, $planningDate, $shiftPlan, &$deployments, &$errors) {
             foreach ($employeeIds as $employeeId) {
                 $employee = isset($employees[$employeeId]) ? $employees[$employeeId] : null;
 
@@ -339,7 +353,7 @@ class WorkforceDeploymentService
                 if (!$employee) {
                     $errors[] = [
                         'employee_id' => $employeeId,
-                        'message'     => 'Employee not found.',
+                        'message' => 'Employee not found.',
                     ];
                     continue;
                 }
@@ -364,7 +378,7 @@ class WorkforceDeploymentService
                         'employee_id' => $employeeId,
                         'employee_code' => $employee->employee_code,
                         'employee_name' => $employee->name,
-                        'message'     => $reasonMessage,
+                        'message' => $reasonMessage,
                     ];
                     continue;
                 }
@@ -380,9 +394,33 @@ class WorkforceDeploymentService
                         'employee_id' => $employeeId,
                         'employee_code' => $employee->employee_code,
                         'employee_name' => $employee->name,
-                        'message'     => 'Employee Already Assigned To Shift: ' . $assignedShiftName,
+                        'message' => 'Employee Already Assigned To Shift: ' . $assignedShiftName,
                     ];
                     continue;
+                }
+
+                // Check if home shift is invalid for borrowing
+                $activeAssignment = null;
+                if ($employee && $employee->relationLoaded('shiftAssignments')) {
+                    $activeAssignment = $employee->shiftAssignments
+                        ->filter(function ($assignment) use ($planningDate) {
+                            return $assignment->from_date <= $planningDate
+                                && (is_null($assignment->to_date) || $assignment->to_date >= $planningDate);
+                        })
+                        ->first();
+                }
+
+                if ($activeAssignment && $activeAssignment->shift) {
+                    $validationError = $this->validateBorrowingFromShift($activeAssignment->shift, $shiftPlan);
+                    if ($validationError) {
+                        $errors[] = [
+                            'employee_id' => $employeeId,
+                            'employee_code' => $employee->employee_code,
+                            'employee_name' => $employee->name,
+                            'message' => $validationError,
+                        ];
+                        continue;
+                    }
                 }
 
                 // Resolve designation name
@@ -392,17 +430,17 @@ class WorkforceDeploymentService
                 }
 
                 $deployment = ShiftWorkforceDeployment::create([
-                    'shift_plan_id'    => $shiftPlanId,
-                    'employee_id'      => $employee->id,
-                    'relay_shift'      => $employee->relay_shift,
+                    'shift_plan_id' => $shiftPlanId,
+                    'employee_id' => $employee->id,
+                    'relay_shift' => $employee->relay_shift,
                     'home_relay_shift' => $employee->relay_shift,
-                    'designation'      => $designationName,
-                    'is_borrowed'      => true,
+                    'designation' => $designationName,
+                    'is_borrowed' => true,
                     'borrowing_reason' => $reason,
-                    'borrowed_by'      => $userId,
-                    'borrowed_at'      => now(),
-                    'deployed_by'      => $userId,
-                    'status'           => 'active',
+                    'borrowed_by' => $userId,
+                    'borrowed_at' => now(),
+                    'deployed_by' => $userId,
+                    'status' => 'active',
                 ]);
 
                 $deployments[] = $deployment;
@@ -415,16 +453,17 @@ class WorkforceDeploymentService
         // If ALL failed, return 422
         if (empty($deployments) && !empty($errors)) {
             return [
-                'status'  => 422,
+                'status' => 422,
                 'message' => count($errors) === 1
                     ? $errors[0]['message']
                     : count($errors) . ' employee(s) could not be borrowed.',
-                'data'    => ['errors' => $errors],
+                'data' => ['errors' => $errors],
             ];
         }
 
         // Reload with relationships
-        $deploymentIds = array_map(function ($d) { return $d->id; }, $deployments);
+        $deploymentIds = array_map(function ($d) {
+            return $d->id; }, $deployments);
 
         $loaded = ShiftWorkforceDeployment::whereIn('id', $deploymentIds)
             ->with(['employee', 'employee.designation', 'employee.shiftAssignments.shift', 'assignedMachine.equipmentName'])
@@ -440,11 +479,11 @@ class WorkforceDeploymentService
         $listResult = $this->getWorkforceList($shiftPlanId, $limit);
 
         return [
-            'status'     => 201,
-            'message'    => $message,
-            'data'       => $listResult['data'],
-            'errors'     => $errors,
-            'stats'      => $listResult['stats'],
+            'status' => 201,
+            'message' => $message,
+            'data' => $listResult['data'],
+            'errors' => $errors,
+            'stats' => $listResult['stats'],
             'pagination' => $listResult['pagination'],
         ];
     }
@@ -462,34 +501,34 @@ class WorkforceDeploymentService
 
         if (!$deployment) {
             return [
-                'status'  => 404,
+                'status' => 404,
                 'message' => 'Deployment not found.',
-                'data'    => null,
+                'data' => null,
             ];
         }
 
         if ($deployment->status === 'removed') {
             return [
-                'status'  => 422,
+                'status' => 422,
                 'message' => 'Deployment has already been removed.',
-                'data'    => null,
+                'data' => null,
             ];
         }
 
         $shiftPlan = $deployment->shiftPlan;
 
         $deployment->update([
-            'status'         => 'removed',
+            'status' => 'removed',
             'removed_reason' => $reason,
         ]);
 
         $listResult = $this->getWorkforceList($shiftPlan->id, $limit);
 
         return [
-            'status'     => 200,
-            'message'    => 'Deployment removed successfully.',
-            'data'       => $listResult['data'],
-            'stats'      => $listResult['stats'],
+            'status' => 200,
+            'message' => 'Deployment removed successfully.',
+            'data' => $listResult['data'],
+            'stats' => $listResult['stats'],
             'pagination' => $listResult['pagination'],
         ];
     }
@@ -507,9 +546,9 @@ class WorkforceDeploymentService
 
         if (!$shiftPlan) {
             return [
-                'status'  => 404,
+                'status' => 404,
                 'message' => 'Shift Plan not found.',
-                'data'    => null,
+                'data' => null,
             ];
         }
 
@@ -526,17 +565,17 @@ class WorkforceDeploymentService
             ->active()
             ->whereNotIn('employee_id', $onLeaveEmployeeIds);
 
-        $totalDeployed  = (clone $baseQuery)->count();
-        $regularCount   = (clone $baseQuery)->regular()->count();
-        $borrowedCount  = (clone $baseQuery)->borrowed()->count();
+        $totalDeployed = (clone $baseQuery)->count();
+        $regularCount = (clone $baseQuery)->regular()->count();
+        $borrowedCount = (clone $baseQuery)->borrowed()->count();
 
         return [
-            'status'  => 200,
+            'status' => 200,
             'message' => 'Workforce summary fetched successfully.',
-            'data'    => [
-                'total_deployed'  => $totalDeployed,
-                'regular_count'   => $regularCount,
-                'borrowed_count'  => $borrowedCount,
+            'data' => [
+                'total_deployed' => $totalDeployed,
+                'regular_count' => $regularCount,
+                'borrowed_count' => $borrowedCount,
             ],
         ];
     }
@@ -555,9 +594,9 @@ class WorkforceDeploymentService
 
         if (!$shiftPlan) {
             return [
-                'status'  => 404,
+                'status' => 404,
                 'message' => 'Shift Plan not found.',
-                'data'    => null,
+                'data' => null,
             ];
         }
 
@@ -587,19 +626,59 @@ class WorkforceDeploymentService
             ->paginate($limit);
 
         return [
-            'status'  => 200,
+            'status' => 200,
             'message' => 'Workforce list fetched successfully.',
-            'data'    => $this->formatDeployments($paginated->items(), $shiftPlan),
-            'stats'   => $stats,
+            'data' => $this->formatDeployments($paginated->items(), $shiftPlan),
+            'stats' => $stats,
             'pagination' => [
                 'current_page' => $paginated->currentPage(),
-                'last_page'    => $paginated->lastPage(),
-                'per_page'     => $paginated->perPage(),
-                'total'        => $paginated->total(),
-                'from'         => $paginated->firstItem(),
-                'to'           => $paginated->lastItem(),
+                'last_page' => $paginated->lastPage(),
+                'per_page' => $paginated->perPage(),
+                'total' => $paginated->total(),
+                'from' => $paginated->firstItem(),
+                'to' => $paginated->lastItem(),
             ],
         ];
+    }
+
+    /**
+     * Validate if borrowing from a shift is allowed.
+     *
+     * @param  \App\Models\Shift  $homeShift
+     * @param  \App\Models\ShiftPlan  $targetShiftPlan
+     * @return string|null
+     */
+    private function validateBorrowingFromShift($homeShift, $targetShiftPlan)
+    {
+        if (!$homeShift) {
+            return null;
+        }
+
+        $planningDate = $targetShiftPlan->planning_date->format('Y-m-d');
+
+        // Check if the home shift has any plan on this date (any status)
+        $homeShiftPlan = ShiftPlan::where('shift_id', $homeShift->id)
+            ->whereDate('planning_date', $planningDate)
+            ->first();
+
+        // If the home shift is NOT planned for this date, employees are free — allow borrowing
+        if (!$homeShiftPlan) {
+            return null;
+        }
+
+        // 1. Check if the home shift plan is already in working phase (status is 'active')
+        if ($homeShiftPlan->status === 'active') {
+            return 'Cannot borrow employees from a shift that is already in the working phase.';
+        }
+
+        // 2. Block if the home shift starts at or before the target shift
+        //    (those employees are needed for their own planned shift)
+        $targetShift = $targetShiftPlan->shift;
+        if ($targetShift && $homeShift->start_time <= $targetShift->start_time) {
+            return "Cannot borrow employees from {$homeShift->shift_name} — it starts at or before {$targetShift->shift_name}.";
+        }
+
+        return null;
     }
 
     /**
@@ -612,7 +691,7 @@ class WorkforceDeploymentService
 
         return collect($deployments)->map(function ($dep) use ($planningDate, $shiftName) {
             $employee = $dep->employee;
-            $machine  = $dep->assignedMachine;
+            $machine = $dep->assignedMachine;
 
             $designationName = null;
             if ($employee && $employee->designation) {
@@ -629,30 +708,30 @@ class WorkforceDeploymentService
             if ($employee && $employee->relationLoaded('shiftAssignments')) {
                 $activeAssignment = $employee->shiftAssignments
                     ->filter(function ($assignment) use ($planningDate) {
-                        return $assignment->from_date <= $planningDate 
+                        return $assignment->from_date <= $planningDate
                             && (is_null($assignment->to_date) || $assignment->to_date >= $planningDate);
                     })
                     ->first();
             }
 
-            $homeShiftName = ($activeAssignment && $activeAssignment->shift) 
-                ? $activeAssignment->shift->shift_name 
+            $homeShiftName = ($activeAssignment && $activeAssignment->shift)
+                ? $activeAssignment->shift->shift_name
                 : null;
 
             return [
-                'id'                => $dep->id,
-                'employee_id'       => $dep->employee_id,
-                'employee_name'     => $employee ? $employee->name : null,
-                'employee_code'     => $employee ? $employee->employee_code : null,
-                'designation'       => $dep->designation ? $dep->designation : $designationName,
-                'relay_shift'       => $dep->relay_shift,
-                'shift_name'        => $shiftName, // The shift of the current shift plan
-                'home_shift_name'   => $homeShiftName, // The home shift of the employee on this date
-                'assigned_machine'  => $machineName,
-                'is_borrowed'       => (bool) $dep->is_borrowed,
-                'home_relay_shift'  => $dep->home_relay_shift,
-                'borrowing_reason'  => $dep->borrowing_reason,
-                'status'            => $dep->status,
+                'id' => $dep->id,
+                'employee_id' => $dep->employee_id,
+                'employee_name' => $employee ? $employee->name : null,
+                'employee_code' => $employee ? $employee->employee_code : null,
+                'designation' => $dep->designation ? $dep->designation : $designationName,
+                'relay_shift' => $dep->relay_shift,
+                'shift_name' => $shiftName, // The shift of the current shift plan
+                'home_shift_name' => $homeShiftName, // The home shift of the employee on this date
+                'assigned_machine' => $machineName,
+                'is_borrowed' => (bool) $dep->is_borrowed,
+                'home_relay_shift' => $dep->home_relay_shift,
+                'borrowing_reason' => $dep->borrowing_reason,
+                'status' => $dep->status,
             ];
         })->values()->all();
     }
@@ -705,9 +784,9 @@ class WorkforceDeploymentService
             ->count();
 
         return [
-            'planned'  => $plannedCount,
-            'present'  => $presentCount,
-            'leave'    => $onLeaveCount,
+            'planned' => $plannedCount,
+            'present' => $presentCount,
+            'leave' => $onLeaveCount,
             'borrowed' => $borrowedCount,
         ];
     }

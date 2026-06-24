@@ -57,7 +57,7 @@ class EquipmentAllocationService
         }
 
         // Validate shift plan exists
-        $shiftPlan = ShiftPlan::find($shiftPlanId);
+        $shiftPlan = ShiftPlan::with('shift')->find($shiftPlanId);
         if (!$shiftPlan) {
             return [
                 'status' => 404,
@@ -76,10 +76,44 @@ class EquipmentAllocationService
             ];
         }
 
-        // IDs of machines already allocated to non-closed shifts
-        $allocatedMachineIds = ShiftEquipmentAllocation::whereHas('shiftPlan', function ($query) {
-            $query->notClosed();
-        })->pluck('equipment_name_id')->toArray();
+        // Calculate target range
+        $planningDate = Carbon::parse($shiftPlan->planning_date);
+        $startTime = $shiftPlan->shift->start_time;
+        $endTime = $shiftPlan->shift->end_time;
+
+        $targetStart = Carbon::parse($planningDate->format('Y-m-d') . ' ' . $startTime);
+        $targetEnd = Carbon::parse($planningDate->format('Y-m-d') . ' ' . $endTime);
+        if (Carbon::parse($startTime)->greaterThanOrEqualTo(Carbon::parse($endTime))) {
+            $targetEnd->addDay();
+        }
+
+        // Fetch all other non-closed shift plans
+        $nonClosedPlans = ShiftPlan::with('shift')
+            ->where('id', '!=', $shiftPlanId)
+            ->notClosed()
+            ->get();
+
+        $overlappingPlanIds = [];
+        foreach ($nonClosedPlans as $plan) {
+            $planDate = Carbon::parse($plan->planning_date);
+            $pStart = $plan->shift->start_time;
+            $pEnd = $plan->shift->end_time;
+
+            $planStart = Carbon::parse($planDate->format('Y-m-d') . ' ' . $pStart);
+            $planEnd = Carbon::parse($planDate->format('Y-m-d') . ' ' . $pEnd);
+            if (Carbon::parse($pStart)->greaterThanOrEqualTo(Carbon::parse($pEnd))) {
+                $planEnd->addDay();
+            }
+
+            if ($targetStart->lessThan($planEnd) && $planStart->lessThan($targetEnd)) {
+                $overlappingPlanIds[] = $plan->id;
+            }
+        }
+
+        // IDs of machines already allocated to overlapping non-closed shifts
+        $allocatedMachineIds = ShiftEquipmentAllocation::whereIn('shift_plan_id', $overlappingPlanIds)
+            ->pluck('equipment_name_id')
+            ->toArray();
 
         // Active machines of requested category, not already allocated
         $machines = EquipmentName::with('equipment')
@@ -117,7 +151,7 @@ class EquipmentAllocationService
     public function allocate($shiftPlanId, array $data)
     {
         // Validate shift plan exists
-        $shiftPlan = ShiftPlan::find($shiftPlanId);
+        $shiftPlan = ShiftPlan::with('shift')->find($shiftPlanId);
         if (!$shiftPlan) {
             return [
                 'status' => 404,
@@ -125,6 +159,8 @@ class EquipmentAllocationService
                 'data' => [],
             ];
         }
+
+
 
         // Precondition: Shift exists in Draft Status
         if ($shiftPlan->status !== 'draft') {
@@ -157,24 +193,58 @@ class EquipmentAllocationService
             ];
         }
 
+        // Check if machine is already allocated to this specific shift plan
+        $alreadyAllocatedHere = ShiftEquipmentAllocation::where('shift_plan_id', $shiftPlanId)
+            ->where('equipment_name_id', $machineId)
+            ->exists();
 
+        if ($alreadyAllocatedHere) {
+            return [
+                'status' => 409,
+                'message' => 'Machine Already Allocated To This Shift.',
+                'data' => [],
+            ];
+        }
 
-        // Check if machine is already allocated to another active (non-closed) shift
-        $existingAllocation = ShiftEquipmentAllocation::where('equipment_name_id', $machineId)
-            ->whereHas('shiftPlan', function ($query) {
-                $query->notClosed();
-            })
-            ->first();
+        // Calculate target range
+        $planningDate = Carbon::parse($shiftPlan->planning_date);
+        $startTime = $shiftPlan->shift->start_time;
+        $endTime = $shiftPlan->shift->end_time;
 
-        if ($existingAllocation) {
-            if ($existingAllocation->shift_plan_id == $shiftPlanId) {
-                return [
-                    'status' => 409,
-                    'message' => 'Machine Already Allocated To This Shift.',
-                    'data' => [],
-                ];
+        $targetStart = Carbon::parse($planningDate->format('Y-m-d') . ' ' . $startTime);
+        $targetEnd = Carbon::parse($planningDate->format('Y-m-d') . ' ' . $endTime);
+        if (Carbon::parse($startTime)->greaterThanOrEqualTo(Carbon::parse($endTime))) {
+            $targetEnd->addDay();
+        }
+
+        // Fetch all other non-closed shift plans
+        $nonClosedPlans = ShiftPlan::with('shift')
+            ->where('id', '!=', $shiftPlanId)
+            ->notClosed()
+            ->get();
+
+        $overlappingPlanIds = [];
+        foreach ($nonClosedPlans as $plan) {
+            $planDate = Carbon::parse($plan->planning_date);
+            $pStart = $plan->shift->start_time;
+            $pEnd = $plan->shift->end_time;
+
+            $planStart = Carbon::parse($planDate->format('Y-m-d') . ' ' . $pStart);
+            $planEnd = Carbon::parse($planDate->format('Y-m-d') . ' ' . $pEnd);
+            if (Carbon::parse($pStart)->greaterThanOrEqualTo(Carbon::parse($pEnd))) {
+                $planEnd->addDay();
             }
 
+            if ($targetStart->lessThan($planEnd) && $planStart->lessThan($targetEnd)) {
+                $overlappingPlanIds[] = $plan->id;
+            }
+        }
+
+        $allocatedToOverlapping = ShiftEquipmentAllocation::whereIn('shift_plan_id', $overlappingPlanIds)
+            ->where('equipment_name_id', $machineId)
+            ->exists();
+
+        if ($allocatedToOverlapping) {
             return [
                 'status' => 409,
                 'message' => 'Machine Already Allocated To Another Active Shift.',
@@ -319,7 +389,7 @@ class EquipmentAllocationService
      */
     public function remove($shiftPlanId, $allocationId)
     {
-        $shiftPlan = ShiftPlan::find($shiftPlanId);
+        $shiftPlan = ShiftPlan::with('shift')->find($shiftPlanId);
         if (!$shiftPlan) {
             return [
                 'status' => 404,
@@ -327,6 +397,8 @@ class EquipmentAllocationService
                 'data' => [],
             ];
         }
+
+
 
         // Precondition: Shift exists in Draft Status
         if ($shiftPlan->status !== 'draft') {

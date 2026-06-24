@@ -110,7 +110,7 @@ class PublishShiftTest extends TestCase
         \Laravel\Sanctum\Sanctum::actingAs($this->adminUser);
     }
 
-    public function test_validate_publish_endpoint_returns_checks()
+    public function test_validate_publish_via_publish_endpoint_returns_checks()
     {
         $planningDate = \Carbon\Carbon::now()->format('Y-m-d');
 
@@ -126,9 +126,9 @@ class PublishShiftTest extends TestCase
             'reference_no' => 'SP-TEST-001'
         ]);
 
-        $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/validate-publish");
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/publish");
 
-        $response->assertStatus(200);
+        $response->assertStatus(422);
         $response->assertJsonStructure([
             'status',
             'message',
@@ -174,7 +174,14 @@ class PublishShiftTest extends TestCase
         $response->assertStatus(422);
         $response->assertJson([
             'status' => 422,
-            'message' => 'Shift plan must be in Draft status to be published.'
+            'message' => 'Shift plan cannot be published due to validation errors.',
+            'data' => [
+                'validations' => [
+                    'precondition_draft' => [
+                        'status' => false,
+                    ]
+                ]
+            ]
         ]);
     }
 
@@ -210,7 +217,14 @@ class PublishShiftTest extends TestCase
         $response->assertStatus(422);
         $response->assertJson([
             'status' => 422,
-            'message' => 'At Least One Excavator Must Be Allocated.'
+            'message' => 'Shift plan cannot be published due to validation errors.',
+            'data' => [
+                'validations' => [
+                    'equipment_allocated' => [
+                        'status' => false,
+                    ]
+                ]
+            ]
         ]);
     }
 
@@ -250,7 +264,14 @@ class PublishShiftTest extends TestCase
         $response->assertStatus(422);
         $response->assertJson([
             'status' => 422,
-            'message' => 'No Workforce Assigned To Shift.'
+            'message' => 'Shift plan cannot be published due to validation errors.',
+            'data' => [
+                'validations' => [
+                    'workforce_deployed' => [
+                        'status' => false,
+                    ]
+                ]
+            ]
         ]);
     }
 
@@ -316,7 +337,7 @@ class PublishShiftTest extends TestCase
             ]
         ]);
 
-        $this->assertEquals('published', $response->json('data.status'));
+        $this->assertEquals('in_progress', $response->json('data.status'));
         $this->assertEquals($this->adminUser->id, $response->json('data.published_by'));
         $this->assertNotNull($response->json('data.published_at'));
     }
