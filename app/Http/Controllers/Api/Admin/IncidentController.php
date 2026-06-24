@@ -371,6 +371,37 @@ class IncidentController extends Controller
 
         ]);
     }
+    public function close(Request $request, Incident $incident)
+    {
+        if ($incident->status === 'Investigation Closed') {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Incident is already closed.'
+            ], 422);
+        }
+
+        $incident->update([
+            'status' => 'Investigation Closed',
+            'preventive_measures' => $request->preventive_measures
+                ?? $incident->preventive_measures,
+        ]);
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Incident closed successfully.',
+            // 'data' => new IncidentResource(
+            //     $incident->fresh([
+            //         'shift',
+            //         'incidentType',
+            //         'location',
+            //         'person',
+            //         'equipment',
+            //         'equipmentName',
+            //         'media'
+            //     ])
+            // )
+        ]);
+    }
     public function store(
         StoreIncidentRequest $request
     ) {

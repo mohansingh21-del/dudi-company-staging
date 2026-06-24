@@ -194,6 +194,10 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('incident-types', IncidentTypeController::class);
             Route::patch('incident-types/{id}/status', [IncidentTypeController::class, 'toggleStatus']);
             Route::apiResource('incidents', IncidentController::class);
+            Route::patch(
+                'incidents/{incident}',
+                [IncidentController::class, 'close']
+            );
         });
 
         // NORMAL USER
