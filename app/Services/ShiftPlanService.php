@@ -175,10 +175,10 @@ class ShiftPlanService
 
         // Map employee IDs to user IDs
         if (isset($data['supervisor_id'])) {
-            $data['supervisor_id'] = $this->resolveEmployeeToUserId($data['supervisor_id']);
+            $data['supervisor_id'] = $this->resolveEmployeeToUserId($data['supervisor_id'], 'supervisor');
         }
         if (isset($data['site_incharge_id'])) {
-            $data['site_incharge_id'] = $this->resolveEmployeeToUserId($data['site_incharge_id']);
+            $data['site_incharge_id'] = $this->resolveEmployeeToUserId($data['site_incharge_id'], 'site-incharge');
         }
 
         if ($id) {
@@ -314,7 +314,7 @@ class ShiftPlanService
         }
 
         if (!empty($filters['supervisor_id'])) {
-            $supervisorUserId = $this->resolveEmployeeToUserId($filters['supervisor_id']);
+            $supervisorUserId = $this->resolveEmployeeToUserId($filters['supervisor_id'], 'supervisor');
             $query->where('supervisor_id', $supervisorUserId);
         }
 
@@ -376,17 +376,67 @@ class ShiftPlanService
 
     /**
      * Resolve employee ID to corresponding user ID via role_user table.
+     * If the employee is not mapped, auto-create a user and map it.
      *
      * @param int $employeeId
+     * @param string|null $fallbackRoleSlug
      * @return int|null
      */
-    protected function resolveEmployeeToUserId($employeeId)
+    protected function resolveEmployeeToUserId($employeeId, $fallbackRoleSlug = null)
     {
         $employee = \App\Models\Employee::with('roleUser')->find($employeeId);
-        if ($employee && $employee->roleUser) {
+        if (!$employee) {
+            return null;
+        }
+
+        if ($employee->roleUser && $employee->roleUser->user_id) {
             return $employee->roleUser->user_id;
         }
-        return null;
+
+        // Generate a unique email using the employee code
+        $cleanCode = preg_replace('/[^a-zA-Z0-9_\-\.]/', '', $employee->employee_code);
+        $email = strtolower($cleanCode) . '@dudicoalmine.com';
+
+        $user = \App\Models\User::where('email', $email)->first();
+        if (!$user) {
+            $user = \App\Models\User::create([
+                'email' => $email,
+                'password' => \Illuminate\Support\Facades\Hash::make('admin@123'),
+                'is_active' => 1,
+            ]);
+        }
+
+        // Identify the role to assign
+        $roleId = $employee->designation_id;
+        if (!$roleId && $fallbackRoleSlug) {
+            $role = \App\Models\Role::where('slug', $fallbackRoleSlug)->first();
+            if ($role) {
+                $roleId = $role->id;
+            }
+        }
+
+        if (!$roleId) {
+            // Default fallback: Supervisor role (usually slug 'supervisor')
+            $role = \App\Models\Role::where('slug', 'supervisor')->first();
+            $roleId = $role ? $role->id : 3;
+        }
+
+        // Ensure RoleUser record exists
+        $roleUser = \App\Models\RoleUser::where('user_id', $user->id)
+            ->where('role_id', $roleId)
+            ->first();
+
+        if (!$roleUser) {
+            $roleUser = \App\Models\RoleUser::create([
+                'user_id' => $user->id,
+                'role_id' => $roleId,
+            ]);
+        }
+
+        // Link the employee to this RoleUser
+        $employee->update(['role_user_id' => $roleUser->id]);
+
+        return $user->id;
     }
 
     /**
