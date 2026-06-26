@@ -11,7 +11,7 @@ use App\Http\Resources\EquipmentResource;
 
 class EquipmentController extends Controller
 {
-    public function index(Request $request)
+   public function index(Request $request)
     {
         try {
 

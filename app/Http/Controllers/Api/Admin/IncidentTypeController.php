@@ -134,13 +134,13 @@ class IncidentTypeController extends Controller
 
         return response()->json([
 
-            'status' => 201,
+            'status' => 200,
 
             'message' => 'Incident type created successfully',
 
             //'data' => new IncidentTypeResource($type)
 
-        ], 201);
+        ], 200);
     }
 
 
@@ -239,6 +239,22 @@ class IncidentTypeController extends Controller
 
             'message' => 'Incident type status updated'
 
+        ]);
+    }
+    public function show(int $id)
+    {
+        $dept = IncidentType::find($id);
+
+        if (!$dept) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Equipment not found'
+            ]);
+        }
+
+        return response()->json([
+            'status' => 200,
+            'data' => new IncidentTypeResource($dept)
         ]);
     }
     public function toggleStatus(Request $request, int $id)

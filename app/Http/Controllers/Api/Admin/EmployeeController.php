@@ -198,7 +198,6 @@ class EmployeeController extends Controller
                 'message' => 'Employee list fetched successfully',
                 'data' => EmployeeResource::collection($employees)
             ]);
-
         } catch (\Throwable $th) {
 
             return response()->json([
@@ -246,8 +245,7 @@ class EmployeeController extends Controller
                 'status' => 200,
                 'message' => 'Employees imported successfully'
             ]);
-
-        } catch (ValidationException $e) {
+        } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
 
             $formattedErrors = [];
 
@@ -267,7 +265,6 @@ class EmployeeController extends Controller
                 'message' => 'Excel validation failed.',
                 'errors' => $formattedErrors
             ], 422);
-
         } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
 
             $errors = [];
@@ -287,7 +284,6 @@ class EmployeeController extends Controller
                 'message' => 'Excel validation failed.',
                 'errors' => $errors
             ], 422);
-
         } catch (\Throwable $th) {
 
             return response()->json([
@@ -433,69 +429,137 @@ class EmployeeController extends Controller
         }
 
         try {
-            $excludedRelayShifts = ['general']; // relay_shift values to exclude
-            $limit = $request->input('limit', null);
+
+            $excludedRelayShifts = ['general'];
+
+            $limit = $request->input('limit', 10);
+
 
             if ($id !== null) {
+
+                $employees = Employee::where('is_active', 1)
+                    ->whereNotIn('relay_shift', $excludedRelayShifts)
+                    ->whereHas('shiftAssignments', function ($query) use ($id) {
+
+                        $query->where('shift_id', $id);
+                    });
                 $employees = Employee::where('is_active', 1)->whereNotIn('relay_shift', $excludedRelayShifts)->whereHas('shiftAssignments', function ($query) use ($id) {
                     $query->where('shift_id', $id);
                 });
             } else {
-                $employees = Employee::where('is_active', 1)->whereNotIn('relay_shift', $excludedRelayShifts)->whereDoesntHave('shiftAssignments');
+
+                $employees = Employee::where('is_active', 1)
+                    ->whereNotIn('relay_shift', $excludedRelayShifts)
+                    ->whereDoesntHave('shiftAssignments');
             }
 
+
+            // Department filter
             if ($request->filled('department_id')) {
-                $employees->where('department_id', $request->department_id);
+
+                $employees->where(
+                    'department_id',
+                    $request->department_id
+                );
             }
 
-            $employees->select('id', 'name', 'employee_code', 'is_active');
 
             // Search
             if ($request->filled('search')) {
 
                 $search = $request->search;
 
+
                 $employees->where(function ($query) use ($search) {
 
-                    $query->where('name', 'LIKE', "%{$search}%")
-                        ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                    $query->where(
+                        'name',
+                        'LIKE',
+                        "%{$search}%"
+                    )
+                        ->orWhere(
+                            'employee_code',
+                            'LIKE',
+                            "%{$search}%"
+                        );
                 });
             }
+
+
+
+            // Load designation relationship
+            // Include foreign key for relation
+            $employees->with('designation')
+                ->select(
+                    'id',
+                    'name',
+                    'employee_code',
+                    'is_active',
+                    'designation_id' // change to designation_id if your column is different
+                );
+
+
 
             $employees = $employees
                 ->latest()
                 ->paginate($limit);
 
+
+
             $employees->through(function ($employee) {
+
                 return [
+
                     'id' => $employee->id,
+
                     'name' => $employee->name,
+
                     'employee_code' => $employee->employee_code,
+
+                   'designation' => $employee->designation ? $employee->designation->name : null,
+
                 ];
             });
 
+
+
             return response()->json([
+
                 'status' => 200,
+
                 'message' => 'Employee list fetched successfully',
+
                 'data' => $employees->items(),
+
                 'pagination' => [
+
                     'current_page' => $employees->currentPage(),
+
                     'last_page' => $employees->lastPage(),
+
                     'per_page' => $employees->perPage(),
+
                     'total' => $employees->total(),
+
                     'from' => $employees->firstItem(),
+
                     'to' => $employees->lastItem(),
+
                 ]
+
             ]);
         } catch (\Throwable $th) {
 
+
             return response()->json([
+
                 'status' => 500,
+
                 'message' => $th->getMessage()
+
             ]);
         }
     }
-
     public function getActiveEmployees(Request $request)
     {
         try {
