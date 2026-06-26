@@ -561,9 +561,17 @@ class WorkforceDeploymentService
             ->pluck('employee_id')
             ->toArray();
 
+        // Fetch employee IDs who are marked as absent, leave, or rest_day in processed attendance
+        $absentEmployeeIds = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)
+            ->whereIn('attendance_status', ['absent', 'leave', 'rest_day'])
+            ->pluck('employee_id')
+            ->toArray();
+
+        $excludeEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
+
         $baseQuery = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlanId)
             ->active()
-            ->whereNotIn('employee_id', $onLeaveEmployeeIds);
+            ->whereNotIn('employee_id', $excludeEmployeeIds);
 
         $totalDeployed = (clone $baseQuery)->count();
         $regularCount = (clone $baseQuery)->regular()->count();
@@ -611,10 +619,18 @@ class WorkforceDeploymentService
             ->pluck('employee_id')
             ->toArray();
 
+        // Fetch employee IDs who are marked as absent, leave, or rest_day in processed attendance
+        $absentEmployeeIds = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)
+            ->whereIn('attendance_status', ['absent', 'leave', 'rest_day'])
+            ->pluck('employee_id')
+            ->toArray();
+
+        $excludeEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
+
         // ── Paginated List ─────────────────────────────────────────
         $paginated = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlanId)
             ->active()
-            ->whereNotIn('employee_id', $onLeaveEmployeeIds)
+            ->whereNotIn('employee_id', $excludeEmployeeIds)
             ->with([
                 'employee',
                 'employee.designation',
@@ -654,7 +670,18 @@ class WorkforceDeploymentService
             return null;
         }
 
+        // Intra-shift check: if home shift is same as target shift, allow it
+        if ($homeShift->id === $targetShiftPlan->shift_id) {
+            return null;
+        }
+
         $planningDate = $targetShiftPlan->planning_date->format('Y-m-d');
+
+        // Check if the target shift starts before the home shift
+        $targetShift = $targetShiftPlan->shift;
+        if ($targetShift && $targetShift->start_time < $homeShift->start_time) {
+            return "Cannot borrow employees from {$homeShift->shift_name} when the target shift starts before {$homeShift->shift_name}.";
+        }
 
         // Check if the home shift has any plan on this date (any status)
         $homeShiftPlan = ShiftPlan::where('shift_id', $homeShift->id)
@@ -673,7 +700,6 @@ class WorkforceDeploymentService
 
         // 2. Block if the home shift starts at or before the target shift
         //    (those employees are needed for their own planned shift)
-        $targetShift = $targetShiftPlan->shift;
         if ($targetShift && $homeShift->start_time <= $targetShift->start_time) {
             return "Cannot borrow employees from {$homeShift->shift_name} — it starts at or before {$targetShift->shift_name}.";
         }
@@ -764,16 +790,24 @@ class WorkforceDeploymentService
             ->pluck('employee_id')
             ->toArray();
 
+        // Fetch employee IDs who are marked as absent, leave, or rest_day in processed attendance
+        $absentEmployeeIds = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)
+            ->whereIn('attendance_status', ['absent', 'leave', 'rest_day'])
+            ->pluck('employee_id')
+            ->toArray();
+
+        $excludeEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
+
         // PLANNED: Total employees assigned to this shift on this date
         $plannedCount = count($shiftEmployeeIds);
 
         // LEAVE: Assigned employees who are on approved leave on this planning date
         $onLeaveCount = count(array_intersect($shiftEmployeeIds, $onLeaveEmployeeIds));
 
-        // Active deployment base query (excluding employees on approved leave)
+        // Active deployment base query (excluding employees on approved leave or marked absent/leave/rest_day)
         $baseQuery = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlanId)
             ->active()
-            ->whereNotIn('employee_id', $onLeaveEmployeeIds);
+            ->whereNotIn('employee_id', $excludeEmployeeIds);
 
         // PRESENT: Active deployments (regular, non-borrowed)
         $presentCount = (clone $baseQuery)->regular()->count();

@@ -784,4 +784,54 @@ class WorkforceDeploymentTest extends TestCase
         $response->assertStatus(422);
         $response->assertJsonFragment(['message' => 'Cannot borrow employees from B when the target shift starts before B.']);
     }
+
+    public function test_deployed_employee_who_is_marked_absent_is_excluded_from_present_and_summary_counts()
+    {
+        $planningDate = '2026-06-23';
+
+        // 1. Assign Employee 1 to Shift A
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee1->id,
+            'shift_id' => $this->shiftA->id,
+            'from_date' => $planningDate
+        ]);
+
+        // 2. Create Shift Plan for Shift A
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shiftA->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'planned',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TEST-002'
+        ]);
+
+        // 3. Load relay workforce — Employee 1 should be deployed
+        $response1 = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/load-relay");
+        $response1->assertStatus(200);
+        $response1->assertJsonCount(1, 'data');
+        $this->assertEquals(1, $response1->json('stats.present'));
+
+        // 4. Mark Employee 1 as absent in AttendanceProcessed
+        \App\Models\AttendanceProcessed::create([
+            'employee_id' => $this->employee1->id,
+            'date' => $planningDate,
+            'attendance_status' => 'absent',
+        ]);
+
+        // 5. Get list again — Employee 1 should NOT be in the list, present count is 0
+        $response2 = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce");
+        $response2->assertJsonCount(0, 'data');
+        $this->assertEquals(0, $response2->json('stats.present'));
+
+        // 6. Get workforce summary — total_deployed, regular_count, borrowed_count should all be 0
+        $response3 = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/summary");
+        $response3->assertStatus(200);
+        $this->assertEquals(0, $response3->json('data.total_deployed'));
+        $this->assertEquals(0, $response3->json('data.regular_count'));
+        $this->assertEquals(0, $response3->json('data.borrowed_count'));
+    }
 }
