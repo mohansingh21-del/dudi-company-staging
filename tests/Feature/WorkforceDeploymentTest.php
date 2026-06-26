@@ -269,11 +269,10 @@ class WorkforceDeploymentTest extends TestCase
         $response->assertJsonCount(1, 'data');
         $this->assertEquals($this->employee2->id, $response->json('data.0.employee_id'));
 
-        // Filter by Shift B (even though current shift plan is Shift B)
+        // Filter by Shift B (which is the same as current shift plan B) — should fail with 422 validation
         $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/available-employees?shift_id={$this->shiftB->id}");
-        $response->assertStatus(200);
-        $response->assertJsonCount(1, 'data');
-        $this->assertEquals($this->employee1->id, $response->json('data.0.employee_id'));
+        $response->assertStatus(422);
+        $response->assertJsonFragment(['message' => 'Cannot borrow employees from the same shift.']);
     }
 
     public function test_can_borrow_multiple_employees_from_other_shifts()
@@ -751,14 +750,14 @@ class WorkforceDeploymentTest extends TestCase
         $response->assertJsonFragment(['message' => 'Cannot borrow employees from a shift that is already in the working phase.']);
     }
 
-    public function test_cannot_borrow_from_shift_b_if_target_starts_before_b()
+    public function test_cannot_borrow_if_shift_times_overlap()
     {
         $planningDate = '2026-06-23';
 
-        // Target shift plan (Shift A starts at 08:00:00)
+        // Target shift plan (Shift B starts at 16:00:00 and ends at 00:00:00)
         $targetPlan = ShiftPlan::create([
             'planning_date' => $planningDate,
-            'shift_id' => $this->shiftA->id,
+            'shift_id' => $this->shiftB->id,
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
@@ -768,21 +767,44 @@ class WorkforceDeploymentTest extends TestCase
             'reference_no' => 'SP-TARGET'
         ]);
 
-        // Employee 2 assigned to Shift B (starts at 16:00:00)
+        // Create Shift C (starts at 14:00:00, ends at 22:00:00) which overlaps with Shift B
+        $shiftC = Shift::create([
+            'shift_name' => 'C',
+            'start_time' => '14:00:00',
+            'end_time' => '22:00:00',
+            'minimum_working_hours' => 8.00,
+            'is_night_shift' => 0,
+            'is_active' => 1
+        ]);
+
+        // Create shift plan for Shift C so it's planned
+        $homePlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $shiftC->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'planned',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-HOME'
+        ]);
+
+        // Employee 2 assigned to Shift C
         EmployeeShiftAssignment::create([
             'employee_id' => $this->employee2->id,
-            'shift_id' => $this->shiftB->id,
+            'shift_id' => $shiftC->id,
             'from_date' => $planningDate
         ]);
 
-        // Try to borrow from Shift B into Shift A (target starts before selected)
+        // Try to borrow from Shift C into Shift B
         $response = $this->postJson("/api/v1/admin/shift-plans/{$targetPlan->id}/workforce/borrow", [
             'employee_ids' => [$this->employee2->id],
-            'borrowing_reason' => 'Test shift B time limit'
+            'borrowing_reason' => 'Test overlap time limit'
         ]);
 
         $response->assertStatus(422);
-        $response->assertJsonFragment(['message' => 'Cannot borrow employees from B when the target shift starts before B.']);
+        $response->assertJsonFragment(['message' => 'Cannot borrow employees from C because its timings overlap with B.']);
     }
 
     public function test_deployed_employee_who_is_marked_absent_is_excluded_from_present_and_summary_counts()

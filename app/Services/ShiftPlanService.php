@@ -29,7 +29,14 @@ class ShiftPlanService
         // Filter by Date or Period
         $startDate = null;
         $endDate = null;
-        if (!empty($filters['period'])) {
+        if (!empty($filters['start_date']) && !empty($filters['end_date'])) {
+            $startDate = \Carbon\Carbon::parse($filters['start_date'])->startOfDay();
+            $endDate = \Carbon\Carbon::parse($filters['end_date'])->endOfDay();
+            $query->whereBetween('planning_date', [
+                $startDate->format('Y-m-d'),
+                $endDate->format('Y-m-d')
+            ]);
+        } elseif (!empty($filters['period'])) {
             $refDate = !empty($filters['date'])
                 ? \Carbon\Carbon::parse($filters['date'])
                 : \Carbon\Carbon::now();
@@ -56,18 +63,9 @@ class ShiftPlanService
             $endDate = \Carbon\Carbon::parse($filters['date'])->endOfDay();
             $query->whereDate('planning_date', $filters['date']);
         } else {
-            if (!empty($filters['start_date']) && !empty($filters['end_date'])) {
-                $startDate = \Carbon\Carbon::parse($filters['start_date'])->startOfDay();
-                $endDate = \Carbon\Carbon::parse($filters['end_date'])->endOfDay();
-                $query->whereBetween('planning_date', [
-                    $startDate->format('Y-m-d'),
-                    $endDate->format('Y-m-d')
-                ]);
-            } else {
-                $now = \Carbon\Carbon::now();
-                $startDate = $now->copy()->startOfMonth()->startOfDay();
-                $endDate = $now->copy()->endOfMonth()->endOfDay();
-            }
+            $now = \Carbon\Carbon::now();
+            $startDate = $now->copy()->startOfMonth()->startOfDay();
+            $endDate = $now->copy()->endOfMonth()->endOfDay();
         }
 
         // Filter by Shift ID
@@ -83,6 +81,12 @@ class ShiftPlanService
         // Filter by Status
         if (!empty($filters['status'])) {
             $query->where('status', $filters['status']);
+        }
+
+        // Filter by Supervisor ID
+        if (!empty($filters['supervisor_id'])) {
+            $supervisorUserId = $this->resolveEmployeeToUserId($filters['supervisor_id'], 'supervisor');
+            $query->where('supervisor_id', $supervisorUserId);
         }
 
         // Search Query

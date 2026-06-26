@@ -158,6 +158,14 @@ class WorkforceDeploymentService
         $planningDate = $shiftPlan->planning_date->format('Y-m-d');
 
         if ($shiftId) {
+            if ($shiftId == $shiftPlan->shift_id) {
+                return [
+                    'status' => 422,
+                    'message' => 'Cannot borrow employees from the same shift.',
+                    'data' => [],
+                ];
+            }
+
             $selectedShift = \App\Models\Shift::find($shiftId);
             if ($selectedShift) {
                 $validationError = $this->validateBorrowingFromShift($selectedShift, $shiftPlan);
@@ -677,12 +685,6 @@ class WorkforceDeploymentService
 
         $planningDate = $targetShiftPlan->planning_date->format('Y-m-d');
 
-        // Check if the target shift starts before the home shift
-        $targetShift = $targetShiftPlan->shift;
-        if ($targetShift && $targetShift->start_time < $homeShift->start_time) {
-            return "Cannot borrow employees from {$homeShift->shift_name} when the target shift starts before {$homeShift->shift_name}.";
-        }
-
         // Check if the home shift has any plan on this date (any status)
         $homeShiftPlan = ShiftPlan::where('shift_id', $homeShift->id)
             ->whereDate('planning_date', $planningDate)
@@ -698,10 +700,24 @@ class WorkforceDeploymentService
             return 'Cannot borrow employees from a shift that is already in the working phase.';
         }
 
-        // 2. Block if the home shift starts at or before the target shift
-        //    (those employees are needed for their own planned shift)
-        if ($targetShift && $homeShift->start_time <= $targetShift->start_time) {
-            return "Cannot borrow employees from {$homeShift->shift_name} — it starts at or before {$targetShift->shift_name}.";
+        // 2. Block if the home shift and target shift timings overlap
+        $targetShift = $targetShiftPlan->shift;
+        if ($targetShift) {
+            $targetStart = \Carbon\Carbon::parse($planningDate . ' ' . $targetShift->start_time);
+            $targetEnd = \Carbon\Carbon::parse($planningDate . ' ' . $targetShift->end_time);
+            if (\Carbon\Carbon::parse($targetShift->start_time)->greaterThanOrEqualTo(\Carbon\Carbon::parse($targetShift->end_time))) {
+                $targetEnd->addDay();
+            }
+
+            $homeStart = \Carbon\Carbon::parse($planningDate . ' ' . $homeShift->start_time);
+            $homeEnd = \Carbon\Carbon::parse($planningDate . ' ' . $homeShift->end_time);
+            if (\Carbon\Carbon::parse($homeShift->start_time)->greaterThanOrEqualTo(\Carbon\Carbon::parse($homeShift->end_time))) {
+                $homeEnd->addDay();
+            }
+
+            if ($targetStart->lessThan($homeEnd) && $homeStart->lessThan($targetEnd)) {
+                return "Cannot borrow employees from {$homeShift->shift_name} because its timings overlap with {$targetShift->shift_name}.";
+            }
         }
 
         return null;

@@ -214,4 +214,92 @@ class ShiftPlanListPeriodFilterTest extends TestCase
         $this->assertContains('SP-TODAY', $refCodesYearly);
         $this->assertNotContains('SP-NEXT-YEAR', $refCodesYearly);
     }
+
+    public function test_can_filter_list_by_start_date_and_end_date_with_period_monthly()
+    {
+        $today = \Carbon\Carbon::now();
+
+        // 1. Shift plan for today
+        ShiftPlan::create([
+            'planning_date' => $today->format('Y-m-d'),
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TODAY'
+        ]);
+
+        // 2. Shift plan for yesterday
+        $yesterday = $today->copy()->subDay();
+        ShiftPlan::create([
+            'planning_date' => $yesterday->format('Y-m-d'),
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-YESTERDAY'
+        ]);
+
+        // Request with start_date and end_date filtering for today only, but with period=monthly also passed.
+        // It should only return SP-TODAY, ignoring SP-YESTERDAY even though both are in the same month.
+        $response = $this->getJson("/api/v1/admin/shift-plans?start_date={$today->format('Y-m-d')}&end_date={$today->format('Y-m-d')}&period=monthly");
+        $response->assertStatus(200);
+
+        $data = $response->json('data');
+        $refCodes = collect($data)->pluck('reference_no')->toArray();
+        $this->assertContains('SP-TODAY', $refCodes);
+        $this->assertNotContains('SP-YESTERDAY', $refCodes);
+    }
+
+    public function test_can_filter_list_by_supervisor_id()
+    {
+        $today = \Carbon\Carbon::now();
+
+        // 1. Shift plan for today with supervisor
+        ShiftPlan::create([
+            'planning_date' => $today->format('Y-m-d'),
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TODAY-SUP'
+        ]);
+
+        $site2 = Site::create([
+            'site_name' => 'Block-05 East',
+            'address' => 'Site Address 2',
+            'is_active' => 1
+        ]);
+
+        // 2. Shift plan for today with another user (adminUser) as supervisor (using site2)
+        ShiftPlan::create([
+            'planning_date' => $today->format('Y-m-d'),
+            'shift_id' => $this->shift->id,
+            'site_id' => $site2->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->adminUser->id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TODAY-ADMIN-SUP'
+        ]);
+
+        // Request list filtering by supervisor Employee ID
+        $response = $this->getJson("/api/v1/admin/shift-plans?supervisor_id={$this->supervisorEmployee->id}");
+        $response->assertStatus(200);
+
+        $data = $response->json('data');
+        $refCodes = collect($data)->pluck('reference_no')->toArray();
+        $this->assertContains('SP-TODAY-SUP', $refCodes);
+        $this->assertNotContains('SP-TODAY-ADMIN-SUP', $refCodes);
+    }
 }

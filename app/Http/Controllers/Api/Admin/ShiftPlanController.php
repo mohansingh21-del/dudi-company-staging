@@ -74,7 +74,7 @@ class ShiftPlanController extends Controller
     public function index(Request $request)
     {
         try {
-            $filters = $request->only(['date', 'period', 'shift_id', 'site_id', 'status', 'search', 'limit', 'start_date', 'end_date']);
+            $filters = $request->only(['date', 'period', 'shift_id', 'site_id', 'status', 'search', 'limit', 'start_date', 'end_date', 'supervisor_id']);
             $result = $this->service->listShiftPlans($filters);
 
             $paginated = $result['data'];
