@@ -42,8 +42,8 @@ class RemoveExpiredBorrowedEmployeesCommand extends Command
         // Fetch all shift plans that have active borrowed deployments,
         // along with their shift timing information.
         $shiftPlans = ShiftPlan::whereHas('workforceDeployments', function ($query) {
-                $query->active()->borrowed();
-            })
+            $query->active()->borrowed();
+        })
             ->with('shift')
             ->get();
 
@@ -175,7 +175,7 @@ class RemoveExpiredBorrowedEmployeesCommand extends Command
             ->where('from_date', '<=', $planningDate)
             ->where(function ($q) use ($planningDate) {
                 $q->whereNull('to_date')
-                  ->orWhere('to_date', '>=', $planningDate);
+                    ->orWhere('to_date', '>=', $planningDate);
             })
             ->first();
 
