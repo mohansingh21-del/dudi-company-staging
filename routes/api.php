@@ -44,6 +44,7 @@ use App\Http\Controllers\Api\Admin\IncidentController;
 use App\Http\Controllers\Api\Admin\EquipmentAllocationController;
 use App\Http\Controllers\Api\Admin\ShiftPlanController;
 use App\Http\Controllers\Api\Admin\WorkforceDeploymentController;
+use App\Http\Controllers\Api\Admin\BreakdownTypeController;
 
 
 /*
@@ -130,6 +131,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);
         Route::get('incident-types', [IncidentTypeController::class, 'publicIndex']);
+        Route::get('breakdown-types', [BreakdownTypeController::class, 'publicIndex']);
         Route::get('shifts', [ShiftController::class, 'getPublicShifts']);
         Route::get('employees', [EmployeeController::class, 'getPublicEmployees']);
         Route::get('active-employees', [EmployeeController::class, 'getActiveEmployees']);
@@ -181,6 +183,7 @@ Route::prefix('v1')->group(function () {
 
             Route::apiResource('attendance', AttendanceController::class);
             Route::patch('attendance/{id}/status', [AttendanceController::class, 'updateStatus']);
+            ////php artisan migrate --path=/database/migrations/2026_06_26_115046_create_breakdown_types_table.php
 
             Route::post('leaves/bulk-upload', [LeaveController::class, 'bulkUpload']);
             Route::post('leaves/{id}/approve-reject', [LeaveController::class, 'approveReject']);
@@ -192,12 +195,25 @@ Route::prefix('v1')->group(function () {
             Route::patch('equipments/{id}/status', [EquipmentController::class, 'toggleStatus']);
             Route::apiResource('equipment-names', EquipmentNameController::class);
             Route::patch('equipment-names/{id}/status', [EquipmentNameController::class, 'toggleStatus']);
+            Route::apiResource('breakdown-types', BreakdownTypeController::class);
+
             Route::apiResource('incident-types', IncidentTypeController::class);
+
             Route::patch('incident-types/{id}/status', [IncidentTypeController::class, 'toggleStatus']);
             Route::apiResource('incidents', IncidentController::class);
             Route::patch(
                 'incidents/{incident}',
                 [IncidentController::class, 'close']
+            );
+
+
+            Route::patch('breakdown-types/{id}/status', [BreakdownTypeController::class, 'toggleStatus']);
+
+
+
+            Route::put(
+                'breakdown-types/{id}/toggle-status',
+                [BreakdownTypeController::class, 'toggleStatus']
             );
         });
 

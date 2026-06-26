@@ -20,23 +20,20 @@ class IncidentResource extends JsonResource
 
             'status' => $this->status,
 
-            'shift_id' => $this->shift?->id,
-            'shift_name' => $this->shift?->shift_name,
+          'shift_id' => $this->shift ? $this->shift->id : null,
+          'shift_name' => $this->shift ? $this->shift->shift_name : null,
 
+          'location_id' => $this->location ? $this->location->id : null,
+          'location_name' => $this->location ? $this->location->site_name : null,
 
-            'location_id' => $this->location?->id,
-            'location_name' => $this->location?->site_name,
-            'incident_type_id' => $this->incidentType?->id,
-            'incident_type' => $this->incidentType?->incident_type,
+          'incident_type_id' => $this->incidentType ? $this->incidentType->id : null,
+          'incident_type' => $this->incidentType ? $this->incidentType->incident_type : null,
 
+          'equipment_id' => $this->equipment ? $this->equipment->id : null,
+          'equipment_category' => $this->equipment ? $this->equipment->name : null,
 
-
-            'equipment_id' => $this->equipment?->id,
-            'equipment_category' => $this->equipment?->name,
-
-
-            'equipment_name_id' => $this->equipmentName?->id,
-            'equipment__name' => $this->equipmentName?->equipment_name,
+          'equipment_name_id' => $this->equipmentName ? $this->equipmentName->id : null,
+          'equipment__name' => $this->equipmentName ? $this->equipmentName->equipment_name : null,
 
             'person_involved_id' => $this->person->id,
             'person_involved_name' => $this->person->name,

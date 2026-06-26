@@ -16,9 +16,8 @@ class EquipmentNameResource extends JsonResource
     {
         return [
             'id' => $this->id,
-            'equipment_category_id' => $this->equipment?->id,
-            'equipment_category_name' => $this->equipment?->name,
-
+            'equipment_category_id' => $this->equipment ? $this->equipment->id : null,
+            'equipment_category_name' => $this->equipment ? $this->equipment->name : null,
             'equipment_id' => $this->equipment_id,
             'equipment_name' => $this->equipment_name,
             'status' => $this->is_active,

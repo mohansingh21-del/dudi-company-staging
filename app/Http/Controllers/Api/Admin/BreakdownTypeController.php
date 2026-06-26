@@ -3,24 +3,23 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\IncidentType;
-use App\Http\Requests\StoreIncidentTypeRequest;
-use App\Http\Requests\UpdateIncidentTypeRequest;
-use App\Http\Resources\IncidentTypeResource;
+use App\Models\BreakdownType;
+use App\Http\Requests\StoreBreakdownTypeRequest;
+use App\Http\Requests\UpdateBreakdownTypeRequest;
+use App\Http\Resources\BreakdownTypeResource;
 use Illuminate\Http\Request;
 
-
-class IncidentTypeController extends Controller
+class BreakdownTypeController extends Controller
 {
     public function publicIndex()
     {
-        $types = IncidentType::where('is_active', 1)
+        $types = BreakdownType::where('is_active', 1)
             ->latest()
             ->get()
             ->map(function ($type) {
                 return [
                     'id' => $type->id,
-                    'incident_type' => $type->incident_type,
+                    'breakdown_type' => $type->incident_type,
                     'description' => $type->description,
                     'status' => $type->is_active,
                 ];
@@ -28,30 +27,26 @@ class IncidentTypeController extends Controller
 
         return response()->json([
             'status' => 200,
-            'message' => 'Incident type list fetched successfully',
+            'message' => 'Breakdown type list fetched successfully',
             'data' => $types
         ]);
     }
+
     public function index(Request $request)
     {
-
         $limit = $request->input('limit', 10);
 
+        $types = BreakdownType::query();
 
-        $types = IncidentType::query();
-
-
-
-        // Search Incident Type + Description
+        // Search Breakdown Type + Description
         if ($request->filled('search')) {
 
             $search = $request->search;
 
-
             $types->where(function ($query) use ($search) {
 
                 $query->where(
-                    'incident_type',
+                    'breakdown_type',
                     'LIKE',
                     "%{$search}%"
                 )
@@ -63,23 +58,17 @@ class IncidentTypeController extends Controller
             });
         }
 
-
-
         $types = $types
             ->latest()
             ->paginate($limit);
-
-
 
         return response()->json([
 
             'status' => 200,
 
-            'message' => 'Incident type list fetched successfully',
+            'message' => 'Breakdown type list fetched successfully',
 
-
-            'data' => IncidentTypeResource::collection($types),
-
+            'data' => BreakdownTypeResource::collection($types),
 
             'pagination' => [
 
@@ -100,48 +89,30 @@ class IncidentTypeController extends Controller
         ]);
     }
 
+    public function store(StoreBreakdownTypeRequest $request)
+    {
+        $type = BreakdownType::create([
 
-
-
-
-    public function store(
-        StoreIncidentTypeRequest $request
-    ) {
-
-
-        $type = IncidentType::create([
-
-            'incident_type' => $request->incident_type,
+            'breakdown_type' => $request->breakdown_type,
 
             'description' => $request->description
 
         ]);
 
-
         return response()->json([
 
             'status' => 200,
 
-            'message' => 'Incident type created successfully',
+            'message' => 'Breakdown type created successfully',
 
-            //'data' => new IncidentTypeResource($type)
+            //'data' => new BreakdownTypeResource($type)
 
         ], 200);
     }
 
-
-
-
-
-
-    public function update(
-        UpdateIncidentTypeRequest $request,
-        $id
-    ) {
-
-
-        $type = IncidentType::find($id);
-
+    public function show(int $id)
+    {
+        $type = BreakdownType::find($id);
 
         if (!$type) {
 
@@ -149,42 +120,86 @@ class IncidentTypeController extends Controller
 
                 'status' => 404,
 
-                'message' => 'Incident type not found'
+                'message' => 'Breakdown type not found'
 
             ]);
         }
-
-
-
-        $type->update([
-
-            'incident_type' => $request->incident_type,
-
-            'description' => $request->description ?? $type->description,
-
-        ]);
-
-
 
         return response()->json([
 
             'status' => 200,
 
-            'message' => 'Incident type updated successfully'
+            'data' => new BreakdownTypeResource($type)
 
         ]);
     }
 
+    public function update(
+        UpdateBreakdownTypeRequest $request,
+        $id
+    ) {
+
+        $type = BreakdownType::find($id);
+
+        if (!$type) {
+
+            return response()->json([
+
+                'status' => 404,
+
+                'message' => 'Breakdown type not found'
+
+            ]);
+        }
+
+        $type->update([
+
+            'breakdown_type' => $request->breakdown_type,
+
+            'description' => $request->description ?? $type->description,
 
 
+        ]);
 
+        return response()->json([
 
+            'status' => 200,
+
+            'message' => 'Breakdown type updated successfully'
+
+        ]);
+    }
+
+    public function destroy($id)
+    {
+        $type = BreakdownType::find($id);
+
+        if (!$type) {
+
+            return response()->json([
+
+                'status' => 404,
+
+                'message' => 'Breakdown type not found'
+
+            ]);
+        }
+
+        $type->delete();
+
+        return response()->json([
+
+            'status' => 200,
+
+            'message' => 'Breakdown type deleted successfully'
+
+        ]);
+    }
 
     public function status(
         Request $request,
         $id
     ) {
-
 
         $request->validate([
 
@@ -192,11 +207,7 @@ class IncidentTypeController extends Controller
 
         ]);
 
-
-
-        $type = IncidentType::find($id);
-
-
+        $type = BreakdownType::find($id);
 
         if (!$type) {
 
@@ -204,12 +215,10 @@ class IncidentTypeController extends Controller
 
                 'status' => 404,
 
-                'message' => 'Incident type not found'
+                'message' => 'Breakdown type not found'
 
             ]);
         }
-
-
 
         $type->update([
 
@@ -217,52 +226,29 @@ class IncidentTypeController extends Controller
 
         ]);
 
-
-
         return response()->json([
 
             'status' => 200,
 
-            'message' => 'Incident type status updated'
+            'message' => 'Breakdown type status updated'
 
         ]);
     }
-    public function show(int $id)
-    {
-        $dept = IncidentType::find($id);
 
-        if (!$dept) {
-            return response()->json([
-                'status' => 404,
-                'message' => 'Equipment not found'
-            ]);
-        }
-
-        return response()->json([
-            'status' => 200,
-            'data' => new IncidentTypeResource($dept)
-        ]);
-    }
     public function toggleStatus(Request $request, int $id)
     {
+        $breakdownType = BreakdownType::find($id);
 
-
-        $equipmentName = IncidentType::find($id);
-
-
-
-        if (!$equipmentName) {
+        if (!$breakdownType) {
 
             return response()->json([
 
                 'status' => 404,
 
-                'message' => 'Incident Type not found'
+                'message' => 'Breakdown type not found'
 
             ]);
         }
-
-
 
         $request->validate([
 
@@ -270,25 +256,16 @@ class IncidentTypeController extends Controller
 
         ]);
 
-
-
-        $equipmentName->is_active =
+        $breakdownType->is_active =
             $request->status ? 1 : 0;
 
-
-
-        $equipmentName->save();
-
-
-
+        $breakdownType->save();
 
         return response()->json([
 
-
             'status' => 200,
 
-            'message' => 'Incident Type status updated successfully'
-
+            'message' => 'Breakdown type status updated successfully'
 
         ]);
     }

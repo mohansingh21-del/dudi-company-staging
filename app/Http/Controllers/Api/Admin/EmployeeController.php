@@ -516,7 +516,7 @@ class EmployeeController extends Controller
 
                     'employee_code' => $employee->employee_code,
 
-                    'designation' => $employee->designation?->name
+                   'designation' => $employee->designation ? $employee->designation->name : null,
 
                 ];
             });
