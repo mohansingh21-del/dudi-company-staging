@@ -115,4 +115,26 @@ class EquipmentAllocationController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * GET /shift-plans/{shift_id}/machines
+     * Returns allocated equipment for a shift (resolved via shift_id).
+     */
+    public function getPublicMachines(Request $request, $shiftId)
+    {
+        try {
+            $date = $request->query('date');
+            $result = $this->service->listAllocatedByShift($shiftId, $date);
+
+            return response()->json($result, $result['status']);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status'  => 500,
+                'message' => $th->getMessage(),
+                'data'    => [],
+            ], 500);
+        }
+    }
 }
+
+

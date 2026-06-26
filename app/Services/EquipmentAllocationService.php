@@ -457,4 +457,87 @@ class EquipmentAllocationService
             'data' => [],
         ];
     }
+
+    /**
+     * GET /shift-plans/{shift_id}/machines
+     * Returns allocated equipment for a shift (resolved via shift_id).
+     *
+     * @param  int         $shiftId
+     * @param  string|null $date
+     * @return array
+     */
+    public function listAllocatedByShift($shiftId, $date = null)
+    {
+        // 1. Verify that the shift itself exists
+        $shiftExists = \App\Models\Shift::where('id', $shiftId)->exists();
+        if (!$shiftExists) {
+            return [
+                'status' => 404,
+                'message' => 'Shift Not Found.',
+                'data' => [],
+            ];
+        }
+
+        // 2. Resolve date: query parameter, argument, or today
+        if ($date) {
+            $targetDate = Carbon::parse($date)->format('Y-m-d');
+        } else {
+            $targetDate = Carbon::today()->format('Y-m-d');
+        }
+
+        // 3. Find shift plans for this shift on the target date
+        $shiftPlans = ShiftPlan::where('shift_id', $shiftId)
+            ->whereDate('planning_date', $targetDate)
+            ->get();
+
+        // 4. Fallback: if no shift plans exist for the target date (and no custom date was passed),
+        // fallback to the latest date that has any shift plan for this shift
+        if ($shiftPlans->isEmpty() && !$date) {
+            $latestDate = ShiftPlan::where('shift_id', $shiftId)
+                ->latest('planning_date')
+                ->value('planning_date');
+
+            if ($latestDate) {
+                $targetDate = Carbon::parse($latestDate)->format('Y-m-d');
+                $shiftPlans = ShiftPlan::where('shift_id', $shiftId)
+                    ->whereDate('planning_date', $targetDate)
+                    ->get();
+            }
+        }
+
+        if ($shiftPlans->isEmpty()) {
+            return [
+                'status' => 200,
+                'message' => 'Allocated equipment retrieved successfully.',
+                'data' => [],
+            ];
+        }
+
+        $shiftPlanIds = $shiftPlans->pluck('id')->toArray();
+
+        // 5. Fetch all allocations for these shift plans
+        $allocations = ShiftEquipmentAllocation::with(['equipmentName.equipment'])
+            ->whereIn('shift_plan_id', $shiftPlanIds)
+            ->get();
+
+        $data = $allocations->map(function ($allocation) {
+            $machine = $allocation->equipmentName;
+            $category = $machine ? $machine->equipment : null;
+
+            return [
+                'allocation_id' => $allocation->id,
+                'machine_id' => $machine ? $machine->id : null,
+                'machine_number' => $machine ? $machine->equipment_name : null,
+                'category_id' => $category ? $category->id : null,
+                'category_name' => $category ? $category->name : null,
+            ];
+        });
+
+        return [
+            'status' => 200,
+            'message' => 'Allocated equipment retrieved successfully.',
+            'data' => $data->values()->toArray(),
+        ];
+    }
 }
+

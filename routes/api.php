@@ -44,8 +44,8 @@ use App\Http\Controllers\Api\Admin\IncidentController;
 use App\Http\Controllers\Api\Admin\EquipmentAllocationController;
 use App\Http\Controllers\Api\Admin\ShiftPlanController;
 use App\Http\Controllers\Api\Admin\WorkforceDeploymentController;
+use App\Http\Controllers\Api\Admin\BreakdownController;
 use App\Http\Controllers\Api\Admin\BreakdownTypeController;
-
 
 /*
 |--------------------------------------------------------------------------
@@ -143,7 +143,8 @@ Route::prefix('v1')->group(function () {
         Route::get('subcategories', [SubCategoryController::class, 'getPublicSubCategories']);
         Route::get('machine-categories', [EquipmentController::class, 'listCategories']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
-
+        Route::get('shift-plans/{shift_id}/machines', [EquipmentAllocationController::class, 'getPublicMachines']);
+        Route::get('search-employee/search={search}', [EmployeeController::class, 'searchEmployeeByName']);
 
         // ADMIN ONLY
         Route::middleware(['role:super-admin'])->prefix('admin')->group(function () {
@@ -196,6 +197,7 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('equipment-names', EquipmentNameController::class);
             Route::patch('equipment-names/{id}/status', [EquipmentNameController::class, 'toggleStatus']);
             Route::apiResource('breakdown-types', BreakdownTypeController::class);
+            Route::patch('breakdown-types/{id}/status', [BreakdownTypeController::class, 'toggleStatus']);
 
             Route::apiResource('incident-types', IncidentTypeController::class);
 
@@ -204,16 +206,6 @@ Route::prefix('v1')->group(function () {
             Route::patch(
                 'incidents/{incident}',
                 [IncidentController::class, 'close']
-            );
-
-
-            Route::patch('breakdown-types/{id}/status', [BreakdownTypeController::class, 'toggleStatus']);
-
-
-
-            Route::put(
-                'breakdown-types/{id}/toggle-status',
-                [BreakdownTypeController::class, 'toggleStatus']
             );
         });
 
@@ -391,5 +383,18 @@ Route::prefix('v1')->group(function () {
                 Route::get('workforce', [WorkforceDeploymentController::class, 'index']);
                 Route::delete('workforce/{deployment_id}', [WorkforceDeploymentController::class, 'destroy']);
             });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Breakdown Management & Equipment Reliability
+            |--------------------------------------------------------------------------
+            */
+            Route::prefix('maintenance/breakdowns')->group(function () {
+                Route::get('/', [BreakdownController::class, 'index']);
+                Route::get('{id}', [BreakdownController::class, 'show']);
+                Route::post('/', [BreakdownController::class, 'store']);
+                Route::put('{id}', [BreakdownController::class, 'update']);
+            });
+
         });
 });

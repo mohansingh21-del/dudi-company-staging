@@ -19,7 +19,7 @@ class BreakdownTypeController extends Controller
             ->map(function ($type) {
                 return [
                     'id' => $type->id,
-                    'breakdown_type' => $type->incident_type,
+                    'breakdown_type' => $type->breakdown_type,
                     'description' => $type->description,
                     'status' => $type->is_active,
                 ];

@@ -24,7 +24,7 @@ class UpdateBreakdownTypeRequest extends FormRequest
      */
     public function rules()
     {
-        $id = $this->route('id');
+        $id = $this->route('breakdown_type') ?? $this->route('id');
 
         return [
 
