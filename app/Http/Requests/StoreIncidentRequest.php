@@ -1,0 +1,119 @@
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
+
+class StoreIncidentRequest extends FormRequest
+{
+
+    public function authorize()
+    {
+        return true;
+    }
+
+
+    public function rules()
+    {
+
+        return [
+
+            'incident_date' => [
+                'required',
+                'date_format:d/m/Y',
+                function ($attribute, $value, $fail) {
+
+                    $date = \Carbon\Carbon::createFromFormat('d/m/Y', $value);
+
+                    if ($date->isFuture()) {
+                        $fail('Incident date cannot be a future date.');
+                    }
+                }
+            ],
+
+
+            'shift_id' => [
+                'required',
+                'exists:shifts,id'
+            ],
+
+
+            'incident_type_id' => [
+                'required',
+                'exists:incident_types,id',
+                Rule::exists('incident_types', 'id')
+                    ->where('is_active', 1)
+            ],
+
+
+            'severity' => [
+                'required',
+                Rule::in([
+                    'LOW',
+                    'MEDIUM',
+                    'HIGH',
+                    'CRITICAL'
+                ])
+            ],
+
+
+            // 'status' => [
+            //     'required',
+            //     Rule::in([
+            //         'Under Review',
+            //         'Investigation Closed'
+            //     ])
+            // ],
+
+
+            'location_id' => [
+                'required',
+                'exists:sites,id'
+            ],
+
+            'equipment_id' => [
+                'required',
+                'exists:equipments,id'
+            ],
+
+            'equipment_name_id' => [
+
+                'required',
+
+                Rule::exists('equipment_names', 'id')
+                    ->where(function ($query) {
+
+                        $query->where(
+                            'equipment_id',
+                            request('equipment_id')
+                        );
+                    })
+            ],
+            'person_involved_id' => [
+                'nullable',
+                'exists:employees,id'
+            ],
+
+
+            'incident_description' => 'required',
+
+
+            'action_taken' => 'required',
+
+
+            'preventive_measures' => 'nullable',
+
+
+
+            'media.*' => [
+                'nullable',
+                'file',
+                'mimes:jpg,jpeg,png,pdf',
+                'max:10240'
+            ]
+
+
+        ];
+    }
+}

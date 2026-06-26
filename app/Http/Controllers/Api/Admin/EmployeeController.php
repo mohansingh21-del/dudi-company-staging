@@ -246,6 +246,7 @@ class EmployeeController extends Controller
                 'message' => 'Employees imported successfully'
             ]);
         } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
+        } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
 
             $formattedErrors = [];
 
@@ -435,7 +436,19 @@ class EmployeeController extends Controller
             $limit = $request->input('limit', 10);
 
 
+            $excludedRelayShifts = ['general'];
+
+            $limit = $request->input('limit', 10);
+
+
             if ($id !== null) {
+
+                $employees = Employee::where('is_active', 1)
+                    ->whereNotIn('relay_shift', $excludedRelayShifts)
+                    ->whereHas('shiftAssignments', function ($query) use ($id) {
+
+                        $query->where('shift_id', $id);
+                    });
 
                 $employees = Employee::where('is_active', 1)
                     ->whereNotIn('relay_shift', $excludedRelayShifts)
@@ -451,11 +464,24 @@ class EmployeeController extends Controller
                 $employees = Employee::where('is_active', 1)
                     ->whereNotIn('relay_shift', $excludedRelayShifts)
                     ->whereDoesntHave('shiftAssignments');
+
+                $employees = Employee::where('is_active', 1)
+                    ->whereNotIn('relay_shift', $excludedRelayShifts)
+                    ->whereDoesntHave('shiftAssignments');
             }
 
 
             // Department filter
+
+            // Department filter
             if ($request->filled('department_id')) {
+
+                $employees->where(
+                    'department_id',
+                    $request->department_id
+                );
+            }
+
 
                 $employees->where(
                     'department_id',
@@ -470,8 +496,19 @@ class EmployeeController extends Controller
                 $search = $request->search;
 
 
+
                 $employees->where(function ($query) use ($search) {
 
+                    $query->where(
+                        'name',
+                        'LIKE',
+                        "%{$search}%"
+                    )
+                        ->orWhere(
+                            'employee_code',
+                            'LIKE',
+                            "%{$search}%"
+                        );
                     $query->where(
                         'name',
                         'LIKE',
@@ -500,19 +537,40 @@ class EmployeeController extends Controller
 
 
 
+
+
+            // Load designation relationship
+            // Include foreign key for relation
+            $employees->with('designation')
+                ->select(
+                    'id',
+                    'name',
+                    'employee_code',
+                    'is_active',
+                    'designation_id' // change to designation_id if your column is different
+                );
+
+
+
             $employees = $employees
                 ->latest()
                 ->paginate($limit);
 
 
 
+
+
             $employees->through(function ($employee) {
+
 
                 return [
 
+
                     'id' => $employee->id,
 
+
                     'name' => $employee->name,
+
 
                     'employee_code' => $employee->employee_code,
 
@@ -523,39 +581,57 @@ class EmployeeController extends Controller
 
 
 
+
+
             return response()->json([
+
 
                 'status' => 200,
 
+
                 'message' => 'Employee list fetched successfully',
+
 
                 'data' => $employees->items(),
 
+
                 'pagination' => [
+
 
                     'current_page' => $employees->currentPage(),
 
+
                     'last_page' => $employees->lastPage(),
+
 
                     'per_page' => $employees->perPage(),
 
+
                     'total' => $employees->total(),
+
 
                     'from' => $employees->firstItem(),
 
+
                     'to' => $employees->lastItem(),
 
+
                 ]
+
 
             ]);
         } catch (\Throwable $th) {
 
 
+
             return response()->json([
+
 
                 'status' => 500,
 
+
                 'message' => $th->getMessage()
+
 
             ]);
         }
