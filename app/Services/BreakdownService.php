@@ -18,7 +18,7 @@ class BreakdownService
     {
         $limit = isset($filters['limit']) ? (int) $filters['limit'] : 10;
 
-        $query = BreakdownTicket::with(['equipment', 'equipmentName', 'shift', 'reporter.employee', 'resolver.employee', 'equipmentAllocation']);
+        $query = BreakdownTicket::with(['equipment', 'equipmentName', 'shift', 'reporter', 'resolver.employee', 'equipmentAllocation', 'breakdownType']);
 
         // Filters
         if (isset($filters['status'])) {
@@ -114,12 +114,12 @@ class BreakdownService
         $totalDowntimeMinutes = (clone $dashboardQuery)->sum('downtime_minutes');
         $totalDowntimeHours = round($totalDowntimeMinutes / 60, 2);
 
-        // 4. mttr_hours = AVG(resolved_at - downtime_start) in hours, over closed tickets in period, rounded to 2 decimals
+        // 4. mttr_hours = AVG(downtime_end - downtime_start) in hours, over closed tickets in period, rounded to 2 decimals
         $mttrResult = (clone $dashboardQuery)
             ->where('status', 'closed')
-            ->whereNotNull('resolved_at')
+            ->whereNotNull('downtime_end')
             ->whereNotNull('downtime_start')
-            ->selectRaw('AVG(TIMESTAMPDIFF(MINUTE, downtime_start, resolved_at)) as avg_minutes')
+            ->selectRaw('AVG(TIMESTAMPDIFF(MINUTE, downtime_start, downtime_end)) as avg_minutes')
             ->first();
         $mttrHours = $mttrResult && $mttrResult->avg_minutes !== null ? round($mttrResult->avg_minutes / 60, 2) : 0.00;
 
@@ -215,7 +215,7 @@ class BreakdownService
      */
     public function find(int $id)
     {
-        return BreakdownTicket::with(['equipment', 'equipmentName', 'shift', 'reporter.employee', 'resolver.employee', 'equipmentAllocation'])
+        return BreakdownTicket::with(['equipment', 'equipmentName', 'shift', 'reporter', 'resolver.employee', 'equipmentAllocation', 'breakdownType'])
             ->findOrFail($id);
     }
 
@@ -241,8 +241,9 @@ class BreakdownService
         // Never accept downtime_minutes or resolution metrics directly from client input
         unset($data['downtime_minutes'], $data['resolved_by'], $data['resolved_at']);
 
-        if (isset($data['status']) && $data['status'] === 'closed') {
-            $downtimeEnd = \Carbon\Carbon::parse($data['downtime_end']);
+        if (!empty($data['downtime_end']) || (isset($data['status']) && $data['status'] === 'closed')) {
+            $data['status'] = 'closed';
+            $downtimeEnd = \Carbon\Carbon::parse($data['downtime_end'] ?? $ticket->downtime_end);
             $downtimeStart = $ticket->downtime_start;
 
             $data['downtime_minutes'] = $downtimeEnd->diffInMinutes($downtimeStart);
@@ -251,7 +252,7 @@ class BreakdownService
         }
 
         $ticket->update($data);
-        $ticket->load(['equipment', 'equipmentName', 'shift', 'reporter.employee', 'resolver.employee', 'equipmentAllocation']);
+        $ticket->load(['equipment', 'equipmentName', 'shift', 'reporter', 'resolver.employee', 'equipmentAllocation', 'breakdownType']);
 
         return $ticket;
     }

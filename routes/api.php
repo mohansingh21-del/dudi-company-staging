@@ -46,6 +46,7 @@ use App\Http\Controllers\Api\Admin\ShiftPlanController;
 use App\Http\Controllers\Api\Admin\WorkforceDeploymentController;
 use App\Http\Controllers\Api\Admin\BreakdownController;
 use App\Http\Controllers\Api\Admin\BreakdownTypeController;
+use App\Http\Controllers\Api\Admin\FuelEntryController;
 
 /*
 |--------------------------------------------------------------------------
@@ -92,6 +93,8 @@ Route::prefix('v1')->group(function () {
     Route::get('/states', [StateController::class, 'getStates']);
 
     Route::get('/states/{id}/cities', [CityController::class, 'getCities']);
+
+    Route::get('/shifts/by-datetime', [ShiftController::class, 'findShiftByDateTime']);
 
     /*
     |--------------------------------------------------------------------------
@@ -353,7 +356,7 @@ Route::prefix('v1')->group(function () {
 
             // KEEP YOUR EXISTING VEHICLE ROUTES HERE
             // NO CHANGES REQUIRED
-
+    
             /*
             |--------------------------------------------------------------------------
             | Shift Plan/Equipment Allocation/Employee deployment
@@ -393,7 +396,23 @@ Route::prefix('v1')->group(function () {
                 Route::get('/', [BreakdownController::class, 'index']);
                 Route::get('{id}', [BreakdownController::class, 'show']);
                 Route::post('/', [BreakdownController::class, 'store']);
-                Route::put('{id}', [BreakdownController::class, 'update']);
+                Route::match(['put', 'post'], '{id}', [BreakdownController::class, 'update']);
+            });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Fuel Management
+            |--------------------------------------------------------------------------
+            */
+            Route::prefix('fuel-entries')->group(function () {
+                Route::get('/', [FuelEntryController::class, 'index']);
+                Route::post('/', [FuelEntryController::class, 'store']);
+                Route::get('dashboard', [FuelEntryController::class, 'dashboard']);
+                Route::get('performance', [FuelEntryController::class, 'performance']);
+                Route::get('allocation-tracking', [FuelEntryController::class, 'allocationTracking']);
+                Route::get('summary', [FuelEntryController::class, 'summary']);
+                Route::get('{id}', [FuelEntryController::class, 'show']);
+                Route::put('{id}', [FuelEntryController::class, 'update']);
             });
 
         });

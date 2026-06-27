@@ -24,7 +24,11 @@ class BreakdownListResource extends JsonResource
             'downtime_start'      => $this->downtime_start ? $this->downtime_start->toDateTimeString() : null,
             'downtime_end'        => $this->downtime_end ? $this->downtime_end->toDateTimeString() : null,
             'downtime_minutes'    => $this->downtime_minutes,
-            'reported_by_name'    => optional($this->reporter->employee)->name ?? (optional($this->reporter)->email ?? null),
+            'reported_by_name'    => optional($this->reporter)->name,
+            'breakdown_type_id'   => $this->breakdown_type_id,
+            'breakdown_type'      => optional($this->breakdownType)->breakdown_type,
+            'brek_down_type'      => optional($this->breakdownType)->breakdown_type,
+            'resolved_at'         => $this->resolved_at ? $this->resolved_at->toDateTimeString() : null,
         ];
     }
 }

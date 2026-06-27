@@ -327,4 +327,160 @@ class PublicAPIsTest extends TestCase
         // Assert we don't return non-matching
         $this->assertCount(1, $response->json('data'));
     }
+
+    public function test_find_shift_by_datetime_regular_shift()
+    {
+        // A regular shift exists: Morning Shift (08:00:00 - 16:00:00)
+        // Let's create a shift plan for it on today's date
+        $planningDate = '2026-06-27';
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id, // shift A starts at 08:00:00, ends at 16:00:00
+            'site_id' => $this->site->id,
+            'target_bcm' => 10000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-REGULAR-123'
+        ]);
+
+        // Create category, machine and allocate
+        $excavatorCategory = Equipment::create(['name' => 'Excavator', 'is_active' => 1]);
+        $excavatorMachine = EquipmentName::create([
+            'equipment_id' => $excavatorCategory->id,
+            'equipment_name' => 'EX-001',
+            'is_active' => 1,
+        ]);
+
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $excavatorMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        // Query the public API without authentication (completely public)
+        $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-27&time=10:15:00");
+
+        $response->assertStatus(200);
+        $response->assertExactJson([
+            'status' => 200,
+            'message' => 'Shift details retrieved successfully.',
+            'data' => [
+                'id' => $this->shift->id,
+                'name' => 'A',
+                'start_time' => '08:00:00',
+                'end_time' => '16:00:00',
+                'shift_plan_id' => $shiftPlan->id,
+                'machines' => [
+                    [
+                        'machine_id' => $excavatorMachine->id,
+                        'machine_name' => 'EX-001',
+                        'category_id' => $excavatorCategory->id,
+                        'category_name' => 'Excavator',
+                    ]
+                ]
+            ]
+        ]);
+    }
+
+    public function test_find_shift_by_datetime_night_shift_post_midnight()
+    {
+        // Create a Night Shift: 22:00:00 - 06:00:00
+        $nightShift = Shift::create([
+            'shift_name' => 'Night Shift',
+            'start_time' => '22:00:00',
+            'end_time' => '06:00:00',
+            'minimum_working_hours' => 8.00,
+            'is_night_shift' => 1,
+            'is_active' => 1
+        ]);
+
+        // Create shift plan for June 27th Night Shift (meaning it spans into morning of June 28th)
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => '2026-06-27',
+            'shift_id' => $nightShift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 12000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-NIGHT-123'
+        ]);
+
+        // Query the public API for 2 AM on June 28th.
+        // It should match the Night Shift, and planning date should resolve to June 27th, and fetch the shift plan.
+        $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-28&time=02:00:00");
+
+        $response->assertStatus(200);
+        $response->assertExactJson([
+            'status' => 200,
+            'message' => 'Shift details retrieved successfully.',
+            'data' => [
+                'id' => $nightShift->id,
+                'name' => 'Night Shift',
+                'start_time' => '22:00:00',
+                'end_time' => '06:00:00',
+                'shift_plan_id' => $shiftPlan->id,
+                'machines' => []
+            ]
+        ]);
+    }
+
+    public function test_find_shift_by_datetime_no_shift_covers_time()
+    {
+        $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-27&time=invalid-time");
+
+        $response->assertStatus(422);
+    }
+
+    public function test_find_shift_by_datetime_space_separated()
+    {
+        // Morning Shift (08:00:00 - 16:00:00)
+        $planningDate = '2026-06-27';
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id, 
+            'site_id' => $this->site->id,
+            'target_bcm' => 10000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-SPACE-123'
+        ]);
+
+        // Query with space-separated datetime
+        $response = $this->getJson("/api/v1/shifts/by-datetime?datetime=2026-06-27 12:00:00");
+
+        $response->assertStatus(200);
+        $response->assertExactJson([
+            'status' => 200,
+            'message' => 'Shift details retrieved successfully.',
+            'data' => [
+                'id' => $this->shift->id,
+                'name' => 'A',
+                'start_time' => '08:00:00',
+                'end_time' => '16:00:00',
+                'shift_plan_id' => $shiftPlan->id,
+                'machines' => []
+            ]
+        ]);
+    }
+
+    public function test_find_shift_by_datetime_no_shift_plan_exists()
+    {
+        // Query the public API for a date/time where an active shift exists, but no ShiftPlan has been created
+        $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-27&time=10:15:00");
+
+        $response->assertStatus(422);
+        $response->assertJson([
+            'status' => 422,
+            'message' => 'No shift plan found for the selected date.',
+            'data' => null
+        ]);
+    }
 }

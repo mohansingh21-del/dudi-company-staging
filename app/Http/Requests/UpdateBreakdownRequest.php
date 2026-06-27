@@ -32,15 +32,16 @@ class UpdateBreakdownRequest extends FormRequest
             'status'           => 'nullable|in:open,in_progress,on_hold,closed',
             'severity'         => 'nullable|string|in:LOW,MEDIUM,HIGH,CRITICAL',
             'description'      => 'nullable|string|max:1000',
-            'downtime_end'     => 'required_if:status,closed|date_format:Y-m-d H:i:s',
-            'resolution_notes' => 'required_if:status,closed|string|max:1000',
+            'downtime_end'     => 'required_if:status,closed|nullable|date_format:Y-m-d H:i:s',
+            'resolution_notes' => 'required_if:status,closed|required_with:downtime_end|nullable|string|max:1000',
         ];
     }
 
     public function withValidator($validator)
     {
         $validator->after(function ($validator) {
-            if ($this->input('status') === 'closed') {
+            $downtimeEnd = $this->input('downtime_end');
+            if ($downtimeEnd || $this->input('status') === 'closed') {
                 $ticketId = $this->route('id');
                 $ticket = \App\Models\BreakdownTicket::find($ticketId);
 
@@ -48,7 +49,6 @@ class UpdateBreakdownRequest extends FormRequest
                     return;
                 }
 
-                $downtimeEnd = $this->input('downtime_end');
                 if ($downtimeEnd) {
                     $end = \Carbon\Carbon::parse($downtimeEnd);
                     $start = \Carbon\Carbon::parse($ticket->downtime_start);

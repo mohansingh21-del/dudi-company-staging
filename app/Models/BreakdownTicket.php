@@ -68,11 +68,16 @@ class BreakdownTicket extends Model
 
     public function reporter()
     {
-        return $this->belongsTo(User::class, 'reported_by');
+        return $this->belongsTo(Employee::class, 'reported_by');
     }
 
     public function resolver()
     {
         return $this->belongsTo(User::class, 'resolved_by');
+    }
+
+    public function breakdownType()
+    {
+        return $this->belongsTo(BreakdownType::class, 'breakdown_type_id');
     }
 }

@@ -174,6 +174,8 @@ class BreakdownManagementTest extends TestCase
                     'breakdown_date_time',
                     'reported_by',
                     'breakdown_type_id',
+                    'breakdown_type',
+                    'brek_down_type',
                     'severity',
                     'description',
                     'status',
@@ -225,6 +227,88 @@ class BreakdownManagementTest extends TestCase
                 'status'           => 'closed',
                 'downtime_minutes' => 150, // 10:00 to 12:30 is 150 minutes
                 'resolution_notes' => 'Fixed the leak.',
+            ]);
+
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'id'               => $ticket->id,
+            'status'           => 'closed',
+            'downtime_minutes' => 150,
+            'resolved_by'      => $this->adminUser->id,
+        ]);
+    }
+
+    public function test_can_update_breakdown_ticket_via_post_with_method_spoofing()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $ticket = BreakdownTicket::create([
+            'ticket_number'       => 'BRK-2026-00009',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'Testing update via POST',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 10:00:00',
+        ]);
+
+        $payload = [
+            '_method'          => 'PUT',
+            'status'           => 'closed',
+            'downtime_end'     => '2026-06-26 12:30:00',
+            'resolution_notes' => 'Fixed the leak via POST.',
+        ];
+
+        $response = $this->postJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
+
+        $response->assertStatus(200)
+            ->assertJsonFragment([
+                'status'           => 'closed',
+                'downtime_minutes' => 150,
+                'resolution_notes' => 'Fixed the leak via POST.',
+            ]);
+
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'id'               => $ticket->id,
+            'status'           => 'closed',
+            'downtime_minutes' => 150,
+            'resolved_by'      => $this->adminUser->id,
+        ]);
+    }
+
+    public function test_can_update_breakdown_ticket_by_providing_only_downtime_end()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $ticket = BreakdownTicket::create([
+            'ticket_number'       => 'BRK-2026-00008',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'Testing update with only downtime_end',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 10:00:00',
+        ]);
+
+        $payload = [
+            'downtime_end'     => '2026-06-26 12:30:00',
+            'resolution_notes' => 'Fixed the leak with only downtime_end.',
+        ];
+
+        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
+
+        $response->assertStatus(200)
+            ->assertJsonFragment([
+                'status'           => 'closed',
+                'downtime_minutes' => 150,
+                'resolution_notes' => 'Fixed the leak with only downtime_end.',
             ]);
 
         $this->assertDatabaseHas('breakdown_tickets', [
@@ -349,13 +433,36 @@ class BreakdownManagementTest extends TestCase
                     'mttr_hours',
                     'equipment_availability_percent',
                 ],
-                'data',
+                'data' => [
+                    '*' => [
+                        'id',
+                        'ticket_number',
+                        'shift_id',
+                        'shift_name',
+                        'equipment_id',
+                        'equipment_category',
+                        'equipment_name_id',
+                        'equipment_name',
+                        'equipment_allocation_id',
+                        'breakdown_date_time',
+                        'severity',
+                        'status',
+                        'downtime_start',
+                        'downtime_end',
+                        'downtime_minutes',
+                        'reported_by_name',
+                        'breakdown_type_id',
+                        'breakdown_type',
+                        'brek_down_type',
+                        'resolved_at',
+                    ]
+                ],
                 'pagination',
             ])
             ->assertJsonFragment([
                 'open_tickets'         => 1,
                 'total_downtime_hours' => 1.00, // 60 minutes / 60
-                'mttr_hours'           => 1.25, // 75 minutes = 1.25 hours
+                'mttr_hours'           => 1.00, // 60 minutes = 1.00 hours
             ]);
     }
 

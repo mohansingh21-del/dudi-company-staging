@@ -8,6 +8,9 @@ use App\Models\Shift;
 use App\Http\Requests\StoreShiftRequest;
 use App\Http\Requests\UpdateShiftRequest;
 use App\Http\Resources\ShiftResource;
+use App\Models\ShiftPlan;
+use App\Http\Resources\ShiftPlanResource;
+use App\Models\ShiftEquipmentAllocation;
 
 class ShiftController extends Controller
 {
@@ -213,6 +216,137 @@ class ShiftController extends Controller
                 'status' => 500,
                 'message' => $th->getMessage()
             ]);
+        }
+    }
+
+    public function findShiftByDateTime(Request $request)
+    {
+        try {
+            $request->validate([
+                'date' => 'nullable',
+                'time' => 'nullable',
+                'datetime' => 'nullable',
+                'date_time' => 'nullable',
+            ]);
+
+            $targetDate = $request->query('date');
+            $targetTime = $request->query('time');
+            $dateTimeStr = $request->query('datetime') ?? $request->query('date_time');
+
+            if ($dateTimeStr) {
+                try {
+                    $dt = \Carbon\Carbon::parse($dateTimeStr);
+                    $targetDate = $dt->format('Y-m-d');
+                    $targetTime = $dt->format('H:i:s');
+                } catch (\Throwable $e) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Invalid datetime format.'
+                    ], 422);
+                }
+            }
+
+            if (!$targetDate) {
+                $targetDate = \Carbon\Carbon::today()->format('Y-m-d');
+            }
+
+            if (!$targetTime) {
+                $targetTime = \Carbon\Carbon::now()->format('H:i:s');
+            } else {
+                try {
+                    $targetTime = \Carbon\Carbon::parse($targetTime)->format('H:i:s');
+                } catch (\Throwable $e) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Invalid time format.'
+                    ], 422);
+                }
+            }
+
+            $matchedShift = null;
+            $shifts = Shift::where('is_active', 1)->get();
+
+            foreach ($shifts as $shift) {
+                $start = $shift->start_time;
+                $end = $shift->end_time;
+
+                if ($start > $end) {
+                    if ($targetTime >= $start || $targetTime < $end) {
+                        $matchedShift = $shift;
+                        break;
+                    }
+                } else {
+                    if ($targetTime >= $start && $targetTime < $end) {
+                        $matchedShift = $shift;
+                        break;
+                    }
+                }
+            }
+
+            if (!$matchedShift) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'No active shift covers the given time.',
+                    'data' => null
+                ], 404);
+            }
+
+            $planningDate = $targetDate;
+            if ($matchedShift->start_time > $matchedShift->end_time) {
+                if ($targetTime < $matchedShift->end_time) {
+                    $planningDate = \Carbon\Carbon::parse($targetDate)->subDay()->format('Y-m-d');
+                }
+            }
+
+            $shiftPlan = ShiftPlan::where('shift_id', $matchedShift->id)
+                ->whereDate('planning_date', $planningDate)
+                ->first();
+
+            if (!$shiftPlan) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'No shift plan found for the selected date.',
+                    'data' => null
+                ], 422);
+            }
+
+            $machines = [];
+            $allocations = ShiftEquipmentAllocation::with(['equipmentName.equipment'])
+                ->where('shift_plan_id', $shiftPlan->id)
+                ->get();
+
+            foreach ($allocations as $allocation) {
+                $machine = $allocation->equipmentName;
+                $category = $machine ? $machine->equipment : null;
+                if ($machine) {
+                    $machines[] = [
+                        'machine_id' => $machine->id,
+                        'machine_name' => $machine->equipment_name,
+                        'category_id' => $category ? $category->id : null,
+                        'category_name' => $category ? $category->name : null,
+                    ];
+                }
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Shift details retrieved successfully.',
+                'data' => [
+                    'id' => $matchedShift->id,
+                    'name' => $matchedShift->shift_name,
+                    'start_time' => $matchedShift->start_time,
+                    'end_time' => $matchedShift->end_time,
+                    'shift_plan_id' => $shiftPlan ? $shiftPlan->id : null,
+                    'machines' => $machines,
+                ]
+            ], 200);
+
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+                'data' => []
+            ], 500);
         }
     }
 
