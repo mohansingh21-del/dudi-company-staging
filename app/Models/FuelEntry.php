@@ -12,7 +12,11 @@ class FuelEntry extends Model
     protected $fillable = [
         'fuel_ref_no',
         'shift_plan_id',
+        'fuel_log_date',
+        'shift_id',
         'equipment_allocation_id',
+        'equipment_id',
+        'equipment_name_id',
         'operator_id',
         'fuel_source',
         'opening_fuel',
@@ -32,6 +36,7 @@ class FuelEntry extends Model
     ];
 
     protected $casts = [
+        'fuel_log_date' => 'date',
         'opening_fuel' => 'decimal:2',
         'fuel_issued' => 'decimal:2',
         'closing_fuel' => 'decimal:2',
@@ -71,11 +76,35 @@ class FuelEntry extends Model
     }
 
     /**
+     * The shift this entry belongs to.
+     */
+    public function shift()
+    {
+        return $this->belongsTo(Shift::class, 'shift_id');
+    }
+
+    /**
      * The equipment allocation this entry belongs to.
      */
     public function equipmentAllocation()
     {
         return $this->belongsTo(ShiftEquipmentAllocation::class, 'equipment_allocation_id');
+    }
+
+    /**
+     * The equipment category this entry belongs to.
+     */
+    public function equipment()
+    {
+        return $this->belongsTo(Equipment::class, 'equipment_id');
+    }
+
+    /**
+     * The specific equipment name/instance this entry belongs to.
+     */
+    public function equipmentName()
+    {
+        return $this->belongsTo(EquipmentName::class, 'equipment_name_id');
     }
 
     /**

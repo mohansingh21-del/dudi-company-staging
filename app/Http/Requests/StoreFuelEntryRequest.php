@@ -17,7 +17,11 @@ class StoreFuelEntryRequest extends FormRequest
     {
         return [
             'shift_plan_id' => 'required|integer|exists:shift_plans,id',
-            'equipment_allocation_id' => 'required|integer|exists:shift_equipment_allocations,id',
+            'fuel_log_date' => 'nullable|date',
+            'shift_id' => 'nullable|integer|exists:shifts,id',
+            'equipment_allocation_id' => 'nullable|integer|exists:shift_equipment_allocations,id',
+            'equipment_id' => 'nullable|integer|exists:equipments,id',
+            'equipment_name_id' => 'nullable|integer|exists:equipment_names,id',
             'operator_id' => 'nullable|integer|exists:users,id',
             'fuel_source' => 'nullable|string|in:fuel_tanker,fuel_station,mobile_refueling_unit',
             'opening_fuel' => 'required|numeric|min:0',
@@ -41,6 +45,16 @@ class StoreFuelEntryRequest extends FormRequest
                     $validator->errors()->add('closing_fuel', 'Closing fuel cannot be greater than opening fuel + fuel issued.');
                 }
             }
+
+            $shiftPlanId = $this->input('shift_plan_id');
+            $shiftId = $this->input('shift_id');
+
+            if ($shiftPlanId && $shiftId) {
+                $shiftPlan = \App\Models\ShiftPlan::find($shiftPlanId);
+                if ($shiftPlan && $shiftPlan->shift_id != $shiftId) {
+                    $validator->errors()->add('shift_id', 'The selected shift does not match the shift plan.');
+                }
+            }
         });
     }
 
@@ -48,9 +62,9 @@ class StoreFuelEntryRequest extends FormRequest
     {
         throw new HttpResponseException(
             response()->json([
-                'status'  => 422,
+                'status' => 422,
                 'message' => 'Validation failed',
-                'errors'  => $validator->errors()
+                'errors' => $validator->errors()
             ], 422)
         );
     }

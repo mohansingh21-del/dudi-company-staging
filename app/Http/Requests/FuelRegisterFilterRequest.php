@@ -21,6 +21,7 @@ class FuelRegisterFilterRequest extends FormRequest
             'date_to' => 'nullable|string',
             'period' => 'nullable|string',
             'shift_id' => 'nullable|integer',
+            'equipment_id' => 'nullable|integer',
             'machine_type_id' => 'nullable|integer',
             'machine_number_id' => 'nullable|integer',
             'operator_id' => 'nullable|integer',

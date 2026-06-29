@@ -45,6 +45,10 @@ class BreakdownService
             $query->where('equipment_allocation_id', $filters['equipment_allocation_id']);
         }
 
+        if (isset($filters['breakdown_type_id'])) {
+            $query->where('breakdown_type_id', $filters['breakdown_type_id']);
+        }
+
         // Filter site_id via shift_plans of the same date
         if (isset($filters['site_id'])) {
             $query->whereExists(function ($q) use ($filters) {

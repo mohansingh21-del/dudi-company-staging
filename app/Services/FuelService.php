@@ -60,13 +60,24 @@ class FuelService
                 throw new MachineNotInShiftException("Machine Is Not Assigned To Current Shift");
             }
 
-            // 2. Validate equipment_allocation_id belongs to shift_plan_id
-            $allocation = ShiftEquipmentAllocation::where('id', $data['equipment_allocation_id'])
-                ->where('shift_plan_id', $data['shift_plan_id'])
-                ->first();
+            // 2. Validate or resolve equipment_allocation_id belonging to shift_plan_id
+            $allocation = null;
+            if (!empty($data['equipment_allocation_id'])) {
+                $allocation = ShiftEquipmentAllocation::where('id', $data['equipment_allocation_id'])
+                    ->where('shift_plan_id', $data['shift_plan_id'])
+                    ->first();
+            } elseif (!empty($data['equipment_name_id'])) {
+                $allocation = ShiftEquipmentAllocation::where('shift_plan_id', $data['shift_plan_id'])
+                    ->where('equipment_name_id', $data['equipment_name_id'])
+                    ->first();
+            }
+
             if (!$allocation) {
                 throw new MachineNotInShiftException("Machine Is Not Assigned To Current Shift");
             }
+
+            // Ensure the resolved allocation ID is populated in the data array
+            $data['equipment_allocation_id'] = $allocation->id;
 
             // 3. Fetch previous fuel entry for same machine to validate readings
             if (isset($data['hours_meter_reading'])) {
@@ -146,7 +157,16 @@ class FuelService
             // 8. Generate fuel_ref_no, set created_by, status
             $fuelRefNo = $this->generateFuelRefNo();
 
+            $fuelLogDate = isset($data['fuel_log_date']) ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d') : ($shiftPlan->planning_date ? Carbon::parse($shiftPlan->planning_date)->format('Y-m-d') : null);
+            $shiftId = $data['shift_id'] ?? $shiftPlan->shift_id;
+            $equipmentNameId = $data['equipment_name_id'] ?? $allocation->equipment_name_id;
+            $equipmentId = $data['equipment_id'] ?? optional($allocation->equipmentName)->equipment_id;
+
             $entryData = array_merge($data, [
+                'fuel_log_date' => $fuelLogDate,
+                'shift_id' => $shiftId,
+                'equipment_id' => $equipmentId,
+                'equipment_name_id' => $equipmentNameId,
                 'fuel_ref_no' => $fuelRefNo,
                 'fuel_consumption' => $fuelConsumption,
                 'work_done_bcm' => $workDoneBcm,
@@ -183,14 +203,23 @@ class FuelService
             }
 
             // Reject payload that changes read-only fields
-            $readOnlyFields = ['fuel_ref_no', 'shift_plan_id', 'equipment_allocation_id', 'fuel_consumption', 'fuel_per_bcm', 'created_by', 'created_at'];
+            $readOnlyFields = ['fuel_ref_no', 'created_by', 'created_at'];
             foreach ($readOnlyFields as $field) {
                 if (array_key_exists($field, $data)) {
                     $originalVal = $entry->$field;
                     $newVal = $data[$field];
+                    if ($newVal === null || $newVal === '') {
+                        continue;
+                    }
                     if ($field === 'created_at') {
-                        if (Carbon::parse($originalVal)->ne(Carbon::parse($newVal))) {
-                            throw new ReadOnlyFieldMutationException("Field {$field} is read-only");
+                        if ($originalVal === null || $newVal === null) {
+                            if ($originalVal !== $newVal) {
+                                throw new ReadOnlyFieldMutationException("Field {$field} is read-only");
+                            }
+                        } else {
+                            if (Carbon::parse($originalVal)->ne(Carbon::parse($newVal))) {
+                                throw new ReadOnlyFieldMutationException("Field {$field} is read-only");
+                            }
                         }
                     } else {
                         if (is_numeric($originalVal) && is_numeric($newVal)) {
@@ -206,10 +235,61 @@ class FuelService
                 }
             }
 
-            // Reject work_done_bcm updates if it's already synced (i.e. not null currently)
-            if (array_key_exists('work_done_bcm', $data) && $entry->work_done_bcm !== null && $entry->work_done_bcm != $data['work_done_bcm']) {
-                throw new ReadOnlyFieldMutationException("work_done_bcm cannot be edited after syncing");
+            // 1. Resolve the correct ShiftPlan
+            $shiftPlan = null;
+            if (isset($data['shift_plan_id'])) {
+                $shiftPlan = ShiftPlan::find($data['shift_plan_id']);
+            } else {
+                $date = isset($data['fuel_log_date']) 
+                    ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d') 
+                    : ($entry->fuel_log_date ? $entry->fuel_log_date->format('Y-m-d') : null);
+                $shiftId = isset($data['shift_id']) ? $data['shift_id'] : $entry->shift_id;
+
+                if ($date && $shiftId) {
+                    $shiftPlan = ShiftPlan::whereDate('planning_date', $date)
+                        ->where('shift_id', $shiftId)
+                        ->first();
+                }
             }
+
+            // Fallback to current entry's shift plan if none resolved
+            if (!$shiftPlan) {
+                $shiftPlan = ShiftPlan::find($entry->shift_plan_id);
+            }
+
+            // Ensure shift plan is valid and active/published
+            if (!$shiftPlan || !in_array($shiftPlan->status, ['published', 'in_progress', 'active', 'planned'])) {
+                throw new MachineNotInShiftException("Machine Is Not Assigned To Current Shift");
+            }
+
+            // 2. Resolve the correct machine allocation
+            $equipmentNameId = isset($data['equipment_name_id']) ? $data['equipment_name_id'] : $entry->equipment_name_id;
+
+            $allocation = null;
+            if (!empty($data['equipment_allocation_id'])) {
+                $allocation = ShiftEquipmentAllocation::where('id', $data['equipment_allocation_id'])
+                    ->where('shift_plan_id', $shiftPlan->id)
+                    ->first();
+            } else {
+                $allocation = ShiftEquipmentAllocation::where('shift_plan_id', $shiftPlan->id)
+                    ->where('equipment_name_id', $equipmentNameId)
+                    ->first();
+            }
+
+            if (!$allocation) {
+                throw new MachineNotInShiftException("Machine Is Not Assigned To Current Shift");
+            }
+
+            // Populate resolved related fields
+            $data['shift_plan_id'] = $shiftPlan->id;
+            $data['equipment_allocation_id'] = $allocation->id;
+            $data['equipment_id'] = $allocation->equipmentName->equipment_id;
+            $data['shift_id'] = $shiftPlan->shift_id;
+            $data['fuel_log_date'] = $shiftPlan->planning_date;
+            $data['equipment_name_id'] = $equipmentNameId;
+
+            // Fill attributes with the updated data
+            $entry->fill($data);
 
             // Readings validation against PREVIOUS entries
             if (isset($data['hours_meter_reading'])) {
@@ -253,8 +333,10 @@ class FuelService
                 ->orderBy('kilometer_reading', 'desc')
                 ->first();
 
-            // Set fill attributes from payload
-            $entry->fill($data);
+            // Resolve work_done_bcm if not explicitly provided in payload (in case shift/machine changed)
+            if (!array_key_exists('work_done_bcm', $data)) {
+                $entry->work_done_bcm = $this->resolveWorkDoneBcm($entry->shift_plan_id, $entry->equipment_allocation_id);
+            }
 
             // Recalculations
             if ($entry->opening_fuel !== null && $entry->closing_fuel !== null) {
@@ -357,21 +439,30 @@ class FuelService
         list($dateFrom, $dateTo) = $this->resolveDateRange($filters);
 
         $query = FuelEntry::with([
-            'shiftPlan.shift',
-            'shiftPlan.site',
-            'equipmentAllocation.equipmentName.equipment',
-            'operator.employee',
-            'createdBy.employee',
+            'equipment',
+            'equipmentName',
         ]);
 
         if ($dateFrom) {
-            $query->whereHas('shiftPlan', function ($q) use ($dateFrom) {
-                $q->where('planning_date', '>=', $dateFrom->format('Y-m-d'));
+            $query->where(function ($q) use ($dateFrom) {
+                $q->where('fuel_entries.fuel_log_date', '>=', $dateFrom->format('Y-m-d'))
+                  ->orWhere(function ($sq) use ($dateFrom) {
+                      $sq->whereNull('fuel_entries.fuel_log_date')
+                         ->whereHas('shiftPlan', function ($sp) use ($dateFrom) {
+                             $sp->where('planning_date', '>=', $dateFrom->format('Y-m-d'));
+                         });
+                  });
             });
         }
         if ($dateTo) {
-            $query->whereHas('shiftPlan', function ($q) use ($dateTo) {
-                $q->where('planning_date', '<=', $dateTo->format('Y-m-d'));
+            $query->where(function ($q) use ($dateTo) {
+                $q->where('fuel_entries.fuel_log_date', '<=', $dateTo->format('Y-m-d'))
+                  ->orWhere(function ($sq) use ($dateTo) {
+                      $sq->whereNull('fuel_entries.fuel_log_date')
+                         ->whereHas('shiftPlan', function ($sp) use ($dateTo) {
+                             $sp->where('planning_date', '<=', $dateTo->format('Y-m-d'));
+                         });
+                  });
             });
         }
 
@@ -381,20 +472,20 @@ class FuelService
             });
         }
 
+        if (isset($filters['equipment_id'])) {
+            $query->where('fuel_entries.equipment_id', $filters['equipment_id']);
+        }
+
         if (isset($filters['machine_type_id'])) {
-            $query->whereHas('equipmentAllocation.equipmentName', function ($q) use ($filters) {
-                $q->where('equipment_id', $filters['machine_type_id']);
-            });
+            $query->where('fuel_entries.equipment_id', $filters['machine_type_id']);
         }
 
         if (isset($filters['machine_number_id'])) {
-            $query->whereHas('equipmentAllocation', function ($q) use ($filters) {
-                $q->where('equipment_name_id', $filters['machine_number_id']);
-            });
+            $query->where('fuel_entries.equipment_name_id', $filters['machine_number_id']);
         }
 
         if (isset($filters['operator_id'])) {
-            $query->where('operator_id', $filters['operator_id']);
+            $query->where('fuel_entries.operator_id', $filters['operator_id']);
         }
 
         if (isset($filters['site_id'])) {
@@ -404,18 +495,18 @@ class FuelService
         }
 
         if (isset($filters['fuel_source'])) {
-            $query->where('fuel_source', $filters['fuel_source']);
+            $query->where('fuel_entries.fuel_source', $filters['fuel_source']);
         }
 
         if (isset($filters['fuel_ref_no'])) {
-            $query->where('fuel_ref_no', 'like', '%' . $filters['fuel_ref_no'] . '%');
+            $query->where('fuel_entries.fuel_ref_no', 'like', '%' . $filters['fuel_ref_no'] . '%');
         }
 
         if (isset($filters['flag'])) {
             if ($filters['flag'] === 'high_consumption') {
-                $query->where('fuel_consumption', '>=', config('fuel.high_consumption_threshold', 500.00));
+                $query->where('fuel_entries.fuel_consumption', '>=', config('fuel.high_consumption_threshold', 500.00));
             } elseif ($filters['flag'] === 'low_efficiency') {
-                $query->where('fuel_per_bcm', '>=', config('fuel.low_efficiency_threshold', 2.50));
+                $query->where('fuel_entries.fuel_per_bcm', '>=', config('fuel.low_efficiency_threshold', 2.50));
             }
         }
 
@@ -934,6 +1025,9 @@ class FuelService
         } elseif ($range === 'monthly') {
             $dateFrom = Carbon::now()->startOfMonth()->startOfDay();
             $dateTo = Carbon::now()->endOfMonth()->endOfDay();
+        } elseif ($range === 'yearly') {
+            $dateFrom = Carbon::now()->startOfYear()->startOfDay();
+            $dateTo = Carbon::now()->endOfYear()->endOfDay();
         } elseif ($range === 'current_shift') {
             $dateFrom = Carbon::today()->startOfDay();
             $dateTo = Carbon::today()->endOfDay();

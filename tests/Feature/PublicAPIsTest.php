@@ -483,4 +483,130 @@ class PublicAPIsTest extends TestCase
             'data' => null
         ]);
     }
+
+    public function test_find_shift_by_datetime_only_date_returns_all_planned_shifts()
+    {
+        $planningDate = '2026-06-27';
+
+        // 1. Create another Shift (Shift B)
+        $shiftB = Shift::create([
+            'shift_name' => 'B',
+            'start_time' => '16:00:00',
+            'end_time' => '00:00:00',
+            'minimum_working_hours' => 8.00,
+            'is_night_shift' => 0,
+            'is_active' => 1
+        ]);
+
+        // 2. Create ShiftPlan for Shift A (this->shift)
+        $shiftPlanA = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 10000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-A-123'
+        ]);
+
+        // 3. Create ShiftPlan for Shift B
+        $shiftPlanB = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $shiftB->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 12000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-B-123'
+        ]);
+
+        // Create category and machine for allocation to Shift A
+        $excavatorCategory = Equipment::create(['name' => 'Excavator', 'is_active' => 1]);
+        $excavatorMachine = EquipmentName::create([
+            'equipment_id' => $excavatorCategory->id,
+            'equipment_name' => 'EX-001',
+            'is_active' => 1,
+        ]);
+
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlanA->id,
+            'equipment_name_id' => $excavatorMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        // Query the API using only date
+        $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-27");
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'status' => 200,
+            'message' => 'Shift details retrieved successfully.',
+            'data' => [
+                [
+                    'id' => $this->shift->id,
+                    'name' => 'A',
+                    'start_time' => '08:00:00',
+                    'end_time' => '16:00:00',
+                    'shift_plan_id' => $shiftPlanA->id,
+                    'machines' => [
+                        [
+                            'machine_id' => $excavatorMachine->id,
+                            'machine_name' => 'EX-001',
+                            'category_id' => $excavatorCategory->id,
+                            'category_name' => 'Excavator',
+                        ]
+                    ]
+                ],
+                [
+                    'id' => $shiftB->id,
+                    'name' => 'B',
+                    'start_time' => '16:00:00',
+                    'end_time' => '00:00:00',
+                    'shift_plan_id' => $shiftPlanB->id,
+                    'machines' => []
+                ]
+            ]
+        ]);
+
+        // Also query using datetime=2026-06-27 without time
+        $response2 = $this->getJson("/api/v1/shifts/by-datetime?datetime=2026-06-27");
+        $response2->assertStatus(200);
+        $this->assertCount(2, $response2->json('data'));
+    }
+
+    public function test_find_shift_by_datetime_excludes_draft_and_closed_shift_plans()
+    {
+        $planningDate = '2026-06-28';
+
+        // 1. Create a draft ShiftPlan
+        $shiftPlanDraft = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 10000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'draft',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-DRAFT-123'
+        ]);
+
+        // 2. Query date-only, should return empty array
+        $response1 = $this->getJson("/api/v1/shifts/by-datetime?date={$planningDate}");
+        $response1->assertStatus(200);
+        $response1->assertJsonPath('data', []);
+
+        // 3. Query datetime-specific, should say no shift plan found (since the only one is draft)
+        $response2 = $this->getJson("/api/v1/shifts/by-datetime?date={$planningDate}&time=10:00:00");
+        $response2->assertStatus(422);
+        $response2->assertJsonFragment([
+            'message' => 'No shift plan found for the selected date.'
+        ]);
+    }
 }

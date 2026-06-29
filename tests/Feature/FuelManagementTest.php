@@ -151,7 +151,11 @@ class FuelManagementTest extends TestCase
                     'id',
                     'fuel_ref_no',
                     'shift_plan_id',
+                    'fuel_log_date',
+                    'shift_id',
                     'equipment_allocation_id',
+                    'equipment_id',
+                    'equipment_name_id',
                     'fuel_consumption',
                     'opening_fuel',
                     'fuel_issued',
@@ -165,7 +169,43 @@ class FuelManagementTest extends TestCase
         $this->assertDatabaseHas('fuel_entries', [
             'fuel_ref_no'      => $fuelRefNo,
             'fuel_consumption' => 170.00, // 100 + 150 - 80
+            'fuel_log_date'    => '2026-06-27',
+            'shift_id'         => $this->shift->id,
+            'equipment_id'     => $this->equipment->id,
+            'equipment_name_id' => $this->equipmentName->id,
             'status'           => 'active',
+        ]);
+    }
+
+    public function test_can_create_fuel_entry_with_explicit_date_and_shift()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $payload = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_log_date'           => '2026-06-25',
+            'shift_id'                => $this->shift->id,
+            'equipment_id'            => $this->equipment->id,
+            'equipment_name_id'       => $this->equipmentName->id,
+        ];
+
+        $response = $this->postJson('/api/v1/admin/fuel-entries', $payload);
+
+        $response->assertStatus(201);
+        $fuelRefNo = $response->json('data.fuel_ref_no');
+
+        $this->assertDatabaseHas('fuel_entries', [
+            'fuel_ref_no'      => $fuelRefNo,
+            'fuel_log_date'    => '2026-06-25',
+            'shift_id'         => $this->shift->id,
+            'equipment_id'     => $this->equipment->id,
+            'equipment_name_id' => $this->equipmentName->id,
         ]);
     }
 
@@ -353,15 +393,15 @@ class FuelManagementTest extends TestCase
         $createResponse = $this->postJson('/api/v1/admin/fuel-entries', $payload);
         $id = $createResponse->json('data.id');
 
-        // Try updating shift_plan_id
+        // Try updating fuel_ref_no
         $updatePayload = [
-            'shift_plan_id' => 999,
+            'fuel_ref_no' => 'FR-NEW-999',
         ];
         $response = $this->putJson("/api/v1/admin/fuel-entries/{$id}", $updatePayload);
         $response->assertStatus(422)
             ->assertJsonFragment([
                 'status'  => 422,
-                'message' => 'Field shift_plan_id is read-only',
+                'message' => 'Field fuel_ref_no is read-only',
             ]);
     }
 
@@ -412,7 +452,7 @@ class FuelManagementTest extends TestCase
         ];
         $this->postJson('/api/v1/admin/fuel-entries', $payload)->assertStatus(201);
 
-        $response = $this->getJson('/api/v1/admin/fuel-entries/dashboard');
+        $response = $this->getJson('/api/v1/admin/fuel-entries/dashboard?period=custom&date_from=2026-06-27&date_to=2026-06-27');
 
         $response->assertStatus(200)
             ->assertJsonStructure([
@@ -451,7 +491,7 @@ class FuelManagementTest extends TestCase
         ];
         $this->postJson('/api/v1/admin/fuel-entries', $payload)->assertStatus(201);
 
-        $response = $this->getJson('/api/v1/admin/fuel-entries/performance');
+        $response = $this->getJson('/api/v1/admin/fuel-entries/performance?period=custom&date_from=2026-06-27&date_to=2026-06-27');
 
         $response->assertStatus(200)
             ->assertJsonStructure([
@@ -549,5 +589,370 @@ class FuelManagementTest extends TestCase
                     ]
                 ]
             ]);
+    }
+
+    public function test_create_fuel_entry_resolves_allocation_id_from_equipment_name_id()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $payload = [
+            'shift_plan_id'     => $this->publishedShiftPlan->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'operator_id'       => $this->adminUser->id,
+            'fuel_source'       => 'fuel_tanker',
+            'opening_fuel'      => 100.00,
+            'fuel_issued'       => 150.00,
+            'closing_fuel'      => 80.00,
+        ];
+
+        // Send request WITHOUT equipment_allocation_id
+        $response = $this->postJson('/api/v1/admin/fuel-entries', $payload);
+
+        $response->assertStatus(201);
+        $this->assertEquals($this->allocationPublished->id, $response->json('data.equipment_allocation_id'));
+
+        $this->assertDatabaseHas('fuel_entries', [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'equipment_name_id'       => $this->equipmentName->id,
+        ]);
+    }
+
+    public function test_cannot_create_fuel_entry_with_mismatched_shift_id()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // Create a different shift
+        $otherShift = Shift::create([
+            'shift_name'            => 'Night Shift',
+            'start_time'            => '22:00:00',
+            'end_time'              => '06:00:00',
+            'minimum_working_hours' => 8,
+            'is_night_shift'        => 1,
+        ]);
+
+        $payload = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'shift_id'                => $otherShift->id,
+        ];
+
+        $response = $this->postJson('/api/v1/admin/fuel-entries', $payload);
+
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['shift_id']);
+        $response->assertJsonFragment([
+            'errors' => [
+                'shift_id' => [
+                    'The selected shift does not match the shift plan.'
+                ]
+            ]
+        ]);
+    }
+
+    public function test_list_fuel_entries_only_returns_vehicle_and_fuel_details()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create a fuel entry
+        $payload = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+        ];
+        $this->postJson('/api/v1/admin/fuel-entries', $payload)->assertStatus(201);
+
+        // 2. Fetch the list
+        $response = $this->getJson('/api/v1/admin/fuel-entries');
+
+        $response->assertStatus(200);
+        $data = $response->json('data');
+
+        $this->assertNotEmpty($data);
+        $firstEntry = $data[0];
+
+        // Assert vehicle and fuel properties are present
+        $this->assertArrayHasKey('id', $firstEntry);
+        $this->assertArrayHasKey('fuel_ref_no', $firstEntry);
+        $this->assertArrayHasKey('fuel_log_date', $firstEntry);
+        $this->assertArrayHasKey('fuel_source', $firstEntry);
+        $this->assertArrayHasKey('opening_fuel', $firstEntry);
+        $this->assertArrayHasKey('fuel_issued', $firstEntry);
+        $this->assertArrayHasKey('closing_fuel', $firstEntry);
+        $this->assertArrayHasKey('fuel_consumption', $firstEntry);
+        $this->assertArrayHasKey('hours_meter_reading', $firstEntry);
+        $this->assertArrayHasKey('kilometer_reading', $firstEntry);
+        $this->assertArrayHasKey('equipment_allocation_id', $firstEntry);
+        $this->assertArrayHasKey('equipment_id', $firstEntry);
+        $this->assertArrayHasKey('equipment_name_id', $firstEntry);
+        $this->assertArrayHasKey('machine_name', $firstEntry);
+        $this->assertArrayHasKey('category_name', $firstEntry);
+
+        // Assert other non-vehicle/non-fuel details are excluded
+        $this->assertArrayNotHasKey('operator_id', $firstEntry);
+        $this->assertArrayNotHasKey('operator', $firstEntry);
+        $this->assertArrayNotHasKey('shift_plan_id', $firstEntry);
+        $this->assertArrayNotHasKey('shift_plan', $firstEntry);
+        $this->assertArrayNotHasKey('created_by', $firstEntry);
+        $this->assertArrayNotHasKey('created_by_employee', $firstEntry);
+    }
+
+    public function test_can_update_fuel_entry_shift_and_date_and_recalculate()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create another Shift (Shift B)
+        $shiftB = Shift::create([
+            'shift_name'            => 'Shift B',
+            'start_time'            => '16:00:00',
+            'end_time'              => '00:00:00',
+            'minimum_working_hours' => 8,
+            'is_night_shift'        => 0,
+        ]);
+
+        // 2. Create another ShiftPlan for Shift B on date '2026-06-28' (status 'published')
+        $newShiftPlan = ShiftPlan::create([
+            'planning_date'    => '2026-06-28',
+            'shift_id'         => $shiftB->id,
+            'site_id'          => $this->site->id,
+            'target_bcm'       => 15000,
+            'supervisor_id'    => $this->adminUser->id,
+            'site_incharge_id' => $this->adminUser->id,
+            'status'           => 'published',
+            'created_by'       => $this->adminUser->id,
+            'reference_no'     => 'SP-NEW-456'
+        ]);
+
+        // Allocate same machine to this new shift plan
+        $newAllocation = ShiftEquipmentAllocation::create([
+            'shift_plan_id'      => $newShiftPlan->id,
+            'equipment_name_id'  => $this->equipmentName->id,
+            'allocated_by'       => $this->adminUser->id,
+            'allocation_time'    => now(),
+        ]);
+
+        // 3. Create initial fuel entry on original shift plan
+        $payload = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+        ];
+        $response = $this->postJson('/api/v1/admin/fuel-entries', $payload);
+        $response->assertStatus(201);
+        $id = $response->json('data.id');
+
+        // 4. Update shift and date
+        $updatePayload = [
+            'fuel_log_date' => '2026-06-28',
+            'shift_id'      => $shiftB->id,
+        ];
+
+        $updateResponse = $this->putJson("/api/v1/admin/fuel-entries/{$id}", $updatePayload);
+        $updateResponse->assertStatus(200);
+
+        // Assert DB matches new shift plan and resolved allocation
+        $this->assertDatabaseHas('fuel_entries', [
+            'id'                      => $id,
+            'shift_plan_id'           => $newShiftPlan->id,
+            'equipment_allocation_id' => $newAllocation->id,
+            'shift_id'                => $shiftB->id,
+            'fuel_log_date'           => '2026-06-28',
+        ]);
+    }
+
+    public function test_list_fuel_entries_can_filter_by_equipment_id()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create a second equipment type (category) and instance
+        $otherEquipment = Equipment::create([
+            'name'      => 'Dumper',
+            'is_active' => 1,
+        ]);
+        $otherEquipmentName = EquipmentName::create([
+            'equipment_id'   => $otherEquipment->id,
+            'equipment_name' => 'DM01-Dumper-Volvo',
+            'is_active'      => 1,
+        ]);
+        $otherAllocation = ShiftEquipmentAllocation::create([
+            'shift_plan_id'     => $this->publishedShiftPlan->id,
+            'equipment_name_id' => $otherEquipmentName->id,
+            'allocated_by'      => $this->adminUser->id,
+            'allocation_time'   => now(),
+        ]);
+
+        // 2. Create fuel entry for first equipment (Excavator)
+        $payload1 = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+        ];
+        $this->postJson('/api/v1/admin/fuel-entries', $payload1)->assertStatus(201);
+
+        // 3. Create fuel entry for second equipment (Dumper)
+        $payload2 = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $otherAllocation->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 200.00,
+            'closing_fuel'            => 70.00,
+        ];
+        $this->postJson('/api/v1/admin/fuel-entries', $payload2)->assertStatus(201);
+
+        // 4. Filter by Excavator's equipment_id
+        $responseExcavator = $this->getJson('/api/v1/admin/fuel-entries?equipment_id=' . $this->equipment->id);
+        $responseExcavator->assertStatus(200);
+        $dataExcavator = $responseExcavator->json('data');
+        $this->assertCount(1, $dataExcavator);
+        $this->assertEquals($this->equipment->id, $dataExcavator[0]['equipment_id']);
+
+        // 5. Filter by Dumper's equipment_id
+        $responseDumper = $this->getJson('/api/v1/admin/fuel-entries?equipment_id=' . $otherEquipment->id);
+        $responseDumper->assertStatus(200);
+        $dataDumper = $responseDumper->json('data');
+        $this->assertCount(1, $dataDumper);
+        $this->assertEquals($otherEquipment->id, $dataDumper[0]['equipment_id']);
+    }
+
+    public function test_list_fuel_entries_can_filter_by_date_range()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create a published shift plan for a different date '2026-06-20'
+        $otherShiftPlan = ShiftPlan::create([
+            'planning_date' => '2026-06-20',
+            'shift_id'      => $this->shift->id,
+            'site_id'       => $this->site->id,
+            'target_bcm'    => 1000,
+            'status'        => 'published',
+            'supervisor_id' => $this->adminUser->id,
+            'site_incharge_id' => $this->adminUser->id,
+            'created_by'    => $this->adminUser->id,
+            'reference_no'  => 'SP-OTHER-DATE-001',
+        ]);
+        $otherAllocation = ShiftEquipmentAllocation::create([
+            'shift_plan_id'     => $otherShiftPlan->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'allocated_by'      => $this->adminUser->id,
+            'allocation_time'   => now(),
+        ]);
+
+        // 2. Create entry for 2026-06-27
+        $payload1 = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_log_date'           => '2026-06-27',
+        ];
+        $this->postJson('/api/v1/admin/fuel-entries', $payload1)->assertStatus(201);
+
+        // 3. Create entry for 2026-06-20
+        $payload2 = [
+            'shift_plan_id'           => $otherShiftPlan->id,
+            'equipment_allocation_id' => $otherAllocation->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_log_date'           => '2026-06-20',
+        ];
+        $this->postJson('/api/v1/admin/fuel-entries', $payload2)->assertStatus(201);
+
+        // 4. Request with date_from=2026-06-25 & date_to=2026-06-28 (should only get the 2026-06-27 entry)
+        $response = $this->getJson('/api/v1/admin/fuel-entries?date_from=2026-06-25&date_to=2026-06-28');
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+        $this->assertEquals('2026-06-27', $data[0]['fuel_log_date']);
+
+        // 5. Request with date_from=2026-06-19 & date_to=2026-06-22 (should only get the 2026-06-20 entry)
+        $response = $this->getJson('/api/v1/admin/fuel-entries?date_from=2026-06-19&date_to=2026-06-22');
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        $this->assertCount(1, $data);
+        $this->assertEquals('2026-06-20', $data[0]['fuel_log_date']);
+    }
+
+    public function test_list_fuel_entries_can_filter_by_yearly_period()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create a published shift plan for a date in a different year (e.g. 2025-06-20)
+        $lastYearShiftPlan = ShiftPlan::create([
+            'planning_date' => '2025-06-20',
+            'shift_id'      => $this->shift->id,
+            'site_id'       => $this->site->id,
+            'target_bcm'    => 1000,
+            'status'        => 'published',
+            'supervisor_id' => $this->adminUser->id,
+            'site_incharge_id' => $this->adminUser->id,
+            'created_by'    => $this->adminUser->id,
+            'reference_no'  => 'SP-LY-001',
+        ]);
+        $lastYearAllocation = ShiftEquipmentAllocation::create([
+            'shift_plan_id'     => $lastYearShiftPlan->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'allocated_by'      => $this->adminUser->id,
+            'allocation_time'   => now(),
+        ]);
+
+        // 2. Create entry for current year (2026-06-27)
+        $payload1 = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_log_date'           => '2026-06-27',
+        ];
+        $this->postJson('/api/v1/admin/fuel-entries', $payload1)->assertStatus(201);
+
+        // 3. Create entry for last year (2025-06-20)
+        $payload2 = [
+            'shift_plan_id'           => $lastYearShiftPlan->id,
+            'equipment_allocation_id' => $lastYearAllocation->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_log_date'           => '2025-06-20',
+        ];
+        $this->postJson('/api/v1/admin/fuel-entries', $payload2)->assertStatus(201);
+
+        // 4. Request with period=yearly (should only return entries in the current year, e.g. 2026)
+        $response = $this->getJson('/api/v1/admin/fuel-entries?period=yearly');
+        $response->assertStatus(200);
+        $data = $response->json('data');
+        
+        // Assert that we get the entry from the current year (2026) and not from 2025
+        $this->assertCount(1, $data);
+        $this->assertEquals('2026-06-27', $data[0]['fuel_log_date']);
     }
 }

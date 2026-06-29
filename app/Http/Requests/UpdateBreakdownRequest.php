@@ -32,6 +32,7 @@ class UpdateBreakdownRequest extends FormRequest
             'status'           => 'nullable|in:open,in_progress,on_hold,closed',
             'severity'         => 'nullable|string|in:LOW,MEDIUM,HIGH,CRITICAL',
             'description'      => 'nullable|string|max:1000',
+            'downtime_start'   => 'nullable|date_format:Y-m-d H:i:s|before_or_equal:now',
             'downtime_end'     => 'required_if:status,closed|nullable|date_format:Y-m-d H:i:s',
             'resolution_notes' => 'required_if:status,closed|required_with:downtime_end|nullable|string|max:1000',
         ];
@@ -41,6 +42,8 @@ class UpdateBreakdownRequest extends FormRequest
     {
         $validator->after(function ($validator) {
             $downtimeEnd = $this->input('downtime_end');
+            $downtimeStart = $this->input('downtime_start');
+
             if ($downtimeEnd || $this->input('status') === 'closed') {
                 $ticketId = $this->route('id');
                 $ticket = \App\Models\BreakdownTicket::find($ticketId);
@@ -49,9 +52,16 @@ class UpdateBreakdownRequest extends FormRequest
                     return;
                 }
 
+                $startVal = $downtimeStart ?? $ticket->downtime_start;
+
+                if (!$startVal) {
+                    $validator->errors()->add('downtime_start', 'The downtime start field is required to close the ticket.');
+                    return;
+                }
+
                 if ($downtimeEnd) {
                     $end = \Carbon\Carbon::parse($downtimeEnd);
-                    $start = \Carbon\Carbon::parse($ticket->downtime_start);
+                    $start = \Carbon\Carbon::parse($startVal);
                     if ($end->lte($start)) {
                         $validator->errors()->add('downtime_end', 'The downtime end must be a date after downtime start.');
                     }

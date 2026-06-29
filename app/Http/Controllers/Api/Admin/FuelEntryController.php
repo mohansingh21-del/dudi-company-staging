@@ -11,6 +11,7 @@ use App\Http\Requests\FuelPerformanceFilterRequest;
 use App\Http\Requests\FuelAllocationFilterRequest;
 use App\Http\Requests\FuelSummaryFilterRequest;
 use App\Services\FuelService;
+use App\Http\Resources\FuelRegisterResource;
 use App\Exceptions\MachineNotInShiftException;
 use App\Exceptions\ReadingRegressionException;
 use App\Exceptions\ReadOnlyFieldMutationException;
@@ -45,7 +46,7 @@ class FuelEntryController extends Controller
                 'status'     => 200,
                 'message'    => $isEmpty ? 'No Fuel Records Found' : 'Fuel entries retrieved successfully.',
                 'summary'    => $summary,
-                'data'       => $records->items(),
+                'data'       => FuelRegisterResource::collection($records->getCollection()),
                 'pagination' => [
                     'total'        => $records->total(),
                     'current_page' => $records->currentPage(),
@@ -145,6 +146,12 @@ class FuelEntryController extends Controller
                 'message' => $e->getMessage(),
                 'data'    => null,
             ], 404);
+        } catch (MachineNotInShiftException $e) {
+            return response()->json([
+                'status'  => 422,
+                'message' => $e->getMessage(),
+                'data'    => null,
+            ], 422);
         } catch (ReadingRegressionException $e) {
             return response()->json([
                 'status'  => 422,

@@ -617,4 +617,53 @@ class BreakdownManagementTest extends TestCase
             'downtime_minutes' => 150,
         ]);
     }
+
+    public function test_list_breakdowns_can_filter_by_breakdown_type_id()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create a breakdown ticket of type 1 (Mechanical)
+        BreakdownTicket::create([
+            'ticket_number'       => 'BRK-2026-00030',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'Mechanical issue',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 12:00:00',
+        ]);
+
+        // 2. Create a breakdown ticket of type 2 (Electrical)
+        BreakdownTicket::create([
+            'ticket_number'       => 'BRK-2026-00031',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 13:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 2,
+            'severity'            => 'HIGH',
+            'description'         => 'Electrical issue',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 13:00:00',
+        ]);
+
+        // 3. Filter by breakdown_type_id = 1 (Mechanical)
+        $responseType1 = $this->getJson('/api/v1/admin/maintenance/breakdowns?breakdown_type_id=1');
+        $responseType1->assertStatus(200);
+        $dataType1 = $responseType1->json('data');
+        $this->assertCount(1, $dataType1);
+        $this->assertEquals(1, $dataType1[0]['breakdown_type_id']);
+
+        // 4. Filter by breakdown_type_id = 2 (Electrical)
+        $responseType2 = $this->getJson('/api/v1/admin/maintenance/breakdowns?breakdown_type_id=2');
+        $responseType2->assertStatus(200);
+        $dataType2 = $responseType2->json('data');
+        $this->assertCount(1, $dataType2);
+        $this->assertEquals(2, $dataType2[0]['breakdown_type_id']);
+    }
 }
