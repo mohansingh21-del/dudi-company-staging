@@ -666,4 +666,51 @@ class BreakdownManagementTest extends TestCase
         $this->assertCount(1, $dataType2);
         $this->assertEquals(2, $dataType2[0]['breakdown_type_id']);
     }
+
+    public function test_list_breakdowns_sorted_by_newest_first()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create ticket A
+        $ticketA = BreakdownTicket::create([
+            'ticket_number'       => 'BRK-ORDER-001',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'First ticket',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 12:00:00',
+        ]);
+        $ticketA->created_at = '2026-06-26 12:00:00';
+        $ticketA->save();
+
+        // 2. Create ticket B (newer)
+        $ticketB = BreakdownTicket::create([
+            'ticket_number'       => 'BRK-ORDER-002',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 13:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'HIGH',
+            'description'         => 'Second ticket',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 13:00:00',
+        ]);
+        $ticketB->created_at = '2026-06-26 13:00:00';
+        $ticketB->save();
+
+        $response = $this->getJson('/api/v1/admin/maintenance/breakdowns');
+        $response->assertStatus(200);
+        $data = $response->json('data');
+
+        // Assert ticket B is first in the list
+        $this->assertEquals('BRK-ORDER-002', $data[0]['ticket_number']);
+        $this->assertEquals('BRK-ORDER-001', $data[1]['ticket_number']);
+    }
 }

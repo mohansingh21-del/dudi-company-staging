@@ -96,7 +96,7 @@ class BreakdownService
         $dashboardQuery = clone $query;
 
         // Default sort
-        $query->orderBy('downtime_start', 'DESC');
+        $query->latest();
 
         // PAGINATION
         $tickets = $query->paginate($limit);

@@ -11,7 +11,7 @@ class FuelRegisterResource extends JsonResource
         return [
             'id' => $this->id,
             'fuel_ref_no' => $this->fuel_ref_no,
-            'fuel_log_date' => $this->fuel_log_date ? $this->fuel_log_date->format('Y-m-d') : null,
+            'fuel_log_date' => $this->fuel_log_date ? $this->fuel_log_date->toDateTimeString() : null,
             'fuel_source' => $this->fuel_source,
             'opening_fuel' => $this->opening_fuel,
             'fuel_issued' => $this->fuel_issued,

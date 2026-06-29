@@ -157,7 +157,9 @@ class FuelService
             // 8. Generate fuel_ref_no, set created_by, status
             $fuelRefNo = $this->generateFuelRefNo();
 
-            $fuelLogDate = isset($data['fuel_log_date']) ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d') : ($shiftPlan->planning_date ? Carbon::parse($shiftPlan->planning_date)->format('Y-m-d') : null);
+            $fuelLogDate = isset($data['fuel_log_date']) 
+                ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d H:i:s') 
+                : ($shiftPlan->planning_date ? Carbon::parse($shiftPlan->planning_date)->format('Y-m-d H:i:s') : null);
             $shiftId = $data['shift_id'] ?? $shiftPlan->shift_id;
             $equipmentNameId = $data['equipment_name_id'] ?? $allocation->equipment_name_id;
             $equipmentId = $data['equipment_id'] ?? optional($allocation->equipmentName)->equipment_id;
@@ -285,7 +287,12 @@ class FuelService
             $data['equipment_allocation_id'] = $allocation->id;
             $data['equipment_id'] = $allocation->equipmentName->equipment_id;
             $data['shift_id'] = $shiftPlan->shift_id;
-            $data['fuel_log_date'] = $shiftPlan->planning_date;
+            $data['fuel_log_date'] = isset($data['fuel_log_date']) 
+                ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d H:i:s') 
+                : ($entry->fuel_log_date 
+                    ? Carbon::parse($entry->fuel_log_date)->format('Y-m-d H:i:s') 
+                    : ($shiftPlan->planning_date ? Carbon::parse($shiftPlan->planning_date)->format('Y-m-d H:i:s') : null)
+                  );
             $data['equipment_name_id'] = $equipmentNameId;
 
             // Fill attributes with the updated data

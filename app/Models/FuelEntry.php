@@ -36,7 +36,7 @@ class FuelEntry extends Model
     ];
 
     protected $casts = [
-        'fuel_log_date' => 'date',
+        'fuel_log_date' => 'datetime',
         'opening_fuel' => 'decimal:2',
         'fuel_issued' => 'decimal:2',
         'closing_fuel' => 'decimal:2',
@@ -46,6 +46,17 @@ class FuelEntry extends Model
         'fuel_per_hour' => 'decimal:4',
         'fuel_per_km' => 'decimal:4',
     ];
+
+    /**
+     * Prepare a date for array / JSON serialization.
+     *
+     * @param  \DateTimeInterface  $date
+     * @return string
+     */
+    protected function serializeDate(\DateTimeInterface $date)
+    {
+        return $date->format('Y-m-d H:i:s');
+    }
 
     /*
     |--------------------------------------------------------------------------

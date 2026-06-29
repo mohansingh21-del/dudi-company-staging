@@ -887,14 +887,14 @@ class FuelManagementTest extends TestCase
         $response->assertStatus(200);
         $data = $response->json('data');
         $this->assertCount(1, $data);
-        $this->assertEquals('2026-06-27', $data[0]['fuel_log_date']);
+        $this->assertEquals('2026-06-27 00:00:00', $data[0]['fuel_log_date']);
 
         // 5. Request with date_from=2026-06-19 & date_to=2026-06-22 (should only get the 2026-06-20 entry)
         $response = $this->getJson('/api/v1/admin/fuel-entries?date_from=2026-06-19&date_to=2026-06-22');
         $response->assertStatus(200);
         $data = $response->json('data');
         $this->assertCount(1, $data);
-        $this->assertEquals('2026-06-20', $data[0]['fuel_log_date']);
+        $this->assertEquals('2026-06-20 00:00:00', $data[0]['fuel_log_date']);
     }
 
     public function test_list_fuel_entries_can_filter_by_yearly_period()
@@ -953,6 +953,33 @@ class FuelManagementTest extends TestCase
         
         // Assert that we get the entry from the current year (2026) and not from 2025
         $this->assertCount(1, $data);
-        $this->assertEquals('2026-06-27', $data[0]['fuel_log_date']);
+        $this->assertEquals('2026-06-27 00:00:00', $data[0]['fuel_log_date']);
+    }
+
+    public function test_create_fuel_entry_stores_date_and_time()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $payload = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_log_date'           => '2026-06-25 14:36:00',
+        ];
+
+        $response = $this->postJson('/api/v1/admin/fuel-entries', $payload);
+        $response->assertStatus(201);
+        
+        $data = $response->json('data');
+        $this->assertEquals('2026-06-25 14:36:00', $data['fuel_log_date']);
+
+        $this->assertDatabaseHas('fuel_entries', [
+            'id' => $data['id'],
+            'fuel_log_date' => '2026-06-25 14:36:00',
+        ]);
     }
 }
