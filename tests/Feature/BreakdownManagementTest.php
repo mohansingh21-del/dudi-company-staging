@@ -518,4 +518,103 @@ class BreakdownManagementTest extends TestCase
         $response = $this->putJson('/api/v1/admin/maintenance/breakdowns/undefined', $payload);
         $response->assertStatus(404);
     }
+
+    public function test_can_create_breakdown_ticket_without_downtime_start()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $payload = [
+            'shift_id'            => $this->shift->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_type_id'   => 2,
+            'severity'            => 'HIGH',
+            'description'         => 'Test without downtime start.',
+        ];
+
+        $response = $this->postJson('/api/v1/admin/maintenance/breakdowns', $payload);
+
+        $response->assertStatus(201);
+        $this->assertNull($response->json('data.downtime_start'));
+
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'ticket_number'  => $response->json('data.ticket_number'),
+            'downtime_start' => null,
+            'status'         => 'open',
+        ]);
+    }
+
+    public function test_cannot_close_ticket_without_downtime_start_if_not_provided()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $ticket = BreakdownTicket::create([
+            'ticket_number'       => 'BRK-2026-00021',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'Open ticket without downtime start',
+            'status'              => 'open',
+            'downtime_start'      => null,
+        ]);
+
+        $payload = [
+            'status'           => 'closed',
+            'downtime_end'     => '2026-06-26 12:30:00',
+            'resolution_notes' => 'Fixed the leak.',
+        ];
+
+        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors(['downtime_start']);
+    }
+
+    public function test_can_close_ticket_without_downtime_start_by_providing_it_during_update()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $ticket = BreakdownTicket::create([
+            'ticket_number'       => 'BRK-2026-00022',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'Open ticket without downtime start',
+            'status'              => 'open',
+            'downtime_start'      => null,
+        ]);
+
+        $payload = [
+            'status'           => 'closed',
+            'downtime_start'   => '2026-06-26 10:00:00',
+            'downtime_end'     => '2026-06-26 12:30:00',
+            'resolution_notes' => 'Fixed the leak.',
+        ];
+
+        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
+
+        $response->assertStatus(200)
+            ->assertJsonFragment([
+                'status'           => 'closed',
+                'downtime_minutes' => 150,
+                'resolution_notes' => 'Fixed the leak.',
+            ]);
+
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'id'               => $ticket->id,
+            'status'           => 'closed',
+            'downtime_start'   => '2026-06-26 10:00:00',
+            'downtime_minutes' => 150,
+        ]);
+    }
 }

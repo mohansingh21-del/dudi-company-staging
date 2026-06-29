@@ -88,11 +88,11 @@ class BreakdownService
             });
         }
 
-        // Default sort
-        $query->orderBy('downtime_start', 'DESC');
-
         // Dashboard Base Query (copies filters)
         $dashboardQuery = clone $query;
+
+        // Default sort
+        $query->orderBy('downtime_start', 'DESC');
 
         // PAGINATION
         $tickets = $query->paginate($limit);
@@ -244,7 +244,7 @@ class BreakdownService
         if (!empty($data['downtime_end']) || (isset($data['status']) && $data['status'] === 'closed')) {
             $data['status'] = 'closed';
             $downtimeEnd = \Carbon\Carbon::parse($data['downtime_end'] ?? $ticket->downtime_end);
-            $downtimeStart = $ticket->downtime_start;
+            $downtimeStart = isset($data['downtime_start']) ? \Carbon\Carbon::parse($data['downtime_start']) : $ticket->downtime_start;
 
             $data['downtime_minutes'] = $downtimeEnd->diffInMinutes($downtimeStart);
             $data['resolved_by'] = auth()->id();
