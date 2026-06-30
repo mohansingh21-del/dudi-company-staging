@@ -413,6 +413,7 @@ class FuelService
     public function getEntry(int $id): FuelEntry
     {
         $entry = FuelEntry::with([
+            'shift',
             'shiftPlan.shift',
             'shiftPlan.site',
             'equipmentAllocation.equipmentName.equipment',
@@ -448,6 +449,7 @@ class FuelService
         $query = FuelEntry::with([
             'equipment',
             'equipmentName',
+            'shift',
         ]);
 
         if ($dateFrom) {
@@ -683,6 +685,7 @@ class FuelService
         // recent_entries
         $recentEntries = (clone $query)
             ->with([
+                'shift',
                 'shiftPlan.shift',
                 'equipmentAllocation.equipmentName',
                 'operator.employee'

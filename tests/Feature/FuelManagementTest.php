@@ -160,8 +160,11 @@ class FuelManagementTest extends TestCase
                     'opening_fuel',
                     'fuel_issued',
                     'closing_fuel',
+                    'shift_name',
                 ]
             ]);
+
+        $this->assertEquals('Day Shift', $response->json('data.shift_name'));
 
         $fuelRefNo = $response->json('data.fuel_ref_no');
         $this->assertStringStartsWith('FUEL-' . date('Y') . '-', $fuelRefNo);
@@ -696,6 +699,8 @@ class FuelManagementTest extends TestCase
         $this->assertArrayHasKey('equipment_name_id', $firstEntry);
         $this->assertArrayHasKey('machine_name', $firstEntry);
         $this->assertArrayHasKey('category_name', $firstEntry);
+        $this->assertArrayHasKey('shift_name', $firstEntry);
+        $this->assertEquals('Day Shift', $firstEntry['shift_name']);
 
         // Assert other non-vehicle/non-fuel details are excluded
         $this->assertArrayNotHasKey('operator_id', $firstEntry);

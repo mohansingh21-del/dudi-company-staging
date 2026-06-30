@@ -334,11 +334,35 @@ class ShiftController extends Controller
                     $machine = $allocation->equipmentName;
                     $category = $machine ? $machine->equipment : null;
                     if ($machine) {
+                        $breakdown = \App\Models\BreakdownTicket::where('equipment_allocation_id', $allocation->id)
+                            ->where('status', '!=', 'closed')
+                            ->first();
+
+                        if (!$breakdown) {
+                            $breakdown = \App\Models\BreakdownTicket::where('equipment_name_id', $machine->id)
+                                ->where('shift_id', $shiftPlan->shift_id)
+                                ->where('status', '!=', 'closed')
+                                ->first();
+                        }
+
+                        $breakdownData = null;
+                        if ($breakdown) {
+                            $breakdownData = [
+                                'id' => $breakdown->id,
+                                'ticket_number' => $breakdown->ticket_number,
+                                'status' => $breakdown->status,
+                                'severity' => $breakdown->severity,
+                                'description' => $breakdown->description,
+                                'breakdown_date_time' => $breakdown->breakdown_date_time ? $breakdown->breakdown_date_time->toDateTimeString() : null,
+                            ];
+                        }
+
                         $machines[] = [
                             'machine_id' => $machine->id,
                             'machine_name' => $machine->equipment_name,
                             'category_id' => $category ? $category->id : null,
                             'category_name' => $category ? $category->name : null,
+                            'breakdown' => $breakdownData,
                         ];
                     }
                 }
@@ -390,11 +414,35 @@ class ShiftController extends Controller
                         $machine = $allocation->equipmentName;
                         $category = $machine ? $machine->equipment : null;
                         if ($machine) {
+                            $breakdown = \App\Models\BreakdownTicket::where('equipment_allocation_id', $allocation->id)
+                                ->where('status', '!=', 'closed')
+                                ->first();
+
+                            if (!$breakdown) {
+                                $breakdown = \App\Models\BreakdownTicket::where('equipment_name_id', $machine->id)
+                                    ->where('shift_id', $shiftPlan->shift_id)
+                                    ->where('status', '!=', 'closed')
+                                    ->first();
+                            }
+
+                            $breakdownData = null;
+                            if ($breakdown) {
+                                $breakdownData = [
+                                    'id' => $breakdown->id,
+                                    'ticket_number' => $breakdown->ticket_number,
+                                    'status' => $breakdown->status,
+                                    'severity' => $breakdown->severity,
+                                    'description' => $breakdown->description,
+                                    'breakdown_date_time' => $breakdown->breakdown_date_time ? $breakdown->breakdown_date_time->toDateTimeString() : null,
+                                ];
+                            }
+
                             $machines[] = [
                                 'machine_id' => $machine->id,
                                 'machine_name' => $machine->equipment_name,
                                 'category_id' => $category ? $category->id : null,
                                 'category_name' => $category ? $category->name : null,
+                                'breakdown' => $breakdownData,
                             ];
                         }
                     }

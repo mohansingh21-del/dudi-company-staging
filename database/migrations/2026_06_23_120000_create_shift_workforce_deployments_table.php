@@ -13,6 +13,10 @@ class CreateShiftWorkforceDeploymentsTable extends Migration
      */
     public function up()
     {
+        if (Schema::hasTable('shift_workforce_deployments')) {
+            return;
+        }
+
         Schema::create('shift_workforce_deployments', function (Blueprint $table) {
             $table->id();
 

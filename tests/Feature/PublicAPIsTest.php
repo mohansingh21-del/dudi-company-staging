@@ -12,6 +12,8 @@ use App\Models\ShiftPlan;
 use App\Models\Equipment;
 use App\Models\EquipmentName;
 use App\Models\ShiftEquipmentAllocation;
+use App\Models\BreakdownTicket;
+use App\Models\BreakdownType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -380,6 +382,7 @@ class PublicAPIsTest extends TestCase
                         'machine_name' => 'EX-001',
                         'category_id' => $excavatorCategory->id,
                         'category_name' => 'Excavator',
+                        'breakdown' => null,
                     ]
                 ]
             ]
@@ -607,6 +610,80 @@ class PublicAPIsTest extends TestCase
         $response2->assertStatus(422);
         $response2->assertJsonFragment([
             'message' => 'No shift plan found for the selected date.'
+        ]);
+    }
+
+    public function test_find_shift_by_datetime_returns_active_breakdown_details()
+    {
+        $planningDate = '2026-06-27';
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 10000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-BREAKDOWN-123'
+        ]);
+
+        $excavatorCategory = Equipment::create(['name' => 'ExcavatorX', 'is_active' => 1]);
+        $excavatorMachine = EquipmentName::create([
+            'equipment_id' => $excavatorCategory->id,
+            'equipment_name' => 'EX-X01',
+            'is_active' => 1,
+        ]);
+
+        $allocation = ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $excavatorMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        $breakdownType = BreakdownType::create([
+            'breakdown_type' => 'Engine Failure',
+            'description' => 'Engine issues',
+            'is_active' => 1,
+        ]);
+
+        $breakdownTicket = BreakdownTicket::create([
+            'ticket_number' => 'BT-TEST-999',
+            'shift_id' => $this->shift->id,
+            'equipment_id' => $excavatorCategory->id,
+            'equipment_name_id' => $excavatorMachine->id,
+            'equipment_allocation_id' => $allocation->id,
+            'breakdown_date_time' => '2026-06-27 10:00:00',
+            'reported_by' => $this->supervisorEmployee->id,
+            'breakdown_type_id' => $breakdownType->id,
+            'severity' => 'MEDIUM',
+            'description' => 'Engine smoking',
+            'status' => 'open',
+            'downtime_start' => '2026-06-27 10:00:00',
+        ]);
+
+        $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-27&time=10:15:00");
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'status' => 200,
+            'data' => [
+                'id' => $this->shift->id,
+                'machines' => [
+                    [
+                        'machine_id' => $excavatorMachine->id,
+                        'machine_name' => 'EX-X01',
+                        'breakdown' => [
+                            'id' => $breakdownTicket->id,
+                            'ticket_number' => 'BT-TEST-999',
+                            'status' => 'open',
+                            'severity' => 'MEDIUM',
+                        ]
+                    ]
+                ]
+            ]
         ]);
     }
 }

@@ -47,6 +47,10 @@ class FuelEntry extends Model
         'fuel_per_km' => 'decimal:4',
     ];
 
+    protected $appends = [
+        'shift_name',
+    ];
+
     /**
      * Prepare a date for array / JSON serialization.
      *
@@ -148,5 +152,19 @@ class FuelEntry extends Model
     public function auditLogs()
     {
         return $this->hasMany(FuelEntryAuditLog::class, 'fuel_entry_id');
+    }
+
+    /**
+     * Get shift_name attribute dynamically.
+     */
+    public function getShiftNameAttribute()
+    {
+        if ($this->relationLoaded('shift') && $this->shift) {
+            return $this->shift->shift_name;
+        }
+        if ($this->relationLoaded('shiftPlan') && $this->shiftPlan && $this->shiftPlan->relationLoaded('shift') && $this->shiftPlan->shift) {
+            return $this->shiftPlan->shift->shift_name;
+        }
+        return optional($this->shift)->shift_name ?? optional(optional($this->shiftPlan)->shift)->shift_name;
     }
 }

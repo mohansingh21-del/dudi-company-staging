@@ -46,7 +46,9 @@ use App\Http\Controllers\Api\Admin\ShiftPlanController;
 use App\Http\Controllers\Api\Admin\WorkforceDeploymentController;
 use App\Http\Controllers\Api\Admin\BreakdownController;
 use App\Http\Controllers\Api\Admin\BreakdownTypeController;
+use App\Http\Controllers\Api\Admin\DelayCategoryController;
 use App\Http\Controllers\Api\Admin\FuelEntryController;
+use App\Http\Controllers\Api\Admin\DelayController;
 
 /*
 |--------------------------------------------------------------------------
@@ -135,6 +137,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/change-password', [AuthController::class, 'changePassword']);
         Route::get('incident-types', [IncidentTypeController::class, 'publicIndex']);
         Route::get('breakdown-types', [BreakdownTypeController::class, 'publicIndex']);
+        Route::get('delay-categories', [DelayCategoryController::class, 'publicIndex']);
         Route::get('shifts', [ShiftController::class, 'getPublicShifts']);
         Route::get('employees', [EmployeeController::class, 'getPublicEmployees']);
         Route::get('active-employees', [EmployeeController::class, 'getActiveEmployees']);
@@ -201,6 +204,8 @@ Route::prefix('v1')->group(function () {
             Route::patch('equipment-names/{id}/status', [EquipmentNameController::class, 'toggleStatus']);
             Route::apiResource('breakdown-types', BreakdownTypeController::class);
             Route::patch('breakdown-types/{id}/status', [BreakdownTypeController::class, 'toggleStatus']);
+            Route::apiResource('delay-categories', DelayCategoryController::class);
+            Route::patch('delay-categories/{id}/status', [DelayCategoryController::class, 'toggleStatus']);
 
             Route::apiResource('incident-types', IncidentTypeController::class);
 
@@ -416,4 +421,16 @@ Route::prefix('v1')->group(function () {
             });
 
         });
+    /*
+    |--------------------------------------------------------------------------
+    | Delay Analysis Management
+    |--------------------------------------------------------------------------
+    */
+    Route::middleware(['auth:sanctum', 'role:super-admin,supervisor,site_incharge'])->prefix('admin/delays')->group(function () {
+        Route::get('/', [DelayController::class, 'index']);
+        Route::get('{id}', [DelayController::class, 'show']);
+        Route::post('/', [DelayController::class, 'store']);
+        Route::put('{id}', [DelayController::class, 'update']);
+    });
+
 });
