@@ -12,6 +12,8 @@ use App\Models\ShiftPlan;
 use App\Models\Equipment;
 use App\Models\EquipmentName;
 use App\Models\ShiftEquipmentAllocation;
+use App\Models\BreakdownTicket;
+use App\Models\BreakdownType;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -364,5 +366,62 @@ class EquipmentAllocationOverlapTest extends TestCase
         ]);
 
         $response->assertStatus(201);
+    }
+
+    public function test_cannot_allocate_equipment_if_in_breakdown_or_maintenance()
+    {
+        $planningDate = '2026-06-24';
+
+        $shift = Shift::create([
+            'shift_name' => 'Shift A',
+            'start_time' => '10:00:00',
+            'end_time' => '13:00:00',
+            'minimum_working_hours' => 3.00,
+            'is_night_shift' => 0,
+            'is_active' => 1
+        ]);
+
+        $plan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 1000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'draft',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-A'
+        ]);
+
+        // Create breakdown type
+        $breakdownType = BreakdownType::create([
+            'breakdown_type' => 'Engine Issue',
+            'is_active' => 1
+        ]);
+
+        // Create open breakdown ticket on this machine
+        BreakdownTicket::create([
+            'ticket_number' => 'BRK-001',
+            'shift_id' => $shift->id,
+            'equipment_id' => $this->excavatorCategory->id,
+            'equipment_name_id' => $this->machine->id,
+            'breakdown_date_time' => '2026-06-24 10:30:00',
+            'reported_by' => $this->supervisorEmployee->id,
+            'breakdown_type_id' => $breakdownType->id,
+            'severity' => 'HIGH',
+            'description' => 'Engine overheating',
+            'status' => 'open',
+            'downtime_start' => '2026-06-24 10:30:00',
+        ]);
+
+        // Try to allocate the machine -> Should fail with 422
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$plan->id}/equipment", [
+            'machine_id' => $this->machine->id,
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonFragment([
+            'message' => 'Machine cannot be allocated as it is currently in breakdown or maintenance.'
+        ]);
     }
 }

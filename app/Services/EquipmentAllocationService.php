@@ -6,6 +6,7 @@ use App\Models\Equipment;
 use App\Models\EquipmentName;
 use App\Models\ShiftEquipmentAllocation;
 use App\Models\ShiftPlan;
+use App\Models\BreakdownTicket;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -115,11 +116,17 @@ class EquipmentAllocationService
             ->pluck('equipment_name_id')
             ->toArray();
 
-        // Active machines of requested category, not already allocated
+        // IDs of machines currently in breakdown or maintenance (non-closed tickets)
+        $breakdownMachineIds = BreakdownTicket::where('status', '!=', 'closed')
+            ->pluck('equipment_name_id')
+            ->toArray();
+
+        // Active machines of requested category, not already allocated, and not in breakdown/maintenance
         $machines = EquipmentName::with('equipment')
             ->where('equipment_id', $categoryId)
             ->where('is_active', 1)
             ->whereNotIn('id', $allocatedMachineIds)
+            ->whereNotIn('id', $breakdownMachineIds)
             ->get();
 
         $data = $machines->map(function ($machine) {
@@ -189,6 +196,19 @@ class EquipmentAllocationService
             return [
                 'status' => 422,
                 'message' => 'Machine Not Available For Allocation.',
+                'data' => [],
+            ];
+        }
+
+        // Check if machine is in breakdown or maintenance (any non-closed breakdown ticket)
+        $hasActiveBreakdown = BreakdownTicket::where('equipment_name_id', $machineId)
+            ->where('status', '!=', 'closed')
+            ->exists();
+
+        if ($hasActiveBreakdown) {
+            return [
+                'status' => 422,
+                'message' => 'Machine cannot be allocated as it is currently in breakdown or maintenance.',
                 'data' => [],
             ];
         }

@@ -10,6 +10,7 @@ class Kernel extends ConsoleKernel
     protected $commands = [
         \App\Console\Commands\RotateShiftsCommand::class,
         \App\Console\Commands\RemoveExpiredBorrowedEmployeesCommand::class,
+        \App\Console\Commands\ResetShiftTestData::class,
     ];
     /**
      * Define the application's command schedule.
