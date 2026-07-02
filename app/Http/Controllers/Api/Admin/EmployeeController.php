@@ -375,7 +375,7 @@ class EmployeeController extends Controller
     {
         if ($request->has('role')) {
             $request->validate([
-                'role' => 'required|string|in:Supervisor,Site Incharge,supervisor,site-incharge,site_incharge'
+                'role' => 'required|string|in:Supervisor,Site Incharge,supervisor,site-incharge,site_incharge,Driver,driver'
             ]);
 
             try {

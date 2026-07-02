@@ -362,6 +362,7 @@ class ShiftController extends Controller
                             'machine_name' => $machine->equipment_name,
                             'category_id' => $category ? $category->id : null,
                             'category_name' => $category ? $category->name : null,
+                            'parent_machine_id' => $allocation->parent_equipment_id,
                             'breakdown' => $breakdownData,
                         ];
                     }
@@ -442,6 +443,7 @@ class ShiftController extends Controller
                                 'machine_name' => $machine->equipment_name,
                                 'category_id' => $category ? $category->id : null,
                                 'category_name' => $category ? $category->name : null,
+                                'parent_machine_id' => $allocation->parent_equipment_id,
                                 'breakdown' => $breakdownData,
                             ];
                         }

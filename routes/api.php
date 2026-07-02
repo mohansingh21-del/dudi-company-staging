@@ -49,6 +49,8 @@ use App\Http\Controllers\Api\Admin\BreakdownTypeController;
 use App\Http\Controllers\Api\Admin\DelayCategoryController;
 use App\Http\Controllers\Api\Admin\FuelEntryController;
 use App\Http\Controllers\Api\Admin\DelayController;
+use App\Http\Controllers\Api\Admin\SitePointController;
+use App\Http\Controllers\Api\Admin\DispatchTripController;
 
 /*
 |--------------------------------------------------------------------------
@@ -142,6 +144,7 @@ Route::prefix('v1')->group(function () {
         Route::get('employees', [EmployeeController::class, 'getPublicEmployees']);
         Route::get('active-employees', [EmployeeController::class, 'getActiveEmployees']);
         Route::get('sites', [SiteController::class, 'getPublicSites']);
+        Route::get('site-points', [SitePointController::class, 'index']);
         Route::get('departments', [DepartmentsController::class, 'getPublicDepartments']);
         Route::get('designations', [DesignationController::class, 'getPublicDesignations']);
         Route::get('products', [ProductController::class, 'getPublicProducts']);
@@ -151,6 +154,22 @@ Route::prefix('v1')->group(function () {
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
         Route::get('shift-plans/{shift_id}/machines', [EquipmentAllocationController::class, 'getPublicMachines']);
         Route::get('search-employee/search={search}', [EmployeeController::class, 'searchEmployeeByName']);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Module 7: Dispatch & Dumping Operations
+        |--------------------------------------------------------------------------
+        */
+        Route::get('dispatch/dashboard', [DispatchTripController::class, 'dashboard']);
+        Route::get('dispatch/trips', [DispatchTripController::class, 'index']);
+        Route::get('dispatch/trips/{id}', [DispatchTripController::class, 'show']);
+        Route::get('dispatch/dumper-summary', [DispatchTripController::class, 'dumperSummary']);
+        Route::get('dispatch/fleet-performance', [DispatchTripController::class, 'fleetPerformance']);
+
+        Route::middleware(['role:super-admin,supervisor,site-incharge'])->group(function () {
+            Route::post('dispatch/trips', [DispatchTripController::class, 'store']);
+            Route::put('dispatch/trips/{id}', [DispatchTripController::class, 'update']);
+        });
 
         // ADMIN ONLY
         Route::middleware(['role:super-admin'])->prefix('admin')->group(function () {
@@ -206,6 +225,17 @@ Route::prefix('v1')->group(function () {
             Route::patch('breakdown-types/{id}/status', [BreakdownTypeController::class, 'toggleStatus']);
             Route::apiResource('delay-categories', DelayCategoryController::class);
             Route::patch('delay-categories/{id}/status', [DelayCategoryController::class, 'toggleStatus']);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Loading/Dumping Points (Site Points)
+            |--------------------------------------------------------------------------
+            */
+            Route::get('site-points', [SitePointController::class, 'adminIndex']);
+            Route::get('site-points/{id}', [SitePointController::class, 'show']);
+            Route::post('site-points', [SitePointController::class, 'store']);
+            Route::put('site-points/{id}', [SitePointController::class, 'update']);
+            Route::patch('site-points/{id}/status', [SitePointController::class, 'toggleStatus']);
 
             Route::apiResource('incident-types', IncidentTypeController::class);
 

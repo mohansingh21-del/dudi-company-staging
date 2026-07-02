@@ -382,7 +382,75 @@ class PublicAPIsTest extends TestCase
                         'machine_name' => 'EX-001',
                         'category_id' => $excavatorCategory->id,
                         'category_name' => 'Excavator',
+                        'parent_machine_id' => null,
                         'breakdown' => null,
+                    ]
+                ]
+            ]
+        ]);
+    }
+
+    public function test_find_shift_by_datetime_with_nested_machine_parent_machine_id()
+    {
+        $planningDate = '2026-06-27';
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 10000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-NESTED-123'
+        ]);
+
+        $excavatorCategory = Equipment::create(['name' => 'Excavator', 'is_active' => 1]);
+        $dumperCategory = Equipment::create(['name' => 'Dumper', 'is_active' => 1]);
+
+        $excavatorMachine = EquipmentName::create([
+            'equipment_id' => $excavatorCategory->id,
+            'equipment_name' => 'EX-001',
+            'is_active' => 1,
+        ]);
+
+        $dumperMachine = EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DM-003',
+            'is_active' => 1,
+        ]);
+
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $excavatorMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $dumperMachine->id,
+            'parent_equipment_id' => $excavatorMachine->id,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-27&time=10:15:00");
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'status' => 200,
+            'data' => [
+                'id' => $this->shift->id,
+                'machines' => [
+                    [
+                        'machine_id' => $excavatorMachine->id,
+                        'parent_machine_id' => null,
+                    ],
+                    [
+                        'machine_id' => $dumperMachine->id,
+                        'parent_machine_id' => $excavatorMachine->id,
                     ]
                 ]
             ]

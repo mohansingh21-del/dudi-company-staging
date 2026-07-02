@@ -6,6 +6,7 @@ use App\Models\FuelEntry;
 use App\Models\FuelEntryAuditLog;
 use App\Models\ShiftPlan;
 use App\Models\ShiftEquipmentAllocation;
+use App\Models\DispatchTrip;
 use App\Exceptions\MachineNotInShiftException;
 use App\Exceptions\ReadingRegressionException;
 use App\Exceptions\ReadOnlyFieldMutationException;
@@ -520,20 +521,17 @@ class FuelService
         }
 
         // Summary Calculations (before pagination)
-        $summaryQuery = clone $query;
-        $totalFuelIssued = (float) $summaryQuery->sum('fuel_issued');
-        $totalFuelConsumption = (float) $summaryQuery->sum('fuel_consumption');
-        $avgFuelPerBcm = (float) $summaryQuery->whereNotNull('fuel_per_bcm')->avg('fuel_per_bcm');
+        $totalFuelIssued = (float) (clone $query)->sum('fuel_issued');
+        $totalFuelConsumption = (float) (clone $query)->sum('fuel_consumption');
+        $avgFuelPerBcm = (clone $query)->whereNotNull('fuel_entries.fuel_per_bcm')->avg('fuel_entries.fuel_per_bcm');
 
-        // Distinct machines count
-        $distinctMachines = (int) $summaryQuery->join('shift_equipment_allocations', 'fuel_entries.equipment_allocation_id', '=', 'shift_equipment_allocations.id')
-            ->distinct('shift_equipment_allocations.equipment_name_id')
-            ->count('shift_equipment_allocations.equipment_name_id');
+        // Distinct machines count using fresh clone
+        $distinctMachines = (int) (clone $query)->distinct()->count('fuel_entries.equipment_name_id');
 
         $summary = [
             'total_fuel_issued' => round($totalFuelIssued, 2),
             'total_fuel_consumption' => round($totalFuelConsumption, 2),
-            'average_fuel_per_bcm' => $avgFuelPerBcm ? round($avgFuelPerBcm, 4) : null,
+            'average_fuel_per_bcm' => $avgFuelPerBcm !== null ? round((float) $avgFuelPerBcm, 4) : null,
             'distinct_machines' => $distinctMachines,
         ];
 
@@ -584,9 +582,7 @@ class FuelService
             $fuelEfficiency = $totalFuelConsumption / $totalWorkDone;
         }
 
-        $activeMachinesCount = (int) (clone $query)->join('shift_equipment_allocations', 'fuel_entries.equipment_allocation_id', '=', 'shift_equipment_allocations.id')
-            ->distinct('shift_equipment_allocations.equipment_name_id')
-            ->count('shift_equipment_allocations.equipment_name_id');
+        $activeMachinesCount = (int) (clone $query)->distinct()->count('fuel_entries.equipment_name_id');
 
         $kpiCards = [
             'total_fuel_issued' => round($totalFuelIssued, 2),
@@ -996,9 +992,6 @@ class FuelService
 
     /**
      * Resolve work done in BCM from the Dispatch/Production module.
-     * 
-     * TODO: Wire this to the real Production module once it exists.
-     * Current implementation returns null as a stub.
      *
      * @param int $shiftPlanId
      * @param int $equipmentAllocationId
@@ -1006,7 +999,62 @@ class FuelService
      */
     public function resolveWorkDoneBcm(int $shiftPlanId, int $equipmentAllocationId): ?float
     {
-        return null;
+        $allocation = ShiftEquipmentAllocation::find($equipmentAllocationId);
+        if (!$allocation) {
+            return null;
+        }
+
+        $equipmentNameId = $allocation->equipment_name_id;
+
+        $hasTrips = DispatchTrip::where('shift_plan_id', $shiftPlanId)
+            ->where(function ($query) use ($equipmentNameId) {
+                $query->where('excavator_equipment_id', $equipmentNameId)
+                      ->orWhere('dumper_equipment_id', $equipmentNameId);
+            })
+            ->exists();
+
+        if (!$hasTrips) {
+            return null;
+        }
+
+        // Query DispatchTrip BCM for this equipment name id (either as excavator or dumper) in this shift plan
+        $totalBcm = DispatchTrip::where('shift_plan_id', $shiftPlanId)
+            ->where(function ($query) use ($equipmentNameId) {
+                $query->where('excavator_equipment_id', $equipmentNameId)
+                      ->orWhere('dumper_equipment_id', $equipmentNameId);
+            })
+            ->sum('quantity_bcm');
+
+        return (float) $totalBcm;
+    }
+
+    /**
+     * Recalculate work_done_bcm and fuel_per_bcm for all active fuel entries 
+     * matching the given shift plan and equipment name.
+     *
+     * @param int $shiftPlanId
+     * @param int $equipmentNameId
+     * @return void
+     */
+    public function recalculateFuelEntryBcm(int $shiftPlanId, int $equipmentNameId)
+    {
+        $entries = FuelEntry::where('shift_plan_id', $shiftPlanId)
+            ->where('equipment_name_id', $equipmentNameId)
+            ->where('status', 'active')
+            ->get();
+
+        foreach ($entries as $entry) {
+            $workDoneBcm = $this->resolveWorkDoneBcm($entry->shift_plan_id, $entry->equipment_allocation_id);
+            $entry->work_done_bcm = $workDoneBcm;
+
+            if ($workDoneBcm !== null && $workDoneBcm > 0) {
+                $entry->fuel_per_bcm = $entry->fuel_consumption / $workDoneBcm;
+            } else {
+                $entry->fuel_per_bcm = null;
+            }
+
+            $entry->save();
+        }
     }
 
     /**

@@ -19,6 +19,7 @@ class GetEmployeesByRoleTest extends TestCase
     protected $supervisorRole;
     protected $siteInchargeRole;
     protected $workerRole;
+    protected $driverRole;
 
     protected function setUp(): void
     {
@@ -46,6 +47,12 @@ class GetEmployeesByRoleTest extends TestCase
         $this->workerRole = Role::create([
             'name' => 'Worker',
             'slug' => 'worker',
+            'is_active' => 1
+        ]);
+
+        $this->driverRole = Role::create([
+            'name' => 'Driver',
+            'slug' => 'driver',
             'is_active' => 1
         ]);
 
@@ -130,7 +137,40 @@ class GetEmployeesByRoleTest extends TestCase
     {
         $response = $this->getJson('/api/v1/employees?role=Worker');
 
-        // Worker is not in the allowed enum (Supervisor, Site Incharge)
+        // Worker is not in the allowed enum (Supervisor, Site Incharge, Driver)
         $response->assertStatus(422);
+    }
+
+    public function test_can_fetch_employees_filtered_by_driver_role()
+    {
+        // Create an employee with Driver role
+        $driver = Employee::create([
+            'employee_code' => 'EMP_DRV01',
+            'name' => 'Dave Driver',
+            'joining_date' => '2026-01-01',
+            'designation_id' => $this->driverRole->id,
+            'is_active' => 1
+        ]);
+
+        // Create an employee with Supervisor role
+        $supervisor = Employee::create([
+            'employee_code' => 'EMP_SUP01',
+            'name' => 'John Supervisor',
+            'joining_date' => '2026-01-01',
+            'designation_id' => $this->supervisorRole->id,
+            'is_active' => 1
+        ]);
+
+        $response = $this->getJson('/api/v1/employees?role=Driver');
+
+        $response->assertStatus(200);
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonFragment([
+            'name' => 'Dave Driver',
+            'employee_code' => 'EMP_DRV01'
+        ]);
+        $response->assertJsonMissing([
+            'name' => 'John Supervisor'
+        ]);
     }
 }

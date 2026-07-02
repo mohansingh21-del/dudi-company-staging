@@ -12,6 +12,9 @@ use App\Models\ShiftPlan;
 use App\Models\ShiftEquipmentAllocation;
 use App\Models\FuelEntry;
 use App\Models\FuelEntryAuditLog;
+use App\Models\SitePoint;
+use App\Models\Employee;
+use App\Models\DispatchTrip;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
@@ -985,6 +988,92 @@ class FuelManagementTest extends TestCase
         $this->assertDatabaseHas('fuel_entries', [
             'id' => $data['id'],
             'fuel_log_date' => '2026-06-25 14:36:00',
+        ]);
+    }
+
+    public function test_fuel_bcm_integration_updates_fuel_metrics_correctly()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // Create SitePoints
+        $loadingPoint = SitePoint::create([
+            'site_id' => $this->site->id,
+            'name' => 'Loading Pit A',
+            'type' => 'loading',
+            'latitude' => '23.456',
+            'longitude' => '85.678',
+            'radius_meters' => 50,
+            'is_active' => 1,
+        ]);
+        $dumpingPoint = SitePoint::create([
+            'site_id' => $this->site->id,
+            'name' => 'Waste Dump B',
+            'type' => 'dumping',
+            'latitude' => '23.490',
+            'longitude' => '85.690',
+            'radius_meters' => 50,
+            'is_active' => 1,
+        ]);
+
+        // Create a fuel entry
+        $payload = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00, // fuel_consumption = 170.00
+        ];
+        $response = $this->postJson('/api/v1/admin/fuel-entries', $payload);
+        $response->assertStatus(201);
+        $fuelEntryId = $response->json('data.id');
+
+        // Initially no trips are logged, so work_done_bcm should be null (or 0) and fuel_per_bcm should be null
+        $this->assertDatabaseHas('fuel_entries', [
+            'id' => $fuelEntryId,
+            'work_done_bcm' => null,
+            'fuel_per_bcm' => null,
+        ]);
+
+        // Now, log a dispatch trip where the machine acts as the excavator/dumper
+        $tripPayload = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'site_id'                 => $this->site->id,
+            'dumper_equipment_id'     => $this->equipmentName->id, // matches the machine in fuel entry
+            'driver_id'               => $this->adminUser->id,
+            'excavator_equipment_id'  => $this->equipmentName->id,
+            'loading_point_id'        => $loadingPoint->id,
+            'dumping_point_id'        => $dumpingPoint->id,
+            'start_time'              => '09:00:00',
+            'end_time'                => '09:20:00',
+            'quantity_bcm'            => 50.00,
+            'distance_meters'         => 1200,
+        ];
+
+        $tripResponse = $this->postJson('/api/v1/dispatch/trips', $tripPayload);
+        $tripResponse->assertStatus(201);
+        $tripId = $tripResponse->json('data.id');
+
+        // Verify that FuelEntry was updated automatically via recalculateFuelEntryBcm
+        $this->assertDatabaseHas('fuel_entries', [
+            'id' => $fuelEntryId,
+            'work_done_bcm' => 50.00,
+            'fuel_per_bcm' => 3.4000, // 170.00 / 50.00 = 3.4
+        ]);
+
+        // Update the trip BCM quantity
+        $updatePayload = [
+            'quantity_bcm' => 100.00,
+        ];
+        $updateResponse = $this->putJson("/api/v1/dispatch/trips/{$tripId}", $updatePayload);
+        $updateResponse->assertStatus(200);
+
+        // Verify that FuelEntry was updated again to reflect the new BCM quantity
+        $this->assertDatabaseHas('fuel_entries', [
+            'id' => $fuelEntryId,
+            'work_done_bcm' => 100.00,
+            'fuel_per_bcm' => 1.7000, // 170.00 / 100.00 = 1.7
         ]);
     }
 }
