@@ -21,6 +21,8 @@ class FuelRegisterResource extends JsonResource
             'kilometer_reading' => $this->kilometer_reading,
             'fuel_per_hour' => $this->fuel_per_hour,
             'fuel_per_km' => $this->fuel_per_km,
+            'work_done_bcm' => $this->work_done_bcm !== null ? (float) $this->work_done_bcm : null,
+            'fuel_per_bcm' => $this->fuel_per_bcm !== null ? (float) $this->fuel_per_bcm : null,
             'status' => $this->status,
             'remarks' => $this->remarks,
             'equipment_allocation_id' => $this->equipment_allocation_id,

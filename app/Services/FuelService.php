@@ -538,9 +538,20 @@ class FuelService
         $perPage = isset($filters['per_page']) ? (int) $filters['per_page'] : 20;
         $records = $query->latest()->paginate($perPage);
 
+        $efficiencyTrends = [];
+        $trendItems = collect($records->items())->reverse();
+        foreach ($trendItems as $entry) {
+            $efficiencyTrends[] = [
+                'machine_name' => optional($entry->equipmentName)->equipment_name ?? 'Unknown',
+                'active_selection' => $entry->fuel_per_bcm !== null ? round((float) $entry->fuel_per_bcm, 4) : 0.0,
+                'fleet_average' => $avgFuelPerBcm !== null ? round((float) $avgFuelPerBcm, 4) : null,
+            ];
+        }
+
         return [
             'records' => $records,
             'summary' => $summary,
+            'efficiency_trends' => $efficiencyTrends,
         ];
     }
 

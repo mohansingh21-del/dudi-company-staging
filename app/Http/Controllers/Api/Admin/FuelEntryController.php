@@ -46,6 +46,7 @@ class FuelEntryController extends Controller
                 'status'     => 200,
                 'message'    => $isEmpty ? 'No Fuel Records Found' : 'Fuel entries retrieved successfully.',
                 'summary'    => $summary,
+                'efficiency_trends' => $result['efficiency_trends'] ?? [],
                 'data'       => FuelRegisterResource::collection($records->getCollection()),
                 'pagination' => [
                     'total'        => $records->total(),

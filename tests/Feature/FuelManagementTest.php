@@ -1015,6 +1015,26 @@ class FuelManagementTest extends TestCase
             'is_active' => 1,
         ]);
 
+        // Create a separate Dumper equipment category and machine instance
+        $dumperCategory = Equipment::create([
+            'name'      => 'Dumper',
+            'is_active' => 1,
+        ]);
+        $dumperMachine = EquipmentName::create([
+            'equipment_id'   => $dumperCategory->id,
+            'equipment_name' => 'DM01-Volvo-Dumper',
+            'is_active'      => 1,
+        ]);
+
+        // Allocate the Dumper nested under the Excavator in the shift plan
+        $dumperAllocation = ShiftEquipmentAllocation::create([
+            'shift_plan_id'       => $this->publishedShiftPlan->id,
+            'equipment_name_id'   => $dumperMachine->id,
+            'parent_equipment_id' => $this->equipmentName->id,
+            'allocated_by'        => $this->adminUser->id,
+            'allocation_time'     => now(),
+        ]);
+
         // Create a fuel entry
         $payload = [
             'shift_plan_id'           => $this->publishedShiftPlan->id,
@@ -1040,9 +1060,9 @@ class FuelManagementTest extends TestCase
         $tripPayload = [
             'shift_plan_id'           => $this->publishedShiftPlan->id,
             'site_id'                 => $this->site->id,
-            'dumper_equipment_id'     => $this->equipmentName->id, // matches the machine in fuel entry
+            'dumper_equipment_id'     => $dumperMachine->id, // matches the dumper machine
             'driver_id'               => $this->adminUser->id,
-            'excavator_equipment_id'  => $this->equipmentName->id,
+            'excavator_equipment_id'  => $this->equipmentName->id, // matches the excavator machine
             'loading_point_id'        => $loadingPoint->id,
             'dumping_point_id'        => $dumpingPoint->id,
             'start_time'              => '09:00:00',
