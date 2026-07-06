@@ -236,11 +236,65 @@ class DispatchTripService
         $averageCycleTimeMinutes = $summaryQuery->avg('cycle_time_minutes');
         $activeDumpers = $summaryQuery->distinct()->count('dumper_equipment_id');
 
+        // Fetch aggregation group by dumper for top performer KPIs
+        $dumperSummaryData = (clone $summaryQuery)
+            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
+            ->selectRaw('COUNT(dispatch_trips.id) as total_trips')
+            ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
+            ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
+            ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
+            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name')
+            ->get();
+
+        $bestDumper = null;
+        $highestTripDumper = null;
+        $fastestDumper = null;
+
+        $maxQty = -1;
+        $maxTrips = -1;
+        $minCycleTime = 99999999;
+
+        foreach ($dumperSummaryData as $row) {
+            $totalQty = (float) $row->total_quantity_bcm;
+            $trips = (int) $row->total_trips;
+            $avgCycle = (float) $row->average_cycle_time_minutes;
+
+            if ($totalQty > $maxQty) {
+                $maxQty = $totalQty;
+                $bestDumper = [
+                    'dumper_equipment_id' => $row->dumper_equipment_id,
+                    'dumper_number' => $row->dumper_number,
+                    'value' => round($totalQty, 2),
+                ];
+            }
+
+            if ($trips > $maxTrips) {
+                $maxTrips = $trips;
+                $highestTripDumper = [
+                    'dumper_equipment_id' => $row->dumper_equipment_id,
+                    'dumper_number' => $row->dumper_number,
+                    'value' => $trips,
+                ];
+            }
+
+            if ($avgCycle < $minCycleTime && $avgCycle > 0) {
+                $minCycleTime = $avgCycle;
+                $fastestDumper = [
+                    'dumper_equipment_id' => $row->dumper_equipment_id,
+                    'dumper_number' => $row->dumper_number,
+                    'value' => round($avgCycle, 2),
+                ];
+            }
+        }
+
         $summary = [
             'total_trips' => (int) $totalTrips,
             'total_quantity_bcm' => round((float) $totalQuantityBcm, 2),
             'average_cycle_time_minutes' => round((float) $averageCycleTimeMinutes, 2),
             'active_dumpers' => (int) $activeDumpers,
+            'best_performing_dumper' => $bestDumper,
+            'highest_trip_count_dumper' => $highestTripDumper,
+            'fastest_dumper' => $fastestDumper,
         ];
 
         // Fetch paginated results

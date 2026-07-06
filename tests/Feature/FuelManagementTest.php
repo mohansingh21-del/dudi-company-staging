@@ -714,6 +714,48 @@ class FuelManagementTest extends TestCase
         $this->assertArrayNotHasKey('created_by_employee', $firstEntry);
     }
 
+    public function test_list_fuel_entries_includes_kpis_and_charts()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create a fuel entry
+        $payload = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_log_date'           => '2026-06-27',
+        ];
+        $this->postJson('/api/v1/admin/fuel-entries', $payload)->assertStatus(201);
+
+        // 2. Fetch the list
+        $response = $this->getJson('/api/v1/admin/fuel-entries');
+
+        $response->assertStatus(200);
+
+        // Assert new KPIs are present in summary
+        $response->assertJsonStructure([
+            'summary' => [
+                'total_fuel_issued',
+                'total_fuel_consumption',
+                'total_fuel_consumed',
+                'fuel_per_bcm',
+                'average_fuel_per_bcm',
+                'active_machines_refueled',
+                'distinct_machines',
+            ],
+            'fuel_consumption_trend',
+            'consumption_by_type',
+            'machine_fuel_efficiency_trends',
+        ]);
+
+        $this->assertNotEmpty($response->json('fuel_consumption_trend'));
+        $this->assertNotEmpty($response->json('consumption_by_type'));
+    }
+
     public function test_can_update_fuel_entry_shift_and_date_and_recalculate()
     {
         Sanctum::actingAs($this->adminUser);
@@ -1069,6 +1111,7 @@ class FuelManagementTest extends TestCase
             'end_time'                => '09:20:00',
             'quantity_bcm'            => 50.00,
             'distance_meters'         => 1200,
+            'total_cycles'            => 5,
         ];
 
         $tripResponse = $this->postJson('/api/v1/dispatch/trips', $tripPayload);

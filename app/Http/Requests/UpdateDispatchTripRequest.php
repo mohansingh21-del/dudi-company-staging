@@ -30,7 +30,7 @@ class UpdateDispatchTripRequest extends FormRequest
     {
         return [
             'driver_id' => 'sometimes|required|exists:employees,id',
-            'excavator_equipment_id' => 'sometimes|required|exists:equipment_names,id',
+            'excavator_equipment_id' => 'sometimes|nullable|exists:equipment_names,id',
             'loading_point_id' => 'sometimes|required|exists:site_points,id',
             'dumping_point_id' => 'sometimes|required|exists:site_points,id',
             'trip_date_time' => 'sometimes|required|date_format:Y-m-d H:i:s',
@@ -38,6 +38,7 @@ class UpdateDispatchTripRequest extends FormRequest
             'end_time' => 'sometimes|required|date_format:H:i:s',
             'quantity_bcm' => 'sometimes|required|numeric|gt:0',
             'distance_meters' => 'nullable|numeric|gt:0',
+            'total_cycles' => 'sometimes|nullable|integer|gt:0',
             'site_id' => 'sometimes|required|exists:sites,id',
             'dumper_equipment_id' => 'sometimes|required|exists:equipment_names,id',
             'shift_plan_id' => 'sometimes|required|exists:shift_plans,id',

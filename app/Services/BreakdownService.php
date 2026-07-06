@@ -53,10 +53,10 @@ class BreakdownService
         if (isset($filters['site_id'])) {
             $query->whereExists(function ($q) use ($filters) {
                 $q->select(DB::raw(1))
-                  ->from('shift_plans')
-                  ->whereColumn('shift_plans.shift_id', 'breakdown_tickets.shift_id')
-                  ->whereColumn('shift_plans.planning_date', DB::raw('DATE(breakdown_tickets.breakdown_date_time)'))
-                  ->where('shift_plans.site_id', $filters['site_id']);
+                    ->from('shift_plans')
+                    ->whereColumn('shift_plans.shift_id', 'breakdown_tickets.shift_id')
+                    ->whereColumn('shift_plans.planning_date', DB::raw('DATE(breakdown_tickets.breakdown_date_time)'))
+                    ->where('shift_plans.site_id', $filters['site_id']);
             });
         }
 
@@ -70,7 +70,7 @@ class BreakdownService
             } else {
                 $dateFrom = \Carbon\Carbon::parse($dateFromVal)->startOfDay();
             }
-            $query->where('downtime_start', '>=', $dateFrom);
+            $query->where('breakdown_date_time', '>=', $dateFrom);
         }
 
         if (isset($filters['date_to'])) {
@@ -80,15 +80,18 @@ class BreakdownService
             } else {
                 $dateTo = \Carbon\Carbon::parse($dateToVal)->endOfDay();
             }
-            $query->where('downtime_start', '<=', $dateTo);
+            $query->where('breakdown_date_time', '<=', $dateTo);
         }
 
-        // Search against ticket_number / description
+        // Search against ticket_number / description / equipment_name
         if (isset($filters['search'])) {
             $search = $filters['search'];
             $query->where(function ($q) use ($search) {
                 $q->where('ticket_number', 'like', "%{$search}%")
-                  ->orWhere('description', 'like', "%{$search}%");
+                    ->orWhere('description', 'like', "%{$search}%")
+                    ->orWhereHas('equipmentName', function ($qName) use ($search) {
+                        $qName->where('equipment_name', 'like', "%{$search}%");
+                    });
             });
         }
 
@@ -156,12 +159,12 @@ class BreakdownService
         $equipmentAvailabilityPercent = max(0.00, min(100.00, $equipmentAvailabilityPercent));
 
         return [
-            'tickets'    => $tickets,
-            'dashboard'  => [
-                'open_tickets'                   => $openTickets,
-                'closed_today'                   => $closedToday,
-                'total_downtime_hours'           => $totalDowntimeHours,
-                'mttr_hours'                     => $mttrHours,
+            'tickets' => $tickets,
+            'dashboard' => [
+                'open_tickets' => $openTickets,
+                'closed_today' => $closedToday,
+                'total_downtime_hours' => $totalDowntimeHours,
+                'mttr_hours' => $mttrHours,
                 'equipment_availability_percent' => $equipmentAvailabilityPercent,
             ]
         ];
@@ -235,9 +238,9 @@ class BreakdownService
         if ($ticket->status === 'closed') {
             throw new HttpResponseException(
                 response()->json([
-                    'status'  => 403,
+                    'status' => 403,
                     'message' => 'Closed incidents cannot be edited.',
-                    'data'    => null
+                    'data' => null
                 ], 403)
             );
         }

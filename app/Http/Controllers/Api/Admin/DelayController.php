@@ -36,6 +36,7 @@ class DelayController extends Controller
                 'status' => 200,
                 'message' => 'Delay register retrieved successfully.',
                 'kpi_summary' => $result['kpi_summary'],
+                'chart_data' => $result['chart_data'],
                 'data' => DelayResource::collection($result['records']),
                 'pagination' => [
                     'current_page' => $result['records']->currentPage(),

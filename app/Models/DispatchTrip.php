@@ -28,6 +28,7 @@ class DispatchTrip extends Model
         'cycle_time_minutes',
         'quantity_bcm',
         'distance_meters',
+        'total_cycles',
         'status',
         'created_by',
         'updated_by',
@@ -40,6 +41,7 @@ class DispatchTrip extends Model
         'cycle_time_minutes' => 'decimal:2',
         'quantity_bcm' => 'decimal:2',
         'distance_meters' => 'decimal:2',
+        'total_cycles' => 'integer',
     ];
 
     /*

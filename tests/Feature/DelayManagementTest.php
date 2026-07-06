@@ -538,10 +538,19 @@ class DelayManagementTest extends TestCase
             ->assertJsonPath('kpi_summary.total_delay_hours', 1)
             ->assertJsonPath('kpi_summary.total_production_loss_bcm', 150)
             ->assertJsonPath('kpi_summary.number_of_delay_events', 1)
+            ->assertJsonPath('kpi_summary.critical_delays', 0)
             ->assertJsonPath('kpi_summary.largest_delay_reason.delay_category_name', $this->rainCategory->delay_category)
             ->assertJsonPath('kpi_summary.largest_delay_reason.total_delay_hours', 1)
+            ->assertJsonPath('kpi_summary.most_frequent_category.delay_category_name', $this->rainCategory->delay_category)
+            ->assertJsonPath('kpi_summary.most_frequent_category.number_of_delay_events', 1)
             ->assertJsonStructure([
                 'kpi_summary' => [
+                    'total_delay_hours',
+                    'total_production_loss_bcm',
+                    'number_of_delay_events',
+                    'largest_delay_reason',
+                    'critical_delays',
+                    'most_frequent_category',
                     'category_summary' => [
                         '*' => [
                             'delay_category_id',
@@ -551,10 +560,177 @@ class DelayManagementTest extends TestCase
                             'number_of_delay_events',
                         ]
                     ]
-                ]
+                ],
+                'chart_data' => [
+                    'production_loss_trend',
+                    'delay_category_contribution',
+                    'delay_distribution_by_category',
+                    'delay_severity_distribution',
+                ],
             ]);
 
         $this->assertCount(1, $response->json('data'));
+    }
+
+    public function test_delay_analysis_charts_and_kpis_with_diverse_data()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // Create a second shift plan on a different date
+        $shiftPlan2 = ShiftPlan::create([
+            'planning_date' => '2026-06-29',
+            'shift_id'      => $this->shift->id,
+            'site_id'       => $this->site->id,
+            'target_bcm'    => 1000,
+            'status'        => 'published',
+            'supervisor_id' => $this->supervisorUser->id,
+            'site_incharge_id' => $this->siteInchargeUser->id,
+            'created_by'    => $this->adminUser->id,
+            'reference_no'  => 'SP-ANALYSIS-001',
+        ]);
+
+        // Delay 1: Rain, MEDIUM severity, 2026-06-27
+        Delay::create([
+            'delay_ref_no' => 'DLY-2026-100001',
+            'shift_plan_id' => $this->publishedShiftPlan->id,
+            'shift_id' => $this->shift->id,
+            'shift_date' => '2026-06-27',
+            'shift_name' => 'Day Shift',
+            'delay_category_id' => $this->rainCategory->id,
+            'start_time' => '09:00:00',
+            'end_time' => '10:00:00',
+            'duration_minutes' => 60,
+            'average_production_rate_per_hour' => 150.00,
+            'estimated_production_loss_bcm' => 150.00,
+            'severity' => 'MEDIUM',
+            'description' => 'Rain delay 1',
+            'created_by' => $this->supervisorUser->id,
+        ]);
+
+        // Delay 2: Rain, LOW severity, 2026-06-27
+        Delay::create([
+            'delay_ref_no' => 'DLY-2026-100002',
+            'shift_plan_id' => $this->publishedShiftPlan->id,
+            'shift_id' => $this->shift->id,
+            'shift_date' => '2026-06-27',
+            'shift_name' => 'Day Shift',
+            'delay_category_id' => $this->rainCategory->id,
+            'start_time' => '11:00:00',
+            'end_time' => '11:30:00',
+            'duration_minutes' => 30,
+            'average_production_rate_per_hour' => 150.00,
+            'estimated_production_loss_bcm' => 75.00,
+            'severity' => 'LOW',
+            'description' => 'Light rain',
+            'created_by' => $this->supervisorUser->id,
+        ]);
+
+        // Delay 3: Road Condition, CRITICAL severity, 2026-06-29
+        Delay::create([
+            'delay_ref_no' => 'DLY-2026-100003',
+            'shift_plan_id' => $shiftPlan2->id,
+            'shift_id' => $this->shift->id,
+            'shift_date' => '2026-06-29',
+            'shift_name' => 'Day Shift',
+            'delay_category_id' => $this->roadConditionCategory->id,
+            'start_time' => '08:00:00',
+            'end_time' => '13:00:00',
+            'duration_minutes' => 300,
+            'average_production_rate_per_hour' => 150.00,
+            'estimated_production_loss_bcm' => 750.00,
+            'severity' => 'CRITICAL',
+            'description' => 'Major road damage',
+            'created_by' => $this->supervisorUser->id,
+        ]);
+
+        // Delay 4: Road Condition, HIGH severity, 2026-06-29
+        Delay::create([
+            'delay_ref_no' => 'DLY-2026-100004',
+            'shift_plan_id' => $shiftPlan2->id,
+            'shift_id' => $this->shift->id,
+            'shift_date' => '2026-06-29',
+            'shift_name' => 'Day Shift',
+            'delay_category_id' => $this->roadConditionCategory->id,
+            'start_time' => '14:00:00',
+            'end_time' => '15:30:00',
+            'duration_minutes' => 90,
+            'average_production_rate_per_hour' => 150.00,
+            'estimated_production_loss_bcm' => 225.00,
+            'severity' => 'HIGH',
+            'description' => 'Road repair needed',
+            'created_by' => $this->supervisorUser->id,
+        ]);
+
+        // Request without filters to get full analysis
+        $response = $this->getJson('/api/v1/admin/delays');
+
+        $response->assertStatus(200);
+
+        // --- KPI Assertions ---
+        // Total: 60 + 30 + 300 + 90 = 480 minutes = 8 hours
+        $this->assertEquals(8, $response->json('kpi_summary.total_delay_hours'));
+        // Total BCM: 150 + 75 + 750 + 225 = 1200
+        $this->assertEquals(1200, $response->json('kpi_summary.total_production_loss_bcm'));
+        $response->assertJsonPath('kpi_summary.number_of_delay_events', 4);
+        // Critical: 1 delay
+        $response->assertJsonPath('kpi_summary.critical_delays', 1);
+        // Largest delay reason: Road Condition (300 + 90 = 390 min = 6.5 hrs vs Rain 60+30 = 90 min = 1.5 hrs)
+        $response->assertJsonPath('kpi_summary.largest_delay_reason.delay_category_name', 'Road Condition');
+        $this->assertEquals(6.5, $response->json('kpi_summary.largest_delay_reason.total_delay_hours'));
+        // Most Frequent: Rain (2 events) vs Road Condition (2 events) - both 2, first sorted by desc will be one of them
+        $this->assertEquals(2, $response->json('kpi_summary.most_frequent_category.number_of_delay_events'));
+
+        // --- Chart Data Structure ---
+        $response->assertJsonStructure([
+            'chart_data' => [
+                'production_loss_trend' => [
+                    '*' => ['date', 'total_production_loss_bcm', 'total_delay_hours', 'event_count'],
+                ],
+                'delay_category_contribution' => [
+                    '*' => ['delay_category_id', 'delay_category_name', 'total_production_loss_bcm'],
+                ],
+                'delay_distribution_by_category' => [
+                    '*' => ['delay_category_id', 'delay_category_name', 'number_of_delay_events', 'total_delay_hours'],
+                ],
+                'delay_severity_distribution' => [
+                    '*' => ['severity', 'label', 'event_count', 'total_delay_hours'],
+                ],
+            ],
+        ]);
+
+        // --- Production Loss Trend assertions ---
+        $trend = $response->json('chart_data.production_loss_trend');
+        $this->assertCount(2, $trend); // 2 dates: 2026-06-27 and 2026-06-29
+        // Dates should be sorted ascending
+        $this->assertEquals('2026-06-27', $trend[0]['date']);
+        $this->assertEquals('2026-06-29', $trend[1]['date']);
+        // 2026-06-27: 150 + 75 = 225 BCM
+        $this->assertEquals(225, $trend[0]['total_production_loss_bcm']);
+        // 2026-06-29: 750 + 225 = 975 BCM
+        $this->assertEquals(975, $trend[1]['total_production_loss_bcm']);
+
+        // --- Severity Distribution assertions ---
+        $severity = collect($response->json('chart_data.delay_severity_distribution'));
+        $this->assertCount(4, $severity); // LOW, MEDIUM, HIGH, CRITICAL
+        $this->assertEquals(1, $severity->firstWhere('severity', 'LOW')['event_count']);
+        $this->assertEquals(1, $severity->firstWhere('severity', 'MEDIUM')['event_count']);
+        $this->assertEquals(1, $severity->firstWhere('severity', 'HIGH')['event_count']);
+        $this->assertEquals(1, $severity->firstWhere('severity', 'CRITICAL')['event_count']);
+        $this->assertEquals('Minor', $severity->firstWhere('severity', 'LOW')['label']);
+        $this->assertEquals('Critical', $severity->firstWhere('severity', 'CRITICAL')['label']);
+
+        // --- Delay Category Contribution ---
+        $contribution = $response->json('chart_data.delay_category_contribution');
+        $this->assertGreaterThanOrEqual(2, count($contribution));
+        // Road Condition should be first (975 BCM > 225 BCM)
+        $this->assertEquals('Road Condition', $contribution[0]['delay_category_name']);
+        $this->assertEquals(975, $contribution[0]['total_production_loss_bcm']);
+
+        // --- Delay Distribution By Category ---
+        $distribution = $response->json('chart_data.delay_distribution_by_category');
+        $this->assertGreaterThanOrEqual(2, count($distribution));
+
+        $this->assertCount(4, $response->json('data'));
     }
 
     public function test_storing_delay_with_explicit_shift_id_and_delay_log_date()

@@ -21,7 +21,7 @@ class CreateDispatchTripsTable extends Migration
             $table->unsignedBigInteger('site_id');
             $table->unsignedBigInteger('dumper_equipment_id'); // references equipment_names.id
             $table->unsignedBigInteger('driver_id');
-            $table->unsignedBigInteger('excavator_equipment_id'); // references equipment_names.id
+            $table->unsignedBigInteger('excavator_equipment_id')->nullable(); // references equipment_names.id
             $table->unsignedBigInteger('loading_point_id');
             $table->unsignedBigInteger('dumping_point_id');
             $table->dateTime('trip_date_time');
@@ -30,6 +30,7 @@ class CreateDispatchTripsTable extends Migration
             $table->decimal('cycle_time_minutes', 8, 2);
             $table->decimal('quantity_bcm', 10, 2);
             $table->decimal('distance_meters', 10, 2)->nullable();
+            $table->integer('total_cycles')->default(1);
             $table->string('status', 20)->default('logged');
             $table->unsignedBigInteger('created_by')->nullable();
             $table->unsignedBigInteger('updated_by')->nullable();

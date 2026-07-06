@@ -376,6 +376,13 @@ class PublicAPIsTest extends TestCase
                 'start_time' => '08:00:00',
                 'end_time' => '16:00:00',
                 'shift_plan_id' => $shiftPlan->id,
+                'site' => [
+                    'id' => $this->site->id,
+                    'site_name' => $this->site->site_name,
+                    'address' => $this->site->address,
+                ],
+                'drivers' => [],
+                'workforce' => [],
                 'machines' => [
                     [
                         'machine_id' => $excavatorMachine->id,
@@ -496,6 +503,13 @@ class PublicAPIsTest extends TestCase
                 'start_time' => '22:00:00',
                 'end_time' => '06:00:00',
                 'shift_plan_id' => $shiftPlan->id,
+                'site' => [
+                    'id' => $this->site->id,
+                    'site_name' => $this->site->site_name,
+                    'address' => $this->site->address,
+                ],
+                'drivers' => [],
+                'workforce' => [],
                 'machines' => []
             ]
         ]);
@@ -537,6 +551,13 @@ class PublicAPIsTest extends TestCase
                 'start_time' => '08:00:00',
                 'end_time' => '16:00:00',
                 'shift_plan_id' => $shiftPlan->id,
+                'site' => [
+                    'id' => $this->site->id,
+                    'site_name' => $this->site->site_name,
+                    'address' => $this->site->address,
+                ],
+                'drivers' => [],
+                'workforce' => [],
                 'machines' => []
             ]
         ]);
@@ -749,6 +770,92 @@ class PublicAPIsTest extends TestCase
                             'status' => 'open',
                             'severity' => 'MEDIUM',
                         ]
+                    ]
+                ]
+            ]
+        ]);
+    }
+
+    public function test_find_shift_by_datetime_returns_drivers_and_site_info()
+    {
+        $planningDate = '2026-06-27';
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 10000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-DRIVERS-TEST-123'
+        ]);
+
+        $driverRole = Role::create([
+            'name' => 'Driver',
+            'slug' => 'driver',
+            'is_active' => 1
+        ]);
+
+        $driverUser = User::create([
+            'email' => 'testdriver@test.com',
+            'password' => bcrypt('password'),
+            'is_active' => 1
+        ]);
+
+        $driverRoleUser = RoleUser::create([
+            'user_id' => $driverUser->id,
+            'role_id' => $driverRole->id
+        ]);
+
+        $driverEmployee = Employee::create([
+            'employee_code' => 'EMP-DRV-999',
+            'name' => 'Driver Bob',
+            'joining_date' => '2026-01-01',
+            'designation_id' => $driverRole->id,
+            'is_active' => 1,
+            'role_user_id' => $driverRoleUser->id,
+            'mobile' => '9876543210'
+        ]);
+
+        \App\Models\ShiftWorkforceDeployment::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'employee_id' => $driverEmployee->id,
+            'relay_shift' => 'general',
+            'designation' => 'Driver',
+            'status' => 'active',
+            'deployed_by' => $this->adminUser->id,
+        ]);
+
+        $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-27&time=10:15:00");
+
+        $response->assertStatus(200);
+        $response->assertJson([
+            'status' => 200,
+            'data' => [
+                'id' => $this->shift->id,
+                'shift_plan_id' => $shiftPlan->id,
+                'site' => [
+                    'id' => $this->site->id,
+                    'site_name' => 'Block-04 West',
+                    'address' => 'Site Address',
+                ],
+                'drivers' => [
+                    [
+                        'id' => $driverEmployee->id,
+                        'employee_code' => 'EMP-DRV-999',
+                        'name' => 'Driver Bob',
+                        'mobile' => '9876543210',
+                        'designation' => 'Driver',
+                    ]
+                ],
+                'workforce' => [
+                    [
+                        'id' => $driverEmployee->id,
+                        'employee_code' => 'EMP-DRV-999',
+                        'name' => 'Driver Bob',
+                        'mobile' => '9876543210',
+                        'designation' => 'Driver',
                     ]
                 ]
             ]

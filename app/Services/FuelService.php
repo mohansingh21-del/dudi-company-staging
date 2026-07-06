@@ -528,10 +528,16 @@ class FuelService
         // Distinct machines count using fresh clone
         $distinctMachines = (int) (clone $query)->distinct()->count('fuel_entries.equipment_name_id');
 
+        $totalWorkDone = (float) (clone $query)->sum('fuel_entries.work_done_bcm');
+        $fuelPerBcm = $totalWorkDone > 0 ? ($totalFuelConsumption / $totalWorkDone) : $avgFuelPerBcm;
+
         $summary = [
             'total_fuel_issued' => round($totalFuelIssued, 2),
             'total_fuel_consumption' => round($totalFuelConsumption, 2),
+            'total_fuel_consumed' => round($totalFuelConsumption, 2),
+            'fuel_per_bcm' => $fuelPerBcm !== null ? round((float) $fuelPerBcm, 4) : null,
             'average_fuel_per_bcm' => $avgFuelPerBcm !== null ? round((float) $avgFuelPerBcm, 4) : null,
+            'active_machines_refueled' => $distinctMachines,
             'distinct_machines' => $distinctMachines,
         ];
 
@@ -548,10 +554,67 @@ class FuelService
             ];
         }
 
+        // 1. Fuel Consumption Trend (daily granularity)
+        $trendChartRaw = (clone $query)
+            ->reorder()
+            ->leftJoin('shift_plans', 'fuel_entries.shift_plan_id', '=', 'shift_plans.id')
+            ->selectRaw('COALESCE(DATE(fuel_entries.fuel_log_date), shift_plans.planning_date) as log_date, SUM(fuel_entries.fuel_consumption) as consumption')
+            ->groupBy('log_date')
+            ->orderBy('log_date', 'asc')
+            ->toBase()
+            ->get();
+
+        $fuelConsumptionTrend = $trendChartRaw->map(function ($item, $index) {
+            return [
+                'day' => 'Day ' . ($index + 1),
+                'date' => $item->log_date ? Carbon::parse($item->log_date)->format('Y-m-d') : null,
+                'fuel_consumed' => round((float) $item->consumption, 2),
+            ];
+        })->filter(fn($item) => !is_null($item['date']))->values()->toArray();
+
+        // 2. Consumption by Type
+        $consumptionByType = (clone $query)
+            ->reorder()
+            ->join('equipments', 'fuel_entries.equipment_id', '=', 'equipments.id')
+            ->selectRaw('equipments.id as category_id, equipments.name as category_name, SUM(fuel_entries.fuel_consumption) as total_consumption')
+            ->groupBy('equipments.id', 'equipments.name')
+            ->toBase()
+            ->get()
+            ->map(function ($item) use ($totalFuelConsumption) {
+                return [
+                    'category_id' => $item->category_id,
+                    'category_name' => $item->category_name,
+                    'total_consumption' => round((float)$item->total_consumption, 2),
+                    'percentage' => $totalFuelConsumption > 0 
+                        ? round(($item->total_consumption / $totalFuelConsumption) * 100, 2) 
+                        : 0.0,
+                ];
+            })->toArray();
+
+        // 3. Machine Fuel Efficiency Trends
+        $machineFuelEfficiencyTrends = (clone $query)
+            ->reorder()
+            ->join('equipment_names', 'fuel_entries.equipment_name_id', '=', 'equipment_names.id')
+            ->selectRaw('equipment_names.id, equipment_names.equipment_name, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm')
+            ->whereNotNull('fuel_entries.fuel_per_bcm')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name')
+            ->toBase()
+            ->get()
+            ->map(function ($item) use ($avgFuelPerBcm) {
+                return [
+                    'machine_name' => $item->equipment_name,
+                    'active_selection' => round((float) $item->avg_fuel_per_bcm, 4),
+                    'fleet_average' => $avgFuelPerBcm !== null ? round((float) $avgFuelPerBcm, 4) : 0.0,
+                ];
+            })->toArray();
+
         return [
             'records' => $records,
             'summary' => $summary,
             'efficiency_trends' => $efficiencyTrends,
+            'fuel_consumption_trend' => $fuelConsumptionTrend,
+            'consumption_by_type' => $consumptionByType,
+            'machine_fuel_efficiency_trends' => $machineFuelEfficiencyTrends,
         ];
     }
 

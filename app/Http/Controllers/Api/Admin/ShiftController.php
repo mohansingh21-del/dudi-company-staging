@@ -312,7 +312,7 @@ class ShiftController extends Controller
                     }
                 }
 
-                $shiftPlan = ShiftPlan::where('shift_id', $matchedShift->id)
+                $shiftPlan = ShiftPlan::with('site')->where('shift_id', $matchedShift->id)
                     ->whereDate('planning_date', $planningDate)
                     ->whereIn('status', ['published', 'in_progress', 'active', 'planned'])
                     ->first();
@@ -368,6 +368,37 @@ class ShiftController extends Controller
                     }
                 }
 
+                $siteData = null;
+                if ($shiftPlan->site) {
+                    $siteData = [
+                        'id' => $shiftPlan->site->id,
+                        'site_name' => $shiftPlan->site->site_name,
+                        'address' => $shiftPlan->site->address,
+                    ];
+                }
+
+                $workforceDrivers = \App\Models\ShiftWorkforceDeployment::with('employee')
+                    ->where('shift_plan_id', $shiftPlan->id)
+                    ->where('status', 'active')
+                    ->where(function ($q) {
+                        $q->where('designation', 'Driver')
+                          ->orWhere('designation', 'driver')
+                          ->orWhereHas('employee.designation', function ($sub) {
+                              $sub->where('slug', 'driver');
+                          });
+                    })
+                    ->get()
+                    ->map(function ($deployment) {
+                        $emp = $deployment->employee;
+                        return [
+                            'id' => $emp ? $emp->id : null,
+                            'employee_code' => $emp ? $emp->employee_code : null,
+                            'name' => $emp ? $emp->name : null,
+                            'mobile' => $emp ? $emp->mobile : null,
+                            'designation' => $deployment->designation ?? ($emp && $emp->designation ? $emp->designation->name : null),
+                        ];
+                    })->values()->all();
+
                 return response()->json([
                     'status' => 200,
                     'message' => 'Shift details retrieved successfully.',
@@ -377,6 +408,9 @@ class ShiftController extends Controller
                         'start_time' => $matchedShift->start_time,
                         'end_time' => $matchedShift->end_time,
                         'shift_plan_id' => $shiftPlan ? $shiftPlan->id : null,
+                        'site' => $siteData,
+                        'drivers' => $workforceDrivers,
+                        'workforce' => $workforceDrivers,
                         'machines' => $machines,
                     ]
                 ], 200);
@@ -398,66 +432,100 @@ class ShiftController extends Controller
                     $targetDate = \Carbon\Carbon::today()->format('Y-m-d');
                 }
 
-                $shiftPlans = ShiftPlan::with(['shift', 'equipmentAllocations.equipmentName.equipment'])
+                 $shiftPlans = ShiftPlan::with(['shift', 'site', 'equipmentAllocations.equipmentName.equipment'])
                     ->whereDate('planning_date', $targetDate)
                     ->whereIn('status', ['published', 'in_progress', 'active', 'planned'])
                     ->get();
 
-                $data = [];
-                foreach ($shiftPlans as $shiftPlan) {
-                    $matchedShift = $shiftPlan->shift;
-                    if (!$matchedShift) {
-                        continue;
-                    }
+                 $data = [];
+                 foreach ($shiftPlans as $shiftPlan) {
+                     $matchedShift = $shiftPlan->shift;
+                     if (!$matchedShift) {
+                         continue;
+                     }
 
-                    $machines = [];
-                    foreach ($shiftPlan->equipmentAllocations as $allocation) {
-                        $machine = $allocation->equipmentName;
-                        $category = $machine ? $machine->equipment : null;
-                        if ($machine) {
-                            $breakdown = \App\Models\BreakdownTicket::where('equipment_allocation_id', $allocation->id)
-                                ->where('status', '!=', 'closed')
-                                ->first();
+                     $machines = [];
+                     foreach ($shiftPlan->equipmentAllocations as $allocation) {
+                         $machine = $allocation->equipmentName;
+                         $category = $machine ? $machine->equipment : null;
+                         if ($machine) {
+                             $breakdown = \App\Models\BreakdownTicket::where('equipment_allocation_id', $allocation->id)
+                                 ->where('status', '!=', 'closed')
+                                 ->first();
 
-                            if (!$breakdown) {
-                                $breakdown = \App\Models\BreakdownTicket::where('equipment_name_id', $machine->id)
-                                    ->where('shift_id', $shiftPlan->shift_id)
-                                    ->where('status', '!=', 'closed')
-                                    ->first();
-                            }
+                             if (!$breakdown) {
+                                 $breakdown = \App\Models\BreakdownTicket::where('equipment_name_id', $machine->id)
+                                     ->where('shift_id', $shiftPlan->shift_id)
+                                     ->where('status', '!=', 'closed')
+                                     ->first();
+                             }
 
-                            $breakdownData = null;
-                            if ($breakdown) {
-                                $breakdownData = [
-                                    'id' => $breakdown->id,
-                                    'ticket_number' => $breakdown->ticket_number,
-                                    'status' => $breakdown->status,
-                                    'severity' => $breakdown->severity,
-                                    'description' => $breakdown->description,
-                                    'breakdown_date_time' => $breakdown->breakdown_date_time ? $breakdown->breakdown_date_time->toDateTimeString() : null,
-                                ];
-                            }
+                             $breakdownData = null;
+                             if ($breakdown) {
+                                 $breakdownData = [
+                                     'id' => $breakdown->id,
+                                     'ticket_number' => $breakdown->ticket_number,
+                                     'status' => $breakdown->status,
+                                     'severity' => $breakdown->severity,
+                                     'description' => $breakdown->description,
+                                     'breakdown_date_time' => $breakdown->breakdown_date_time ? $breakdown->breakdown_date_time->toDateTimeString() : null,
+                                 ];
+                             }
 
-                            $machines[] = [
-                                'machine_id' => $machine->id,
-                                'machine_name' => $machine->equipment_name,
-                                'category_id' => $category ? $category->id : null,
-                                'category_name' => $category ? $category->name : null,
-                                'parent_machine_id' => $allocation->parent_equipment_id,
-                                'breakdown' => $breakdownData,
-                            ];
-                        }
-                    }
+                             $machines[] = [
+                                 'machine_id' => $machine->id,
+                                 'machine_name' => $machine->equipment_name,
+                                 'category_id' => $category ? $category->id : null,
+                                 'category_name' => $category ? $category->name : null,
+                                 'parent_machine_id' => $allocation->parent_equipment_id,
+                                 'breakdown' => $breakdownData,
+                             ];
+                         }
+                     }
 
-                    $data[] = [
-                        'id' => $matchedShift->id,
-                        'name' => $matchedShift->shift_name,
-                        'start_time' => $matchedShift->start_time,
-                        'end_time' => $matchedShift->end_time,
-                        'shift_plan_id' => $shiftPlan->id,
-                        'machines' => $machines,
-                    ];
-                }
+                     $siteData = null;
+                     if ($shiftPlan->site) {
+                         $siteData = [
+                             'id' => $shiftPlan->site->id,
+                             'site_name' => $shiftPlan->site->site_name,
+                             'address' => $shiftPlan->site->address,
+                         ];
+                     }
+
+                     $workforceDrivers = \App\Models\ShiftWorkforceDeployment::with('employee')
+                         ->where('shift_plan_id', $shiftPlan->id)
+                         ->where('status', 'active')
+                         ->where(function ($q) {
+                             $q->where('designation', 'Driver')
+                               ->orWhere('designation', 'driver')
+                               ->orWhereHas('employee.designation', function ($sub) {
+                                   $sub->where('slug', 'driver');
+                               });
+                         })
+                         ->get()
+                         ->map(function ($deployment) {
+                             $emp = $deployment->employee;
+                             return [
+                                 'id' => $emp ? $emp->id : null,
+                                 'employee_code' => $emp ? $emp->employee_code : null,
+                                 'name' => $emp ? $emp->name : null,
+                                 'mobile' => $emp ? $emp->mobile : null,
+                                 'designation' => $deployment->designation ?? ($emp && $emp->designation ? $emp->designation->name : null),
+                             ];
+                         })->values()->all();
+
+                     $data[] = [
+                         'id' => $matchedShift->id,
+                         'name' => $matchedShift->shift_name,
+                         'start_time' => $matchedShift->start_time,
+                         'end_time' => $matchedShift->end_time,
+                         'shift_plan_id' => $shiftPlan->id,
+                         'site' => $siteData,
+                         'drivers' => $workforceDrivers,
+                         'workforce' => $workforceDrivers,
+                         'machines' => $machines,
+                     ];
+                 }
 
                 return response()->json([
                     'status' => 200,

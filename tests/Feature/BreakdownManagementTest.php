@@ -713,4 +713,65 @@ class BreakdownManagementTest extends TestCase
         $this->assertEquals('BRK-ORDER-002', $data[0]['ticket_number']);
         $this->assertEquals('BRK-ORDER-001', $data[1]['ticket_number']);
     }
+
+    public function test_list_breakdowns_can_search_by_equipment_name()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // Create two new EquipmentNames
+        $equip1 = EquipmentName::create([
+            'equipment_id'   => $this->equipment->id,
+            'equipment_name' => 'KOMATSU-PC200',
+            'is_active'      => 1,
+        ]);
+
+        $equip2 = EquipmentName::create([
+            'equipment_id'   => $this->equipment->id,
+            'equipment_name' => 'VOLVO-EC300',
+            'is_active'      => 1,
+        ]);
+
+        // Create breakdown tickets for each
+        BreakdownTicket::create([
+            'ticket_number'       => 'BRK-KOMATSU',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $equip1->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'Komatsu issue',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 12:00:00',
+        ]);
+
+        BreakdownTicket::create([
+            'ticket_number'       => 'BRK-VOLVO',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $equip2->id,
+            'breakdown_date_time' => '2026-06-26 13:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'HIGH',
+            'description'         => 'Volvo issue',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 13:00:00',
+        ]);
+
+        // Search for "KOMATSU"
+        $response1 = $this->getJson('/api/v1/admin/maintenance/breakdowns?search=KOMATSU');
+        $response1->assertStatus(200);
+        $data1 = $response1->json('data');
+        $this->assertCount(1, $data1);
+        $this->assertEquals('BRK-KOMATSU', $data1[0]['ticket_number']);
+
+        // Search for "VOLVO"
+        $response2 = $this->getJson('/api/v1/admin/maintenance/breakdowns?search=VOLVO');
+        $response2->assertStatus(200);
+        $data2 = $response2->json('data');
+        $this->assertCount(1, $data2);
+        $this->assertEquals('BRK-VOLVO', $data2[0]['ticket_number']);
+    }
 }

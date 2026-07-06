@@ -287,12 +287,117 @@ class DelayService
             }
         }
 
+        // Critical Delays count
+        $criticalDelaysQuery = clone $summaryQuery;
+        $criticalDelays = $criticalDelaysQuery->where('severity', 'CRITICAL')->count();
+
+        // Most Frequent Category
+        $mostFrequentCategory = null;
+        if (!empty($categorySummary)) {
+            $sortedByEvents = collect($categorySummary)->sortByDesc('number_of_delay_events');
+            $topCategory = $sortedByEvents->first();
+            if ($topCategory && $topCategory['number_of_delay_events'] > 0) {
+                $mostFrequentCategory = [
+                    'delay_category_id' => $topCategory['delay_category_id'],
+                    'delay_category_name' => $topCategory['delay_category_name'],
+                    'number_of_delay_events' => $topCategory['number_of_delay_events'],
+                ];
+            }
+        }
+
+        // --- Chart Data ---
+
+        // 1. Production Loss Trend (daily time series)
+        $trendQuery = \App\Models\Delay::query();
+        $trendQuery->setQuery(clone $query->getQuery());
+        $trendQuery->getQuery()->columns = null;
+        $trendQuery->getQuery()->orders = null;
+        $trendQuery->getQuery()->groups = null;
+        $trendQuery->getQuery()->havings = null;
+
+        $productionLossTrend = $trendQuery->groupBy('shift_date')
+            ->selectRaw('shift_date, sum(estimated_production_loss_bcm) as total_production_loss_bcm, sum(duration_minutes) as total_delay_minutes, count(*) as event_count')
+            ->orderBy('shift_date', 'asc')
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'date' => $item->shift_date ? \Carbon\Carbon::parse($item->shift_date)->format('Y-m-d') : null,
+                    'total_production_loss_bcm' => round((float) $item->total_production_loss_bcm, 2),
+                    'total_delay_hours' => round((float) $item->total_delay_minutes / 60.0, 2),
+                    'event_count' => $item->event_count,
+                ];
+            })
+            ->values()
+            ->toArray();
+
+        // 2. Delay Category Contribution (production loss BCM per category - for bar chart)
+        $delayCategoryContribution = collect($categorySummary)
+            ->filter(fn($item) => $item['total_production_loss_bcm'] > 0)
+            ->map(function ($item) {
+                return [
+                    'delay_category_id' => $item['delay_category_id'],
+                    'delay_category_name' => $item['delay_category_name'],
+                    'total_production_loss_bcm' => $item['total_production_loss_bcm'],
+                ];
+            })
+            ->sortByDesc('total_production_loss_bcm')
+            ->values()
+            ->toArray();
+
+        // 3. Delay Distribution By Category (event count per category - for bar chart)
+        $delayDistributionByCategory = collect($categorySummary)
+            ->filter(fn($item) => $item['number_of_delay_events'] > 0)
+            ->map(function ($item) {
+                return [
+                    'delay_category_id' => $item['delay_category_id'],
+                    'delay_category_name' => $item['delay_category_name'],
+                    'number_of_delay_events' => $item['number_of_delay_events'],
+                    'total_delay_hours' => $item['total_delay_hours'],
+                ];
+            })
+            ->sortByDesc('number_of_delay_events')
+            ->values()
+            ->toArray();
+
+        // 4. Delay Severity Distribution (for donut chart)
+        $severityQuery = \App\Models\Delay::query();
+        $severityQuery->setQuery(clone $query->getQuery());
+        $severityQuery->getQuery()->columns = null;
+        $severityQuery->getQuery()->orders = null;
+        $severityQuery->getQuery()->groups = null;
+        $severityQuery->getQuery()->havings = null;
+
+        $severityRaw = $severityQuery->groupBy('severity')
+            ->selectRaw('severity, count(*) as event_count, sum(duration_minutes) as total_delay_minutes')
+            ->get()
+            ->keyBy('severity');
+
+        $severityLabels = ['LOW' => 'Minor', 'MEDIUM' => 'Moderate', 'HIGH' => 'Major', 'CRITICAL' => 'Critical'];
+        $delaySeverityDistribution = collect($severityLabels)->map(function ($label, $key) use ($severityRaw) {
+            $item = $severityRaw->get($key);
+            return [
+                'severity' => $key,
+                'label' => $label,
+                'event_count' => $item ? $item->event_count : 0,
+                'total_delay_hours' => $item ? round((float) $item->total_delay_minutes / 60.0, 2) : 0.0,
+            ];
+        })->values()->toArray();
+
         $kpiSummary = [
             'total_delay_hours' => $totalDelayHours,
             'total_production_loss_bcm' => $totalProductionLossBcm,
             'number_of_delay_events' => $numberOfDelayEvents,
             'largest_delay_reason' => $largestDelayReason,
+            'critical_delays' => $criticalDelays,
+            'most_frequent_category' => $mostFrequentCategory,
             'category_summary' => $categorySummary,
+        ];
+
+        $chartData = [
+            'production_loss_trend' => $productionLossTrend,
+            'delay_category_contribution' => $delayCategoryContribution,
+            'delay_distribution_by_category' => $delayDistributionByCategory,
+            'delay_severity_distribution' => $delaySeverityDistribution,
         ];
 
         $perPage = isset($filters['limit']) ? (int) $filters['limit'] : 20;
@@ -301,6 +406,7 @@ class DelayService
         return [
             'records' => $records,
             'kpi_summary' => $kpiSummary,
+            'chart_data' => $chartData,
         ];
     }
 

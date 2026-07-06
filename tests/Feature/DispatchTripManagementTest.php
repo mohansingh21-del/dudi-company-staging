@@ -46,6 +46,7 @@ class DispatchTripManagementTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        Carbon::setTestNow(Carbon::parse('2026-07-02 12:00:00'));
 
         // Create Roles
         $adminRole = Role::create(['name' => 'System-Administrator', 'slug' => 'super-admin', 'is_active' => 1]);
@@ -189,6 +190,12 @@ class DispatchTripManagementTest extends TestCase
         ]);
     }
 
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+        parent::tearDown();
+    }
+
     public function test_supervisor_can_log_trip_successfully()
     {
         Sanctum::actingAs($this->supervisorUser);
@@ -205,6 +212,7 @@ class DispatchTripManagementTest extends TestCase
             'end_time' => '09:20:00', // 20 minutes
             'quantity_bcm' => 15.5,
             'distance_meters' => 1200,
+            'total_cycles' => 1,
         ];
 
         $response = $this->postJson('/api/v1/dispatch/trips', $payload);
@@ -232,6 +240,7 @@ class DispatchTripManagementTest extends TestCase
             'dumper_equipment_id' => $this->dumperName->id,
             'cycle_time_minutes' => 20.0,
             'quantity_bcm' => 15.5,
+            'total_cycles' => 1,
         ]);
 
         // Check that Shift Plan's actual_bcm was updated
@@ -362,7 +371,15 @@ class DispatchTripManagementTest extends TestCase
             ->assertJsonStructure([
                 'status',
                 'message',
-                'dashboard',
+                'dashboard' => [
+                    'total_trips',
+                    'total_quantity_bcm',
+                    'average_cycle_time_minutes',
+                    'active_dumpers',
+                    'best_performing_dumper',
+                    'highest_trip_count_dumper',
+                    'fastest_dumper',
+                ],
                 'data',
                 'pagination',
             ]);
@@ -575,6 +592,7 @@ class DispatchTripManagementTest extends TestCase
             'end_time' => '00:15:00', // 25 minutes
             'quantity_bcm' => 12.0,
             'distance_meters' => 800,
+            'total_cycles' => 1,
         ];
 
         $response = $this->postJson('/api/v1/dispatch/trips', $payload);
@@ -785,6 +803,7 @@ class DispatchTripManagementTest extends TestCase
             'start_time' => '17:00:00',
             'end_time' => '17:15:00',
             'quantity_bcm' => 15.0,
+            'total_cycles' => 1,
         ];
         $response = $this->postJson('/api/v1/dispatch/trips', $payloadStore);
         $response->assertStatus(201);
@@ -809,6 +828,47 @@ class DispatchTripManagementTest extends TestCase
             'shift_plan_id' => $this->publishedShiftPlan->id,
             'loading_point_id' => $this->loadingPoint->id,
             'dumping_point_id' => $this->dumpingPoint->id,
+        ]);
+    }
+
+    public function test_supervisor_can_log_and_update_total_cycles()
+    {
+        Sanctum::actingAs($this->supervisorUser);
+
+        $payload = [
+            'shift_plan_id' => $this->publishedShiftPlan->id,
+            'site_id' => $this->site->id,
+            'dumper_equipment_id' => $this->dumperName->id,
+            'driver_id' => $this->supervisorEmployee->id,
+            'excavator_equipment_id' => $this->excavatorName->id,
+            'loading_point_id' => $this->loadingPoint->id,
+            'dumping_point_id' => $this->dumpingPoint->id,
+            'start_time' => '09:00:00',
+            'end_time' => '09:20:00',
+            'quantity_bcm' => 15.5,
+            'distance_meters' => 1200,
+            'total_cycles' => 5,
+        ];
+
+        $response = $this->postJson('/api/v1/dispatch/trips', $payload);
+
+        $response->assertStatus(201);
+        $tripId = $response->json('data.id');
+
+        $this->assertDatabaseHas('dispatch_trips', [
+            'id' => $tripId,
+            'total_cycles' => 5,
+        ]);
+
+        $payloadUpdate = [
+            'total_cycles' => 8,
+        ];
+        $responseUpdate = $this->putJson("/api/v1/dispatch/trips/{$tripId}", $payloadUpdate);
+        $responseUpdate->assertStatus(200);
+
+        $this->assertDatabaseHas('dispatch_trips', [
+            'id' => $tripId,
+            'total_cycles' => 8,
         ]);
     }
 }

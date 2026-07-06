@@ -32,7 +32,7 @@ class StoreDispatchTripRequest extends FormRequest
             'site_id' => 'required|exists:sites,id',
             'dumper_equipment_id' => 'required|exists:equipment_names,id',
             'driver_id' => 'required|exists:employees,id',
-            'excavator_equipment_id' => 'required|exists:equipment_names,id',
+            'excavator_equipment_id' => 'nullable|exists:equipment_names,id',
             'loading_point_id' => 'required|exists:site_points,id',
             'dumping_point_id' => 'required|exists:site_points,id',
             'trip_date_time' => 'nullable|date_format:Y-m-d H:i:s',
@@ -40,6 +40,7 @@ class StoreDispatchTripRequest extends FormRequest
             'end_time' => 'required|date_format:H:i:s',
             'quantity_bcm' => 'required|numeric|gt:0',
             'distance_meters' => 'nullable|numeric|gt:0',
+            'total_cycles' => 'required|integer|gt:0',
         ];
     }
 
