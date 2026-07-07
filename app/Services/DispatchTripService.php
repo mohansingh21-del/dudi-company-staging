@@ -240,6 +240,7 @@ class DispatchTripService
         $dumperSummaryData = (clone $summaryQuery)
             ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
             ->selectRaw('COUNT(dispatch_trips.id) as total_trips')
+            ->selectRaw('SUM(dispatch_trips.total_cycles) as sum_total_cycles')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
@@ -257,6 +258,7 @@ class DispatchTripService
         foreach ($dumperSummaryData as $row) {
             $totalQty = (float) $row->total_quantity_bcm;
             $trips = (int) $row->total_trips;
+            $totalCycles = (int) $row->sum_total_cycles;
             $avgCycle = (float) $row->average_cycle_time_minutes;
 
             if ($totalQty > $maxQty) {
@@ -268,12 +270,12 @@ class DispatchTripService
                 ];
             }
 
-            if ($trips > $maxTrips) {
-                $maxTrips = $trips;
+            if ($totalCycles > $maxTrips) {
+                $maxTrips = $totalCycles;
                 $highestTripDumper = [
                     'dumper_equipment_id' => $row->dumper_equipment_id,
                     'dumper_number' => $row->dumper_number,
-                    'value' => $trips,
+                    'value' => $totalCycles,
                 ];
             }
 
@@ -308,8 +310,8 @@ class DispatchTripService
             'shiftPlan:id,planning_date,shift_id',
             'shiftPlan.shift:id,shift_name',
         ])
-        ->orderBy('start_time', 'DESC')
-        ->paginate($perPage);
+            ->orderBy('start_time', 'DESC')
+            ->paginate($perPage);
 
         return [
             'records' => $records,
@@ -334,7 +336,7 @@ class DispatchTripService
             'site:id,site_name',
             'shiftPlan:id,planning_date,shift_id',
             'shiftPlan.shift:id,shift_name',
-            'audits.user:id,name',
+            'audits.user:id',
         ])->findOrFail($id);
 
         return [
@@ -483,7 +485,7 @@ class DispatchTripService
 
             // Recalculate fuel entries for old and new excavator/dumper machine IDs
             $fuelService = resolve(\App\Services\FuelService::class);
-            
+
             $oldExcavatorId = $oldValues['excavator_equipment_id'] ?? null;
             $oldDumperId = $oldValues['dumper_equipment_id'] ?? null;
             $oldShiftPlanId = $oldValues['shift_plan_id'] ?? null;
@@ -525,6 +527,7 @@ class DispatchTripService
         $dumperSummaryData = (clone $query)
             ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
             ->selectRaw('COUNT(dispatch_trips.id) as total_trips')
+            ->selectRaw('SUM(dispatch_trips.total_cycles) as sum_total_cycles')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->selectRaw('SUM(distance_meters) as distance_covered_meters')
@@ -545,6 +548,7 @@ class DispatchTripService
         foreach ($dumperSummaryData as $row) {
             $totalQty = (float) $row->total_quantity_bcm;
             $trips = (int) $row->total_trips;
+            $totalCycles = (int) $row->sum_total_cycles;
             $avgCycle = (float) $row->average_cycle_time_minutes;
             $dist = (float) $row->distance_covered_meters;
             $prodPerTrip = $trips > 0 ? round($totalQty / $trips, 2) : 0;
@@ -571,12 +575,12 @@ class DispatchTripService
                 ];
             }
 
-            if ($trips > $maxTrips) {
-                $maxTrips = $trips;
+            if ($totalCycles > $maxTrips) {
+                $maxTrips = $totalCycles;
                 $highestTripDumper = [
                     'dumper_equipment_id' => $row->dumper_equipment_id,
                     'dumper_number' => $row->dumper_number,
-                    'value' => $trips,
+                    'value' => $totalCycles,
                 ];
             }
 
@@ -808,6 +812,9 @@ class DispatchTripService
         }
         if (isset($filters['shift_plan_id'])) {
             $query->where('shift_plan_id', $filters['shift_plan_id']);
+        }
+        if (isset($filters['shift_id'])) {
+            $query->where('shift_id', $filters['shift_id']);
         }
         if (isset($filters['site_id'])) {
             $query->where('site_id', $filters['site_id']);

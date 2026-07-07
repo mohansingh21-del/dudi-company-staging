@@ -7,6 +7,7 @@ use App\Http\Requests\StoreShiftPlanRequest;
 use App\Http\Requests\UpdateShiftPlanRequest;
 use App\Http\Resources\ShiftPlanResource;
 use App\Services\ShiftPlanService;
+use App\Services\ShiftPlanSummaryService;
 use Illuminate\Http\Request;
 
 class ShiftPlanController extends Controller
@@ -298,6 +299,45 @@ class ShiftPlanController extends Controller
                 'status' => 500,
                 'message' => $th->getMessage(),
                 'data' => [],
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/v1/shift-plans/{shift_id}/summary
+     * Retrieve the consolidated operational summary for a closed shift plan.
+     */
+    public function summary($id, ShiftPlanSummaryService $summaryService)
+    {
+        try {
+            $result = $summaryService->getClosedShiftPlanSummary((int) $id);
+
+            if ($result['status'] === 404) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => $result['message'],
+                    'data' => []
+                ], 404);
+            }
+
+            if ($result['status'] === 422) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $result['message'],
+                    'data' => []
+                ], 422);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => $result['message'],
+                'data' => $result['data']
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+                'data' => []
             ], 500);
         }
     }

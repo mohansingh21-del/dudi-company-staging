@@ -774,4 +774,94 @@ class BreakdownManagementTest extends TestCase
         $this->assertCount(1, $data2);
         $this->assertEquals('BRK-VOLVO', $data2[0]['ticket_number']);
     }
+
+    public function test_can_retrieve_new_breakdown_kpis_and_charts_in_dashboard()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // Create another equipment and equipment name
+        $equipment2 = Equipment::create(['name' => 'Dumper', 'is_active' => 1]);
+        $equipName2 = EquipmentName::create([
+            'equipment_id' => $equipment2->id,
+            'equipment_name' => 'DMP-07',
+            'is_active' => 1
+        ]);
+
+        // Create breakdown tickets
+        // Ticket 1: for EX01-Excavator-CAT, closed, 180 mins downtime (3 hours)
+        BreakdownTicket::create([
+            'ticket_number'       => 'BRK-NEW-001',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 09:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1, // Mechanical
+            'severity'            => 'MEDIUM',
+            'description'         => 'Issue 1',
+            'status'              => 'closed',
+            'downtime_start'      => '2026-06-26 09:00:00',
+            'downtime_end'        => '2026-06-26 12:00:00',
+            'downtime_minutes'    => 180,
+            'resolved_by'         => $this->adminUser->id,
+            'resolved_at'         => '2026-06-26 12:00:00',
+        ]);
+
+        // Ticket 2: for DMP-07, open
+        BreakdownTicket::create([
+            'ticket_number'       => 'BRK-NEW-002',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $equipment2->id,
+            'equipment_name_id'   => $equipName2->id,
+            'breakdown_date_time' => '2026-06-26 10:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 2, // Electrical
+            'severity'            => 'HIGH',
+            'description'         => 'Issue 2',
+            'status'              => 'open',
+            'downtime_start'      => '2026-06-26 10:00:00',
+        ]);
+
+        $response = $this->getJson('/api/v1/admin/maintenance/breakdowns?date_from=2026-06-26&date_to=2026-06-26');
+
+        $response->assertStatus(200)
+            ->assertJsonStructure([
+                'dashboard' => [
+                    'total_events',
+                    'closed_tickets',
+                    'affected_machines',
+                    'avg_downtime_per_breakdown_hours',
+                    'avg_downtime_per_breakdown_formatted',
+                    'most_reliable_machine' => [
+                        'machine',
+                        'downtime',
+                        'downtime_hours',
+                        'breakdowns',
+                        'reliability_score'
+                    ],
+                    'least_reliable_machine',
+                    'breakdown_trend',
+                    'downtime_by_machine',
+                    'category_analysis',
+                    'reliability_ranking',
+                ]
+            ]);
+
+        $dashboard = $response->json('dashboard');
+        
+        $this->assertEquals(2, $dashboard['total_events']);
+        $this->assertEquals(1, $dashboard['closed_tickets']);
+        $this->assertEquals(2, $dashboard['affected_machines']);
+        // 3 hours downtime total, 2 events => 3/2 = 1.5 hours avg downtime
+        $this->assertEquals(1.50, $dashboard['avg_downtime_per_breakdown_hours']);
+        $this->assertEquals('1.5 Hours', $dashboard['avg_downtime_per_breakdown_formatted']);
+
+        // Check charts data
+        $this->assertCount(1, $dashboard['breakdown_trend']); // date range is 1 day
+        $this->assertEquals(2, $dashboard['breakdown_trend'][0]['count']);
+
+        $this->assertCount(2, $dashboard['category_analysis']);
+        $this->assertCount(2, $dashboard['downtime_by_machine']);
+        $this->assertCount(2, $dashboard['reliability_ranking']);
+    }
 }

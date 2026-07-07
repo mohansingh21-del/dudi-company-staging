@@ -25,14 +25,24 @@ class ShiftPlan extends Model
         'actual_bcm',
         'published_by',
         'published_at',
+        'closed_by',
+        'closure_date',
+        'closure_time',
+        'supervisor_remarks',
+        'handover_notes',
+        'closure_confirmed',
+        'breakdown_justification',
+        'shift_summary_snapshot',
     ];
 
     protected $casts = [
-        'planning_date' => 'date',
-        'target_bcm'    => 'decimal:2',
-        'actual_bcm'    => 'decimal:2',
-        'equipment_count' => 'integer',
-        'published_at'  => 'datetime',
+        'planning_date'     => 'date',
+        'target_bcm'        => 'decimal:2',
+        'actual_bcm'        => 'decimal:2',
+        'equipment_count'   => 'integer',
+        'published_at'      => 'datetime',
+        'closure_date'      => 'date',
+        'closure_confirmed' => 'boolean',
     ];
 
     /*
@@ -71,6 +81,11 @@ class ShiftPlan extends Model
         return $this->belongsTo(User::class, 'published_by');
     }
 
+    public function closedByUser()
+    {
+        return $this->belongsTo(User::class, 'closed_by');
+    }
+
     public function equipmentAllocations()
     {
         return $this->hasMany(ShiftEquipmentAllocation::class, 'shift_plan_id');
@@ -79,6 +94,11 @@ class ShiftPlan extends Model
     public function workforceDeployments()
     {
         return $this->hasMany(ShiftWorkforceDeployment::class, 'shift_plan_id');
+    }
+
+    public function closureAuditLogs()
+    {
+        return $this->hasMany(ShiftClosureAuditLog::class, 'shift_id');
     }
 
     /*
@@ -92,7 +112,7 @@ class ShiftPlan extends Model
      */
     public function scopeNotClosed($query)
     {
-        return $query->whereNotIn('status', ['closed']);
+        return $query->whereNotIn('status', ['closed', 'completed']);
     }
 
     public function scopeActive($query)

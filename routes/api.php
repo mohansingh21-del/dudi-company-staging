@@ -51,6 +51,7 @@ use App\Http\Controllers\Api\Admin\FuelEntryController;
 use App\Http\Controllers\Api\Admin\DelayController;
 use App\Http\Controllers\Api\Admin\SitePointController;
 use App\Http\Controllers\Api\Admin\DispatchTripController;
+use App\Http\Controllers\Api\Admin\ShiftClosureController;
 
 /*
 |--------------------------------------------------------------------------
@@ -402,6 +403,7 @@ Route::prefix('v1')->group(function () {
             Route::post('shift-plans/{id}/publish', [ShiftPlanController::class, 'publish']);
             Route::patch('shift-plans/{id}/status', [ShiftPlanController::class, 'updateStatus']);
             Route::apiResource('shift-plans', ShiftPlanController::class);
+            Route::get('shift-plans/{shift_id}/summary', [ShiftPlanController::class, 'summary']);
 
             Route::prefix('shift-plans/{shift_plan_id}')->group(function () {
                 Route::get('equipment/available', [EquipmentAllocationController::class, 'available']);
@@ -421,6 +423,14 @@ Route::prefix('v1')->group(function () {
                 Route::get('workforce', [WorkforceDeploymentController::class, 'index']);
                 Route::delete('workforce/{deployment_id}', [WorkforceDeploymentController::class, 'destroy']);
             });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Shift Closure
+            |--------------------------------------------------------------------------
+            */
+            Route::get('shift-plans/{shift}/closure-summary', [ShiftClosureController::class, 'summary']);
+            Route::post('shift-plans/{shift}/close', [ShiftClosureController::class, 'close']);
 
             /*
             |--------------------------------------------------------------------------

@@ -158,6 +158,167 @@ class BreakdownService
         $equipmentAvailabilityPercent = round((($periodHours - $totalDowntimeHours) / $periodHours) * 100, 2);
         $equipmentAvailabilityPercent = max(0.00, min(100.00, $equipmentAvailabilityPercent));
 
+        // NEW KPIs & CHARTS CALCULATIONS
+        // 6. total_events = count of all breakdown tickets in the filtered period
+        $totalEvents = (clone $dashboardQuery)->count();
+
+        // 7. closed_tickets = count of closed breakdown tickets in the filtered period
+        $closedTickets = (clone $dashboardQuery)
+            ->where('status', 'closed')
+            ->count();
+
+        // Determine trend and scoring start/end dates
+        $trendStart = $dateFrom ? $dateFrom->copy() : \Carbon\Carbon::now()->subDays(6)->startOfDay();
+        $trendEnd = $dateTo ? $dateTo->copy() : \Carbon\Carbon::now()->endOfDay();
+        
+        $scoringHours = $trendStart->diffInHours($trendEnd);
+        $scoringHours = max($scoringHours, 1);
+
+        // Fetch machine stats for the filtered period
+        $machineStats = (clone $dashboardQuery)
+            ->select('equipment_name_id')
+            ->selectRaw('SUM(downtime_minutes) as total_downtime_minutes')
+            ->selectRaw('COUNT(*) as breakdown_count')
+            ->groupBy('equipment_name_id')
+            ->with('equipmentName')
+            ->get();
+
+        $affectedMachines = $machineStats->count();
+
+        $machineStatsCalculated = [];
+        foreach ($machineStats as $stat) {
+            if (!$stat->equipmentName) {
+                continue;
+            }
+            $mDowntimeHours = round($stat->total_downtime_minutes / 60, 2);
+            $mBreakdownCount = $stat->breakdown_count;
+            $mAvailability = (($scoringHours - $mDowntimeHours) / $scoringHours) * 100;
+            $mScore = max(0.00, min(100.00, $mAvailability - ($mBreakdownCount * 8.5)));
+            $mScore = round($mScore, 2);
+
+            $machineStatsCalculated[] = [
+                'equipment_name_id' => $stat->equipment_name_id,
+                'machine' => $stat->equipmentName->equipment_name,
+                'downtime_hours' => $mDowntimeHours,
+                'breakdowns' => $mBreakdownCount,
+                'reliability_score' => $mScore
+            ];
+        }
+
+        // Rank Most/Least Reliable machines
+        $mostReliableMachine = null;
+        $leastReliableMachine = null;
+
+        if (!empty($machineStatsCalculated)) {
+            $mostReliableRaw = collect($machineStatsCalculated)->sort(function ($a, $b) {
+                if ($a['reliability_score'] != $b['reliability_score']) {
+                    return $b['reliability_score'] <=> $a['reliability_score']; // Descending
+                }
+                if ($a['downtime_hours'] != $b['downtime_hours']) {
+                    return $a['downtime_hours'] <=> $b['downtime_hours']; // Ascending
+                }
+                return $a['breakdowns'] <=> $b['breakdowns']; // Ascending
+            })->first();
+
+            if ($mostReliableRaw) {
+                $mostReliableMachine = [
+                    'machine' => $mostReliableRaw['machine'],
+                    'downtime' => $mostReliableRaw['downtime_hours'] . ' Hrs',
+                    'downtime_hours' => $mostReliableRaw['downtime_hours'],
+                    'breakdowns' => $mostReliableRaw['breakdowns'],
+                    'reliability_score' => $mostReliableRaw['reliability_score']
+                ];
+            }
+
+            $leastReliableRaw = collect($machineStatsCalculated)->sort(function ($a, $b) {
+                if ($a['reliability_score'] != $b['reliability_score']) {
+                    return $a['reliability_score'] <=> $b['reliability_score']; // Ascending
+                }
+                if ($a['downtime_hours'] != $b['downtime_hours']) {
+                    return $b['downtime_hours'] <=> $a['downtime_hours']; // Descending
+                }
+                return $b['breakdowns'] <=> $a['breakdowns']; // Descending
+            })->first();
+
+            if ($leastReliableRaw) {
+                $leastReliableMachine = [
+                    'machine' => $leastReliableRaw['machine'],
+                    'downtime' => $leastReliableRaw['downtime_hours'] . ' Hrs',
+                    'downtime_hours' => $leastReliableRaw['downtime_hours'],
+                    'breakdowns' => $leastReliableRaw['breakdowns'],
+                    'reliability_score' => $leastReliableRaw['reliability_score']
+                ];
+            }
+        }
+
+        // Avg Downtime / Breakdown
+        $avgDowntimePerBreakdownHours = 0.00;
+        if ($totalEvents > 0) {
+            $avgDowntimePerBreakdownHours = round($totalDowntimeHours / $totalEvents, 2);
+        }
+
+        // 8. breakdown_trend
+        $breakdownsByDate = (clone $dashboardQuery)
+            ->selectRaw('DATE(breakdown_date_time) as date, COUNT(*) as count')
+            ->groupBy('date')
+            ->pluck('count', 'date');
+
+        $breakdownTrend = [];
+        $tempDate = $trendStart->copy();
+        $dayIndex = 1;
+        while ($tempDate->lte($trendEnd)) {
+            $dateString = $tempDate->toDateString();
+            $count = $breakdownsByDate->get($dateString, 0);
+            $breakdownTrend[] = [
+                'label' => 'Day ' . $dayIndex,
+                'date' => $dateString,
+                'count' => $count
+            ];
+            $tempDate->addDay();
+            $dayIndex++;
+        }
+
+        // 9. downtime_by_machine
+        $downtimeByMachine = collect($machineStatsCalculated)
+            ->sortByDesc('downtime_hours')
+            ->map(function ($m) {
+                return [
+                    'machine' => $m['machine'],
+                    'downtime_hours' => $m['downtime_hours']
+                ];
+            })
+            ->values()
+            ->all();
+
+        // 10. category_analysis
+        $categoryAnalysis = (clone $dashboardQuery)
+            ->select('breakdown_type_id')
+            ->selectRaw('COUNT(*) as count')
+            ->groupBy('breakdown_type_id')
+            ->with('breakdownType')
+            ->get()
+            ->map(function ($stat) {
+                return [
+                    'breakdown_type_id' => $stat->breakdown_type_id,
+                    'breakdown_type' => $stat->breakdownType ? $stat->breakdownType->breakdown_type : 'Other',
+                    'count' => $stat->count
+                ];
+            })
+            ->values()
+            ->all();
+
+        // 11. reliability_ranking
+        $reliabilityRanking = collect($machineStatsCalculated)
+            ->sortByDesc('reliability_score')
+            ->map(function ($m) {
+                return [
+                    'machine' => $m['machine'],
+                    'reliability_score' => $m['reliability_score']
+                ];
+            })
+            ->values()
+            ->all();
+
         return [
             'tickets' => $tickets,
             'dashboard' => [
@@ -166,6 +327,17 @@ class BreakdownService
                 'total_downtime_hours' => $totalDowntimeHours,
                 'mttr_hours' => $mttrHours,
                 'equipment_availability_percent' => $equipmentAvailabilityPercent,
+                'total_events' => $totalEvents,
+                'closed_tickets' => $closedTickets,
+                'affected_machines' => $affectedMachines,
+                'avg_downtime_per_breakdown_hours' => $avgDowntimePerBreakdownHours,
+                'avg_downtime_per_breakdown_formatted' => $avgDowntimePerBreakdownHours . ' Hours',
+                'most_reliable_machine' => $mostReliableMachine,
+                'least_reliable_machine' => $leastReliableMachine,
+                'breakdown_trend' => $breakdownTrend,
+                'downtime_by_machine' => $downtimeByMachine,
+                'category_analysis' => $categoryAnalysis,
+                'reliability_ranking' => $reliabilityRanking,
             ]
         ];
     }

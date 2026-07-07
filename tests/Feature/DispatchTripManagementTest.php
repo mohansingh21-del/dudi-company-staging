@@ -344,7 +344,7 @@ class DispatchTripManagementTest extends TestCase
     {
         Sanctum::actingAs($this->supervisorUser);
 
-        // Seed a trip
+        // Seed Trip 1: Day shift on 2026-07-02
         DispatchTrip::create([
             'trip_reference_no' => 'TRP-2026-000002',
             'shift_plan_id' => $this->publishedShiftPlan->id,
@@ -363,26 +363,63 @@ class DispatchTripManagementTest extends TestCase
             'created_by' => $this->adminUser->id,
         ]);
 
-        $response = $this->getJson('/api/v1/dispatch/trips?shift_plan_id=' . $this->publishedShiftPlan->id);
+        // Create a different shift
+        $otherShift = Shift::create([
+            'shift_name'            => 'Night Shift Test',
+            'start_time'            => '20:00:00',
+            'end_time'              => '04:00:00',
+            'minimum_working_hours' => 8,
+            'is_night_shift'        => 1,
+        ]);
 
+        // Seed Trip 2: Night shift on 2026-07-03
+        DispatchTrip::create([
+            'trip_reference_no' => 'TRP-2026-000099',
+            'shift_plan_id' => $this->publishedShiftPlan->id,
+            'shift_id' => $otherShift->id,
+            'trip_date_time' => '2026-07-03 21:00:00',
+            'site_id' => $this->site->id,
+            'dumper_equipment_id' => $this->dumperName->id,
+            'driver_id' => $this->supervisorEmployee->id,
+            'excavator_equipment_id' => $this->excavatorName->id,
+            'loading_point_id' => $this->loadingPoint->id,
+            'dumping_point_id' => $this->dumpingPoint->id,
+            'start_time' => '2026-07-03 21:00:00',
+            'end_time' => '2026-07-03 21:10:00',
+            'cycle_time_minutes' => 10,
+            'quantity_bcm' => 15,
+            'created_by' => $this->adminUser->id,
+        ]);
+
+        // 1. Filter by shift_plan_id
+        $response = $this->getJson('/api/v1/dispatch/trips?shift_plan_id=' . $this->publishedShiftPlan->id);
         $response->assertStatus(200)
             ->assertJsonPath('status', 200)
+            ->assertJsonPath('dashboard.total_trips', 2);
+
+        // 2. Filter by shift_id (should only return Trip 1)
+        $response = $this->getJson('/api/v1/dispatch/trips?shift_id=' . $this->shift->id);
+        $response->assertStatus(200)
             ->assertJsonPath('dashboard.total_trips', 1)
-            ->assertJsonStructure([
-                'status',
-                'message',
-                'dashboard' => [
-                    'total_trips',
-                    'total_quantity_bcm',
-                    'average_cycle_time_minutes',
-                    'active_dumpers',
-                    'best_performing_dumper',
-                    'highest_trip_count_dumper',
-                    'fastest_dumper',
-                ],
-                'data',
-                'pagination',
-            ]);
+            ->assertJsonPath('data.0.trip_reference_no', 'TRP-2026-000002');
+
+        // 3. Filter by otherShift shift_id (should only return Trip 2)
+        $response = $this->getJson('/api/v1/dispatch/trips?shift_id=' . $otherShift->id);
+        $response->assertStatus(200)
+            ->assertJsonPath('dashboard.total_trips', 1)
+            ->assertJsonPath('data.0.trip_reference_no', 'TRP-2026-000099');
+
+        // 4. Filter by date range that only covers 2026-07-02
+        $response = $this->getJson('/api/v1/dispatch/trips?date_from=2026-07-02 00:00:00&date_to=2026-07-02 23:59:59');
+        $response->assertStatus(200)
+            ->assertJsonPath('dashboard.total_trips', 1)
+            ->assertJsonPath('data.0.trip_reference_no', 'TRP-2026-000002');
+
+        // 5. Filter by date range that only covers 2026-07-03
+        $response = $this->getJson('/api/v1/dispatch/trips?date_from=2026-07-03 00:00:00&date_to=2026-07-03 23:59:59');
+        $response->assertStatus(200)
+            ->assertJsonPath('dashboard.total_trips', 1)
+            ->assertJsonPath('data.0.trip_reference_no', 'TRP-2026-000099');
     }
 
     public function test_updating_trip_recalculates_cycle_time_and_records_audit_trail()
