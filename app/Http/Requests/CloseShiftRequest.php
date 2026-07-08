@@ -27,7 +27,7 @@ class CloseShiftRequest extends FormRequest
      */
     protected function prepareForValidation()
     {
-        $shift = $this->route('shift');
+        $shift = $this->route('shift_plan');
         $hasActiveBreakdown = false;
 
         if ($shift) {
@@ -48,16 +48,16 @@ class CloseShiftRequest extends FormRequest
     public function rules()
     {
         return [
-            'supervisor_remarks'       => ['required', 'string', 'min:20'],
-            'handover_notes'           => ['nullable', 'string'],
-            'closure_confirmed'        => ['required', 'accepted'],
-            'breakdown_justification'  => ['nullable', 'string'],
-            'attendance_submitted'     => ['required', 'accepted'],
-            'fuel_logs_available'      => ['required', 'accepted'],
-            'delay_logs_updated'       => ['required', 'accepted'],
-            'breakdown_logs_updated'   => ['required', 'accepted'],
-            'production_data_available'=> ['required', 'accepted'],
-            'safety_data_reviewed'     => ['required', 'accepted'],
+            'supervisor_remarks' => ['required', 'string', 'min:20'],
+            'handover_notes' => ['nullable', 'string'],
+            'closure_confirmed' => ['required', 'accepted'],
+            'breakdown_justification' => ['nullable', 'string'],
+            'attendance_submitted' => ['required', 'accepted'],
+            'fuel_logs_available' => ['required', 'accepted'],
+            'delay_logs_updated' => ['required', 'accepted'],
+            'breakdown_logs_updated' => ['required', 'accepted'],
+            'production_data_available' => ['required', 'accepted'],
+            'safety_data_reviewed' => ['required', 'accepted'],
         ];
     }
 
@@ -69,22 +69,22 @@ class CloseShiftRequest extends FormRequest
     public function messages()
     {
         return [
-            'supervisor_remarks.required'        => 'Please Enter Supervisor Remarks.',
-            'supervisor_remarks.min'             => 'Supervisor remarks must be at least 20 characters.',
-            'closure_confirmed.required'         => 'Please Confirm Operational Review.',
-            'closure_confirmed.accepted'         => 'Please Confirm Operational Review.',
-            'attendance_submitted.required'      => 'Please Verify Attendance Submitted.',
-            'attendance_submitted.accepted'      => 'Please Verify Attendance Submitted.',
-            'fuel_logs_available.required'       => 'Please Verify Fuel Logs Available.',
-            'fuel_logs_available.accepted'       => 'Please Verify Fuel Logs Available.',
-            'delay_logs_updated.required'        => 'Please Verify Delay Logs Updated.',
-            'delay_logs_updated.accepted'        => 'Please Verify Delay Logs Updated.',
-            'breakdown_logs_updated.required'    => 'Please Verify Breakdown Logs Updated.',
-            'breakdown_logs_updated.accepted'    => 'Please Verify Breakdown Logs Updated.',
+            'supervisor_remarks.required' => 'Please Enter Supervisor Remarks.',
+            'supervisor_remarks.min' => 'Supervisor remarks must be at least 20 characters.',
+            'closure_confirmed.required' => 'Please Confirm Operational Review.',
+            'closure_confirmed.accepted' => 'Please Confirm Operational Review.',
+            'attendance_submitted.required' => 'Please Verify Attendance Submitted.',
+            'attendance_submitted.accepted' => 'Please Verify Attendance Submitted.',
+            'fuel_logs_available.required' => 'Please Verify Fuel Logs Available.',
+            'fuel_logs_available.accepted' => 'Please Verify Fuel Logs Available.',
+            'delay_logs_updated.required' => 'Please Verify Delay Logs Updated.',
+            'delay_logs_updated.accepted' => 'Please Verify Delay Logs Updated.',
+            'breakdown_logs_updated.required' => 'Please Verify Breakdown Logs Updated.',
+            'breakdown_logs_updated.accepted' => 'Please Verify Breakdown Logs Updated.',
             'production_data_available.required' => 'Please Verify Production Data Available.',
             'production_data_available.accepted' => 'Please Verify Production Data Available.',
-            'safety_data_reviewed.required'      => 'Please Verify Safety Data Reviewed.',
-            'safety_data_reviewed.accepted'      => 'Please Verify Safety Data Reviewed.',
+            'safety_data_reviewed.required' => 'Please Verify Safety Data Reviewed.',
+            'safety_data_reviewed.accepted' => 'Please Verify Safety Data Reviewed.',
         ];
     }
 
@@ -99,10 +99,10 @@ class CloseShiftRequest extends FormRequest
     {
         throw new HttpResponseException(
             response()->json([
-                'status'  => 422,
+                'status' => 422,
                 'message' => $validator->errors()->first(),
-                'errors'  => $validator->errors(),
-                'data'    => null,
+                'errors' => $validator->errors(),
+                'data' => null,
             ], 422)
         );
     }

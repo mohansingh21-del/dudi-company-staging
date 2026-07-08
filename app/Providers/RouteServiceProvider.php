@@ -28,8 +28,6 @@ class RouteServiceProvider extends ServiceProvider
     {
         $this->configureRateLimiting();
 
-        // Explicit model binding: {shift} resolves to ShiftPlan (table: shift_plans)
-        Route::model('shift', \App\Models\ShiftPlan::class);
 
         $this->routes(function () {
             Route::middleware('api')

@@ -29,20 +29,20 @@ class ShiftClosureController extends Controller
      * @param  ShiftPlan  $shift
      * @return \Illuminate\Http\JsonResponse
      */
-    public function summary(ShiftPlan $shift)
+    public function summary(ShiftPlan $shift_plan)
     {
         try {
             // BR-SHFT-029: If shift is already completed, still allow viewing frozen snapshot
-            if ($shift->status === 'completed' && $shift->shift_summary_snapshot) {
+            if ($shift_plan->status === 'completed' && $shift_plan->shift_summary_snapshot) {
                 return response()->json([
                     'status'  => 200,
                     'message' => 'Shift closure summary retrieved successfully.',
-                    'data'    => json_decode($shift->shift_summary_snapshot, true),
+                    'data'    => json_decode($shift_plan->shift_summary_snapshot, true),
                 ], 200);
             }
 
             // Must be published or in_progress to view closure summary
-            if (!in_array($shift->status, ['published', 'in_progress'])) {
+            if (!in_array($shift_plan->status, ['published', 'in_progress'])) {
                 return response()->json([
                     'status'  => 422,
                     'message' => 'Shift Must Be Published Or In Progress To View Closure Summary.',
@@ -50,7 +50,7 @@ class ShiftClosureController extends Controller
                 ], 422);
             }
 
-            $data = $this->service->getClosureSummary($shift);
+            $data = $this->service->getClosureSummary($shift_plan);
 
             return response()->json([
                 'status'  => 200,
@@ -74,14 +74,14 @@ class ShiftClosureController extends Controller
      * triggers (PHP 7.4 compatible).
      *
      * @param  CloseShiftRequest  $request
-     * @param  ShiftPlan          $shift
+     * @param  ShiftPlan          $shift_plan
      * @return \Illuminate\Http\JsonResponse
      */
-    public function close(CloseShiftRequest $request, ShiftPlan $shift)
+    public function close(CloseShiftRequest $request, ShiftPlan $shift_plan)
     {
         try {
             $updated = $this->service->closeShift(
-                $shift,
+                $shift_plan,
                 $request->validated(),
                 $request->user()
             );

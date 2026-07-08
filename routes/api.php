@@ -429,8 +429,8 @@ Route::prefix('v1')->group(function () {
             | Shift Closure
             |--------------------------------------------------------------------------
             */
-            Route::get('shift-plans/{shift}/closure-summary', [ShiftClosureController::class, 'summary']);
-            Route::post('shift-plans/{shift}/close', [ShiftClosureController::class, 'close']);
+            Route::get('shift-plans/{shift_plan}/closure-summary', [ShiftClosureController::class, 'summary']);
+            Route::post('shift-plans/{shift_plan}/close', [ShiftClosureController::class, 'close']);
 
             /*
             |--------------------------------------------------------------------------
