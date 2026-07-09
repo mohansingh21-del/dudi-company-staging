@@ -32,6 +32,9 @@ class DispatchTrip extends Model
         'status',
         'created_by',
         'updated_by',
+        'mine_site_id',
+        'block_id',
+        'date',
     ];
 
     protected $casts = [
@@ -42,7 +45,23 @@ class DispatchTrip extends Model
         'quantity_bcm' => 'decimal:2',
         'distance_meters' => 'decimal:2',
         'total_cycles' => 'integer',
+        'mine_site_id' => 'integer',
+        'block_id' => 'integer',
+        'date' => 'date',
     ];
+
+    protected static function boot()
+    {
+        parent::boot();
+        static::saving(function ($model) {
+            if (empty($model->mine_site_id) && $model->site_id) {
+                $model->mine_site_id = $model->site_id;
+            }
+            if (empty($model->date) && $model->trip_date_time) {
+                $model->date = \Carbon\Carbon::parse($model->trip_date_time)->toDateString();
+            }
+        });
+    }
 
     /*
     |--------------------------------------------------------------------------

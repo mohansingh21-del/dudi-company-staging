@@ -33,6 +33,9 @@ class FuelEntry extends Model
         'status',
         'created_by',
         'updated_by',
+        'mine_site_id',
+        'block_id',
+        'date',
     ];
 
     protected $casts = [
@@ -45,7 +48,23 @@ class FuelEntry extends Model
         'fuel_per_bcm' => 'decimal:4',
         'fuel_per_hour' => 'decimal:4',
         'fuel_per_km' => 'decimal:4',
+        'mine_site_id' => 'integer',
+        'block_id' => 'integer',
+        'date' => 'date',
     ];
+
+    protected static function boot()
+    {
+        parent::boot();
+        static::saving(function ($model) {
+            if (empty($model->mine_site_id) && $model->shiftPlan) {
+                $model->mine_site_id = $model->shiftPlan->site_id;
+            }
+            if (empty($model->date) && $model->fuel_log_date) {
+                $model->date = \Carbon\Carbon::parse($model->fuel_log_date)->toDateString();
+            }
+        });
+    }
 
     protected $appends = [
         'shift_name',

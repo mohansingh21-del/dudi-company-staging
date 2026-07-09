@@ -52,6 +52,7 @@ use App\Http\Controllers\Api\Admin\DelayController;
 use App\Http\Controllers\Api\Admin\SitePointController;
 use App\Http\Controllers\Api\Admin\DispatchTripController;
 use App\Http\Controllers\Api\Admin\ShiftClosureController;
+use App\Http\Controllers\Api\Admin\DashboardController;
 
 /*
 |--------------------------------------------------------------------------
@@ -136,6 +137,17 @@ Route::prefix('v1')->group(function () {
 
     Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
+
+        Route::prefix('dashboard')->group(function () {
+            Route::get('summary', [DashboardController::class, 'summary']);
+            Route::get('fuel/top-consumers', [DashboardController::class, 'topConsumers']);
+            Route::get('fuel/low-efficiency', [DashboardController::class, 'lowEfficiency']);
+            Route::get('fuel/recent-transactions', [DashboardController::class, 'recentTransactions']);
+            Route::get('delay/top-categories', [DashboardController::class, 'topCategories']);
+            Route::get('delay/critical-delays', [DashboardController::class, 'criticalDelays']);
+            Route::get('delay/recent-delays', [DashboardController::class, 'recentDelays']);
+            Route::get('dispatch/recent-trips', [DashboardController::class, 'recentTrips']);
+        });
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);
         Route::get('incident-types', [IncidentTypeController::class, 'publicIndex']);

@@ -29,6 +29,9 @@ class BreakdownTicket extends Model
         'resolution_notes',
         'resolved_by',
         'resolved_at',
+        'mine_site_id',
+        'block_id',
+        'date',
     ];
 
     protected $casts = [
@@ -44,7 +47,28 @@ class BreakdownTicket extends Model
         'equipment_allocation_id'  => 'integer',
         'reported_by'              => 'integer',
         'resolved_by'              => 'integer',
+        'mine_site_id'             => 'integer',
+        'block_id'                 => 'integer',
+        'date'                     => 'date',
     ];
+
+    protected static function boot()
+    {
+        parent::boot();
+        static::saving(function ($model) {
+            if (empty($model->date) && $model->breakdown_date_time) {
+                $model->date = \Carbon\Carbon::parse($model->breakdown_date_time)->toDateString();
+            }
+            if (empty($model->mine_site_id) && $model->date && $model->shift_id) {
+                $shiftPlan = \App\Models\ShiftPlan::where('shift_id', $model->shift_id)
+                    ->where('planning_date', $model->date)
+                    ->first();
+                if ($shiftPlan) {
+                    $model->mine_site_id = $shiftPlan->site_id;
+                }
+            }
+        });
+    }
 
     public function shift()
     {

@@ -805,10 +805,10 @@ class DispatchTripService
     protected function applyFilters($query, array $filters)
     {
         if (isset($filters['date_from'])) {
-            $query->where('start_time', '>=', $filters['date_from']);
+            $query->where('date', '>=', Carbon::parse($filters['date_from'])->toDateString());
         }
         if (isset($filters['date_to'])) {
-            $query->where('start_time', '<=', $filters['date_to']);
+            $query->where('date', '<=', Carbon::parse($filters['date_to'])->toDateString());
         }
         if (isset($filters['shift_plan_id'])) {
             $query->where('shift_plan_id', $filters['shift_plan_id']);

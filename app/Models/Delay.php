@@ -33,6 +33,9 @@ class Delay extends Model
         'remarks',
         'created_by',
         'updated_by',
+        'mine_site_id',
+        'block_id',
+        'date',
     ];
 
     protected $casts = [
@@ -42,7 +45,23 @@ class Delay extends Model
         'average_production_rate_per_hour' => 'decimal:2',
         'estimated_production_loss_bcm' => 'decimal:2',
         'delay_category_id' => 'integer',
+        'mine_site_id' => 'integer',
+        'block_id' => 'integer',
+        'date' => 'date',
     ];
+
+    protected static function boot()
+    {
+        parent::boot();
+        static::saving(function ($model) {
+            if (empty($model->mine_site_id) && $model->shiftPlan) {
+                $model->mine_site_id = $model->shiftPlan->site_id;
+            }
+            if (empty($model->date) && $model->shift_date) {
+                $model->date = \Carbon\Carbon::parse($model->shift_date)->toDateString();
+            }
+        });
+    }
 
     /*
     |--------------------------------------------------------------------------
