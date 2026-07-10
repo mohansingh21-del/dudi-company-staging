@@ -27,7 +27,7 @@ class FuelService
     {
         return DB::transaction(function () {
             $year = date('Y');
-            
+
             $lastEntry = FuelEntry::where('fuel_ref_no', 'like', "FUEL-{$year}-%")
                 ->lockForUpdate()
                 ->orderBy('fuel_ref_no', 'desc')
@@ -158,8 +158,8 @@ class FuelService
             // 8. Generate fuel_ref_no, set created_by, status
             $fuelRefNo = $this->generateFuelRefNo();
 
-            $fuelLogDate = isset($data['fuel_log_date']) 
-                ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d H:i:s') 
+            $fuelLogDate = isset($data['fuel_log_date'])
+                ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d H:i:s')
                 : ($shiftPlan->planning_date ? Carbon::parse($shiftPlan->planning_date)->format('Y-m-d H:i:s') : null);
             $shiftId = $data['shift_id'] ?? $shiftPlan->shift_id;
             $equipmentNameId = $data['equipment_name_id'] ?? $allocation->equipment_name_id;
@@ -226,7 +226,7 @@ class FuelService
                         }
                     } else {
                         if (is_numeric($originalVal) && is_numeric($newVal)) {
-                            if (abs((float)$originalVal - (float)$newVal) > 0.00001) {
+                            if (abs((float) $originalVal - (float) $newVal) > 0.00001) {
                                 throw new ReadOnlyFieldMutationException("Field {$field} is read-only");
                             }
                         } else {
@@ -243,8 +243,8 @@ class FuelService
             if (isset($data['shift_plan_id'])) {
                 $shiftPlan = ShiftPlan::find($data['shift_plan_id']);
             } else {
-                $date = isset($data['fuel_log_date']) 
-                    ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d') 
+                $date = isset($data['fuel_log_date'])
+                    ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d')
                     : ($entry->fuel_log_date ? $entry->fuel_log_date->format('Y-m-d') : null);
                 $shiftId = isset($data['shift_id']) ? $data['shift_id'] : $entry->shift_id;
 
@@ -288,12 +288,12 @@ class FuelService
             $data['equipment_allocation_id'] = $allocation->id;
             $data['equipment_id'] = $allocation->equipmentName->equipment_id;
             $data['shift_id'] = $shiftPlan->shift_id;
-            $data['fuel_log_date'] = isset($data['fuel_log_date']) 
-                ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d H:i:s') 
-                : ($entry->fuel_log_date 
-                    ? Carbon::parse($entry->fuel_log_date)->format('Y-m-d H:i:s') 
+            $data['fuel_log_date'] = isset($data['fuel_log_date'])
+                ? Carbon::parse($data['fuel_log_date'])->format('Y-m-d H:i:s')
+                : ($entry->fuel_log_date
+                    ? Carbon::parse($entry->fuel_log_date)->format('Y-m-d H:i:s')
                     : ($shiftPlan->planning_date ? Carbon::parse($shiftPlan->planning_date)->format('Y-m-d H:i:s') : null)
-                  );
+                );
             $data['equipment_name_id'] = $equipmentNameId;
 
             // Fill attributes with the updated data
@@ -456,23 +456,23 @@ class FuelService
         if ($dateFrom) {
             $query->where(function ($q) use ($dateFrom) {
                 $q->where('fuel_entries.fuel_log_date', '>=', $dateFrom->format('Y-m-d'))
-                  ->orWhere(function ($sq) use ($dateFrom) {
-                      $sq->whereNull('fuel_entries.fuel_log_date')
-                         ->whereHas('shiftPlan', function ($sp) use ($dateFrom) {
-                             $sp->where('planning_date', '>=', $dateFrom->format('Y-m-d'));
-                         });
-                  });
+                    ->orWhere(function ($sq) use ($dateFrom) {
+                        $sq->whereNull('fuel_entries.fuel_log_date')
+                            ->whereHas('shiftPlan', function ($sp) use ($dateFrom) {
+                                $sp->where('planning_date', '>=', $dateFrom->format('Y-m-d'));
+                            });
+                    });
             });
         }
         if ($dateTo) {
             $query->where(function ($q) use ($dateTo) {
                 $q->where('fuel_entries.fuel_log_date', '<=', $dateTo->format('Y-m-d'))
-                  ->orWhere(function ($sq) use ($dateTo) {
-                      $sq->whereNull('fuel_entries.fuel_log_date')
-                         ->whereHas('shiftPlan', function ($sp) use ($dateTo) {
-                             $sp->where('planning_date', '<=', $dateTo->format('Y-m-d'));
-                         });
-                  });
+                    ->orWhere(function ($sq) use ($dateTo) {
+                        $sq->whereNull('fuel_entries.fuel_log_date')
+                            ->whereHas('shiftPlan', function ($sp) use ($dateTo) {
+                                $sp->where('planning_date', '<=', $dateTo->format('Y-m-d'));
+                            });
+                    });
             });
         }
 
@@ -584,9 +584,9 @@ class FuelService
                 return [
                     'category_id' => $item->category_id,
                     'category_name' => $item->category_name,
-                    'total_consumption' => round((float)$item->total_consumption, 2),
-                    'percentage' => $totalFuelConsumption > 0 
-                        ? round(($item->total_consumption / $totalFuelConsumption) * 100, 2) 
+                    'total_consumption' => round((float) $item->total_consumption, 2),
+                    'percentage' => $totalFuelConsumption > 0
+                        ? round(($item->total_consumption / $totalFuelConsumption) * 100, 2)
                         : 0.0,
                 ];
             })->toArray();
@@ -628,7 +628,7 @@ class FuelService
     {
         list($dateFrom, $dateTo) = $this->resolveDateRange($filters, 'today');
 
-        $query = FuelEntry::query();
+        $query = FuelEntry::where('status', 'active');
 
         if ($dateFrom) {
             $query->whereHas('shiftPlan', function ($q) use ($dateFrom) {
@@ -677,8 +677,8 @@ class FuelService
             $matched = $hourlyRaw->firstWhere('hr', $i);
             $trendChart[] = [
                 'hour' => $hourStr,
-                'fuel_issued' => $matched ? round((float)$matched->issued, 2) : 0.0,
-                'fuel_consumption' => $matched ? round((float)$matched->consumption, 2) : 0.0,
+                'fuel_issued' => $matched ? round((float) $matched->issued, 2) : 0.0,
+                'fuel_consumption' => $matched ? round((float) $matched->consumption, 2) : 0.0,
             ];
         }
 
@@ -691,9 +691,9 @@ class FuelService
             ->groupBy('equipments.id', 'equipments.name')
             ->get()
             ->map(function ($item) use ($totalFuelConsumption) {
-                $item->total_consumption = round((float)$item->total_consumption, 2);
-                $item->percentage = $totalFuelConsumption > 0 
-                    ? round(($item->total_consumption / $totalFuelConsumption) * 100, 2) 
+                $item->total_consumption = round((float) $item->total_consumption, 2);
+                $item->percentage = $totalFuelConsumption > 0
+                    ? round(($item->total_consumption / $totalFuelConsumption) * 100, 2)
                     : 0.0;
                 return $item;
             });
@@ -706,8 +706,8 @@ class FuelService
             ->groupBy('equipment_names.id', 'equipment_names.equipment_name')
             ->get()
             ->map(function ($item) {
-                $item->total_consumption = round((float)$item->total_consumption, 2);
-                $item->avg_efficiency = $item->avg_efficiency !== null ? round((float)$item->avg_efficiency, 4) : null;
+                $item->total_consumption = round((float) $item->total_consumption, 2);
+                $item->avg_efficiency = $item->avg_efficiency !== null ? round((float) $item->avg_efficiency, 4) : null;
                 return $item;
             });
 
@@ -721,7 +721,7 @@ class FuelService
             ->limit(5)
             ->get()
             ->map(function ($item) {
-                $item->total_consumption = round((float)$item->total_consumption, 2);
+                $item->total_consumption = round((float) $item->total_consumption, 2);
                 return $item;
             });
 
@@ -738,10 +738,10 @@ class FuelService
             ->map(function ($item) {
                 $val = (float) $item->avg_fuel_per_bcm;
                 $item->avg_fuel_per_bcm = round($val, 4);
-                
+
                 $warning = config('fuel.efficiency_thresholds.warning', 2.50);
                 $critical = config('fuel.efficiency_thresholds.critical', 4.00);
-                
+
                 $status = 'normal';
                 if ($val >= $critical) {
                     $status = 'critical';
@@ -786,7 +786,7 @@ class FuelService
     {
         list($dateFrom, $dateTo) = $this->resolveDateRange($filters, 'today');
 
-        $query = FuelEntry::query();
+        $query = FuelEntry::where('status', 'active');
 
         if ($dateFrom) {
             $query->whereHas('shiftPlan', function ($q) use ($dateFrom) {
@@ -826,13 +826,13 @@ class FuelService
             $bestPerformer = [
                 'machine_id' => $best->id,
                 'equipment_name' => $best->equipment_name,
-                'fuel_per_bcm' => round((float)$best->avg_fuel_per_bcm, 4),
+                'fuel_per_bcm' => round((float) $best->avg_fuel_per_bcm, 4),
             ];
 
             $worstPerformer = [
                 'machine_id' => $worst->id,
                 'equipment_name' => $worst->equipment_name,
-                'fuel_per_bcm' => round((float)$worst->avg_fuel_per_bcm, 4),
+                'fuel_per_bcm' => round((float) $worst->avg_fuel_per_bcm, 4),
             ];
         }
 
@@ -860,7 +860,7 @@ class FuelService
             ->map(function ($item) {
                 return [
                     'date' => Carbon::parse($item->date)->format('Y-m-d'),
-                    'consumption' => round((float)$item->consumption, 2),
+                    'consumption' => round((float) $item->consumption, 2),
                 ];
             });
 
@@ -875,7 +875,7 @@ class FuelService
             ->map(function ($item) {
                 return [
                     'date' => Carbon::parse($item->date)->format('Y-m-d'),
-                    'avg_efficiency' => round((float)$item->avg_efficiency, 4),
+                    'avg_efficiency' => round((float) $item->avg_efficiency, 4),
                 ];
             });
 
@@ -888,9 +888,9 @@ class FuelService
             ->groupBy('equipments.id', 'equipments.name')
             ->get()
             ->map(function ($item) use ($totalFuelConsumption) {
-                $item->total_consumption = round((float)$item->total_consumption, 2);
-                $item->percentage = $totalFuelConsumption > 0 
-                    ? round(($item->total_consumption / $totalFuelConsumption) * 100, 2) 
+                $item->total_consumption = round((float) $item->total_consumption, 2);
+                $item->percentage = $totalFuelConsumption > 0
+                    ? round(($item->total_consumption / $totalFuelConsumption) * 100, 2)
                     : 0.0;
                 return $item;
             });
@@ -907,9 +907,9 @@ class FuelService
                 return [
                     'machine_id' => $item->id,
                     'equipment_name' => $item->equipment_name,
-                    'total_consumption' => round((float)$item->total_consumption, 2),
-                    'total_work_done' => $item->total_work_done !== null ? round((float)$item->total_work_done, 2) : null,
-                    'avg_fuel_per_bcm' => $item->avg_fuel_per_bcm !== null ? round((float)$item->avg_fuel_per_bcm, 4) : null,
+                    'total_consumption' => round((float) $item->total_consumption, 2),
+                    'total_work_done' => $item->total_work_done !== null ? round((float) $item->total_work_done, 2) : null,
+                    'avg_fuel_per_bcm' => $item->avg_fuel_per_bcm !== null ? round((float) $item->avg_fuel_per_bcm, 4) : null,
                     'performance_rank' => $index + 1,
                 ];
             });
@@ -1026,7 +1026,8 @@ class FuelService
         $totalConsumption = 0.0;
 
         foreach ($grouped as $machineId => $machineEntries) {
-            if (!$machineId) continue;
+            if (!$machineId)
+                continue;
 
             $firstEntry = $machineEntries->first();
             $machineName = optional(optional($firstEntry->equipmentAllocation)->equipmentName)->equipment_name ?? 'Unknown Machine';
@@ -1083,7 +1084,7 @@ class FuelService
         $hasTrips = DispatchTrip::where('shift_plan_id', $shiftPlanId)
             ->where(function ($query) use ($equipmentNameId) {
                 $query->where('excavator_equipment_id', $equipmentNameId)
-                      ->orWhere('dumper_equipment_id', $equipmentNameId);
+                    ->orWhere('dumper_equipment_id', $equipmentNameId);
             })
             ->exists();
 
@@ -1095,7 +1096,7 @@ class FuelService
         $totalBcm = DispatchTrip::where('shift_plan_id', $shiftPlanId)
             ->where(function ($query) use ($equipmentNameId) {
                 $query->where('excavator_equipment_id', $equipmentNameId)
-                      ->orWhere('dumper_equipment_id', $equipmentNameId);
+                    ->orWhere('dumper_equipment_id', $equipmentNameId);
             })
             ->sum('quantity_bcm');
 
@@ -1166,14 +1167,14 @@ class FuelService
         } elseif ($range === 'custom' || isset($filters['date_from']) || isset($filters['date_to'])) {
             if (isset($filters['date_from']) && !empty($filters['date_from'])) {
                 $val = $filters['date_from'];
-                $dateFrom = strpos($val, '/') !== false 
-                    ? Carbon::createFromFormat('d/m/Y', $val)->startOfDay() 
+                $dateFrom = strpos($val, '/') !== false
+                    ? Carbon::createFromFormat('d/m/Y', $val)->startOfDay()
                     : Carbon::parse($val)->startOfDay();
             }
             if (isset($filters['date_to']) && !empty($filters['date_to'])) {
                 $val = $filters['date_to'];
-                $dateTo = strpos($val, '/') !== false 
-                    ? Carbon::createFromFormat('d/m/Y', $val)->endOfDay() 
+                $dateTo = strpos($val, '/') !== false
+                    ? Carbon::createFromFormat('d/m/Y', $val)->endOfDay()
                     : Carbon::parse($val)->endOfDay();
             }
         } else {

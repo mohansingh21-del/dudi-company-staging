@@ -53,39 +53,36 @@ class FuelDashboardService
 
         $totalIssued = (float) $kpis->total_issued;
         $totalConsumed = (float) $kpis->total_consumed;
-        $workBcm = (float) $kpis->total_work_bcm;
         $machinesRefueled = (int) $kpis->machines_count;
 
-        // Fallback to dispatch BCM if work_done_bcm is 0
-        if ($workBcm <= 0) {
-            $dispatchBcm = DispatchTrip::when($siteId, function ($q) use ($siteId) {
-                    return $q->where('mine_site_id', $siteId);
-                })
-                ->when($blockId, function ($q) use ($blockId) {
-                    return $q->where('block_id', $blockId);
-                })
-                ->when($shiftId, function ($q) use ($shiftId) {
-                    return $q->where('shift_id', $shiftId);
-                })
-                ->when($machineTypeId, function ($q) use ($machineTypeId) {
-                    return $q->where(function ($sub) use ($machineTypeId) {
-                        $sub->whereHas('dumper', function ($eq) use ($machineTypeId) {
-                            $eq->where('equipment_id', $machineTypeId);
-                        })->orWhereHas('excavator', function ($eq) use ($machineTypeId) {
-                            $eq->where('equipment_id', $machineTypeId);
-                        });
+        // Calculate dispatch BCM for fuel efficiency comparison
+        $dispatchBcm = DispatchTrip::when($siteId, function ($q) use ($siteId) {
+                return $q->where('mine_site_id', $siteId);
+            })
+            ->when($blockId, function ($q) use ($blockId) {
+                return $q->where('block_id', $blockId);
+            })
+            ->when($shiftId, function ($q) use ($shiftId) {
+                return $q->where('shift_id', $shiftId);
+            })
+            ->when($machineTypeId, function ($q) use ($machineTypeId) {
+                return $q->where(function ($sub) use ($machineTypeId) {
+                    $sub->whereHas('dumper', function ($eq) use ($machineTypeId) {
+                        $eq->where('equipment_id', $machineTypeId);
+                    })->orWhereHas('excavator', function ($eq) use ($machineTypeId) {
+                        $eq->where('equipment_id', $machineTypeId);
                     });
-                })
-                ->when($machineNumberId, function ($q) use ($machineNumberId) {
-                    return $q->where(function ($sub) use ($machineNumberId) {
-                        $sub->where('dumper_equipment_id', $machineNumberId)
-                            ->orWhere('excavator_equipment_id', $machineNumberId);
-                    });
-                })
-                ->whereBetween('date', [$from, $to])
-                ->sum('quantity_bcm');
-            $workBcm = (float) $dispatchBcm;
-        }
+                });
+            })
+            ->when($machineNumberId, function ($q) use ($machineNumberId) {
+                return $q->where(function ($sub) use ($machineNumberId) {
+                    $sub->where('dumper_equipment_id', $machineNumberId)
+                        ->orWhere('excavator_equipment_id', $machineNumberId);
+                });
+            })
+            ->whereBetween('date', [$from, $to])
+            ->sum('quantity_bcm');
+        $workBcm = (float) $dispatchBcm;
 
         $fuelEfficiency = $workBcm > 0 ? round($totalConsumed / $workBcm, 2) : 0.00;
 

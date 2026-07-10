@@ -123,6 +123,7 @@ class OverviewDashboardService
                 return $q->where('equipment_name_id', $machineNumberId);
             })
             ->whereBetween('date', [$from, $to])
+            ->where('status', 'active')
             ->selectRaw('COALESCE(SUM(fuel_consumption), 0) as total_consumed')
             ->first();
 
