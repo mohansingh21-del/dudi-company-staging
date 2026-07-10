@@ -530,13 +530,15 @@ class ShiftPlanService
         $supervisorAssigned = !is_null($shiftPlan->supervisor_id);
         $siteInchargeAssigned = !is_null($shiftPlan->site_incharge_id);
         $targetBcmAvailable = !is_null($shiftPlan->target_bcm) && $shiftPlan->target_bcm > 0;
+        $planningDateReached = $shiftPlan->planning_date->lte(\Carbon\Carbon::today());
 
         $canPublish = $preconditionPassed
             && $hasExcavator
             && $hasWorkforce
             && $supervisorAssigned
             && $siteInchargeAssigned
-            && $targetBcmAvailable;
+            && $targetBcmAvailable
+            && $planningDateReached;
 
         return [
             'status' => 200,
@@ -569,6 +571,10 @@ class ShiftPlanService
                     'target_bcm_defined' => [
                         'status' => $targetBcmAvailable,
                         'message' => $targetBcmAvailable ? 'Production target (BCM) defined.' : 'Production target (BCM) must be defined.'
+                    ],
+                    'planning_date_reached' => [
+                        'status' => $planningDateReached,
+                        'message' => $planningDateReached ? 'Planned date reached.' : 'Cannot publish shift plan before its planned date.'
                     ]
                 ]
             ]

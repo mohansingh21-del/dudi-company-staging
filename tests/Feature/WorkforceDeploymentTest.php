@@ -589,6 +589,13 @@ class WorkforceDeploymentTest extends TestCase
             'reason' => 'Sick leave'
         ]);
 
+        // Create processed attendance record for employee1 so that present count is computed
+        \App\Models\AttendanceProcessed::create([
+            'employee_id' => $this->employee1->id,
+            'date' => $planningDate,
+            'attendance_status' => 'present'
+        ]);
+
         // 4. Create Shift Plan for Shift B
         $shiftPlan = ShiftPlan::create([
             'planning_date' => $planningDate,
@@ -623,7 +630,8 @@ class WorkforceDeploymentTest extends TestCase
                 'planned',
                 'present',
                 'leave',
-                'borrowed'
+                'borrowed',
+                'absent'
             ]
         ]);
 
@@ -632,6 +640,7 @@ class WorkforceDeploymentTest extends TestCase
         $this->assertEquals(1, $stats['present']);  // Employee 1
         $this->assertEquals(1, $stats['leave']);    // Employee 2
         $this->assertEquals(1, $stats['borrowed']); // Employee 4
+        $this->assertEquals(0, $stats['absent']);   // No absent employees
 
         // 8. Remove the borrowed employee
         $borrowedDeployment = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlan->id)
@@ -651,6 +660,7 @@ class WorkforceDeploymentTest extends TestCase
         $this->assertEquals(1, $stats2['present']);
         $this->assertEquals(1, $stats2['leave']);
         $this->assertEquals(1, $stats2['borrowed']); // Still 1 even though removed!
+        $this->assertEquals(0, $stats2['absent']);
     }
 
     public function test_deployed_employee_who_goes_on_leave_is_excluded_from_present_and_list()
@@ -675,6 +685,13 @@ class WorkforceDeploymentTest extends TestCase
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-002'
+        ]);
+
+        // Create processed attendance record for employee1
+        \App\Models\AttendanceProcessed::create([
+            'employee_id' => $this->employee1->id,
+            'date' => $planningDate,
+            'attendance_status' => 'present'
         ]);
 
         // 3. Load relay (deploys Employee 1)
@@ -831,23 +848,30 @@ class WorkforceDeploymentTest extends TestCase
             'reference_no' => 'SP-TEST-002'
         ]);
 
+        // Create processed attendance record as present initially
+        $attendance = \App\Models\AttendanceProcessed::create([
+            'employee_id' => $this->employee1->id,
+            'date' => $planningDate,
+            'attendance_status' => 'present'
+        ]);
+
         // 3. Load relay workforce — Employee 1 should be deployed
         $response1 = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/load-relay");
         $response1->assertStatus(200);
         $response1->assertJsonCount(1, 'data');
         $this->assertEquals(1, $response1->json('stats.present'));
+        $this->assertEquals(0, $response1->json('stats.absent'));
 
         // 4. Mark Employee 1 as absent in AttendanceProcessed
-        \App\Models\AttendanceProcessed::create([
-            'employee_id' => $this->employee1->id,
-            'date' => $planningDate,
+        $attendance->update([
             'attendance_status' => 'absent',
         ]);
 
-        // 5. Get list again — Employee 1 should NOT be in the list, present count is 0
+        // 5. Get list again — Employee 1 should NOT be in the list, present count is 0, absent count is 1
         $response2 = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce");
         $response2->assertJsonCount(0, 'data');
         $this->assertEquals(0, $response2->json('stats.present'));
+        $this->assertEquals(1, $response2->json('stats.absent'));
 
         // 6. Get workforce summary — total_deployed, regular_count, borrowed_count should all be 0
         $response3 = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/summary");
@@ -855,5 +879,87 @@ class WorkforceDeploymentTest extends TestCase
         $this->assertEquals(0, $response3->json('data.total_deployed'));
         $this->assertEquals(0, $response3->json('data.regular_count'));
         $this->assertEquals(0, $response3->json('data.borrowed_count'));
+    }
+
+    public function test_cannot_deploy_or_borrow_workforce_on_future_shift_plans()
+    {
+        $futureDate = \Carbon\Carbon::tomorrow()->format('Y-m-d');
+
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $futureDate,
+            'shift_id' => $this->shiftA->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'draft',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-FUTURE'
+        ]);
+
+        // 1. Try to load relay workforce
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/load-relay");
+        $response->assertStatus(422);
+        $response->assertJsonFragment(['message' => 'Cannot deploy workforce before the planned date of the shift.']);
+
+        // 2. Try to view available employees
+        $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/available-employees");
+        $response->assertStatus(422);
+        $response->assertJsonFragment(['message' => 'Cannot view available employees for borrowing before the planned date of the shift.']);
+
+        // 3. Try to borrow employee
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/borrow", [
+            'employee_ids' => [$this->employee2->id],
+            'borrowing_reason' => 'Need support'
+        ]);
+        $response->assertStatus(422);
+        $response->assertJsonFragment(['message' => 'Cannot borrow employees before the planned date of the shift.']);
+    }
+
+    public function test_present_count_is_zero_when_no_attendance_record_exists_for_planned_date()
+    {
+        $planningDate = '2026-06-23';
+
+        // 1. Assign Employee 1 to Shift A
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee1->id,
+            'shift_id' => $this->shiftA->id,
+            'from_date' => $planningDate
+        ]);
+
+        // 2. Create Shift Plan for Shift A
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shiftA->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TEST-ATT'
+        ]);
+
+        // 3. Load relay workforce
+        $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/load-relay");
+
+        // 4. Get list and check stats when NO attendance records exist
+        $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce");
+        $response->assertStatus(200);
+        $this->assertEquals(0, $response->json('stats.present'));
+        $this->assertEquals(0, $response->json('stats.absent'));
+
+        // 5. Create processed attendance record
+        \App\Models\AttendanceProcessed::create([
+            'employee_id' => $this->employee1->id,
+            'date' => $planningDate,
+            'attendance_status' => 'present'
+        ]);
+
+        // 6. Get list and check stats when attendance records exist
+        $response2 = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce");
+        $response2->assertStatus(200);
+        $this->assertEquals(1, $response2->json('stats.present'));
+        $this->assertEquals(0, $response2->json('stats.absent'));
     }
 }

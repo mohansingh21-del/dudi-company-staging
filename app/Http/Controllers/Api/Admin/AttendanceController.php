@@ -146,11 +146,18 @@ class AttendanceController extends Controller
                     ->where('date', $date)
                     ->first();
             } else if ($id) {
-                $attendance = AttendanceProcessed::find($id);
+                if ($date) {
+                    $attendance = AttendanceProcessed::where('id', $id)
+                        ->whereDate('date', $date)
+                        ->first();
+                } else {
+                    $attendance = AttendanceProcessed::find($id);
+                }
+
                 if (!$attendance && $date) {
                     // Try treating ID as employee ID
                     $attendance = AttendanceProcessed::where('employee_id', $id)
-                        ->where('date', $date)
+                        ->whereDate('date', $date)
                         ->first();
                 }
             }
@@ -870,8 +877,10 @@ public function bulkUpload(Request $request)
         $resolvedAttendanceIds = [];
  
         foreach ($request->attendance_ids as $id) {
-            // 1. Try to find the record in attendance_processeds by id
-            $record = AttendanceProcessed::find($id);
+            // 1. Try to find the record in attendance_processeds by id and date
+            $record = AttendanceProcessed::where('id', $id)
+                ->whereDate('date', $dateStr)
+                ->first();
             if ($record) {
                 $resolvedAttendanceIds[] = $record->id;
             } else {

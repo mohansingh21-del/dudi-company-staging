@@ -35,6 +35,14 @@ class WorkforceDeploymentService
             ];
         }
 
+        if ($shiftPlan->planning_date->greaterThan(\Carbon\Carbon::today())) {
+            return [
+                'status' => 422,
+                'message' => 'Cannot deploy workforce before the planned date of the shift.',
+                'data' => [],
+            ];
+        }
+
         $planningDate = $shiftPlan->planning_date->format('Y-m-d');
 
         // Fetch employee IDs who are on approved leave on this planning date
@@ -151,6 +159,14 @@ class WorkforceDeploymentService
             return [
                 'status' => 404,
                 'message' => 'Shift Plan not found.',
+                'data' => [],
+            ];
+        }
+
+        if ($shiftPlan->planning_date->greaterThan(\Carbon\Carbon::today())) {
+            return [
+                'status' => 422,
+                'message' => 'Cannot view available employees for borrowing before the planned date of the shift.',
                 'data' => [],
             ];
         }
@@ -307,6 +323,14 @@ class WorkforceDeploymentService
             return [
                 'status' => 404,
                 'message' => 'Shift Plan not found.',
+                'data' => null,
+            ];
+        }
+
+        if ($shiftPlan->planning_date->greaterThan(\Carbon\Carbon::today())) {
+            return [
+                'status' => 422,
+                'message' => 'Cannot borrow employees before the planned date of the shift.',
                 'data' => null,
             ];
         }
@@ -806,8 +830,12 @@ class WorkforceDeploymentService
             ->pluck('employee_id')
             ->toArray();
 
-        // Fetch employee IDs who are marked as absent, leave, or rest_day in processed attendance
-        $absentEmployeeIds = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)
+        // Fetch all processed attendance records for this planning date (single query)
+        $attendanceRecords = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)->get();
+        $hasAttendanceRecords = $attendanceRecords->isNotEmpty();
+
+        // Extract employee IDs who are marked as absent, leave, or rest_day
+        $absentEmployeeIds = $attendanceRecords
             ->whereIn('attendance_status', ['absent', 'leave', 'rest_day'])
             ->pluck('employee_id')
             ->toArray();
@@ -820,13 +848,29 @@ class WorkforceDeploymentService
         // LEAVE: Assigned employees who are on approved leave on this planning date
         $onLeaveCount = count(array_intersect($shiftEmployeeIds, $onLeaveEmployeeIds));
 
-        // Active deployment base query (excluding employees on approved leave or marked absent/leave/rest_day)
-        $baseQuery = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlanId)
-            ->active()
-            ->whereNotIn('employee_id', $excludeEmployeeIds);
+        if ($hasAttendanceRecords) {
+            // Get employee IDs who are explicitly processed as present or half_day
+            $presentEmployeeIds = $attendanceRecords
+                ->whereIn('attendance_status', ['present', 'half_day'])
+                ->pluck('employee_id')
+                ->toArray();
 
-        // PRESENT: Active deployments (regular, non-borrowed)
-        $presentCount = (clone $baseQuery)->regular()->count();
+            // PRESENT: Active deployments (regular, non-borrowed) who are marked present or half_day, excluding those on leave or absent
+            $presentCount = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlanId)
+                ->active()
+                ->regular()
+                ->whereIn('employee_id', $presentEmployeeIds)
+                ->whereNotIn('employee_id', $excludeEmployeeIds)
+                ->count();
+        } else {
+            $presentCount = 0;
+        }
+
+        // ABSENT: Employees assigned to this shift who are marked as absent in processed attendance
+        $absentCount = $attendanceRecords
+            ->whereIn('employee_id', $shiftEmployeeIds)
+            ->where('attendance_status', 'absent')
+            ->count();
 
         // BORROWED: All borrowed deployments (including removed ones)
         $borrowedCount = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlanId)
@@ -838,6 +882,7 @@ class WorkforceDeploymentService
             'present' => $presentCount,
             'leave' => $onLeaveCount,
             'borrowed' => $borrowedCount,
+            'absent' => $absentCount,
         ];
     }
 }

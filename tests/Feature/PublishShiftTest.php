@@ -341,4 +341,63 @@ class PublishShiftTest extends TestCase
         $this->assertEquals($this->adminUser->id, $response->json('data.published_by'));
         $this->assertNotNull($response->json('data.published_at'));
     }
+
+    public function test_publish_fails_if_planning_date_is_in_future()
+    {
+        $futureDate = \Carbon\Carbon::tomorrow()->format('Y-m-d');
+
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $futureDate,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'draft',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TEST-FUTURE'
+        ]);
+
+        // Allocate Excavator
+        $excavatorCategory = Equipment::create(['name' => 'Excavator', 'is_active' => 1]);
+        $excavatorMachine = EquipmentName::create([
+            'equipment_id' => $excavatorCategory->id,
+            'equipment_name' => 'EX-01',
+            'is_active' => 1,
+        ]);
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $excavatorMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        // Deploy workforce
+        ShiftWorkforceDeployment::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'employee_id' => $this->supervisorEmployee->id,
+            'relay_shift' => 'relay_1',
+            'designation' => 'Supervisor',
+            'is_borrowed' => false,
+            'deployed_by' => $this->adminUser->id,
+            'status' => 'active',
+        ]);
+
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/publish");
+
+        $response->assertStatus(422);
+        $response->assertJson([
+            'status' => 422,
+            'message' => 'Shift plan cannot be published due to validation errors.',
+            'data' => [
+                'validations' => [
+                    'planning_date_reached' => [
+                        'status' => false,
+                        'message' => 'Cannot publish shift plan before its planned date.'
+                    ]
+                ]
+            ]
+        ]);
+    }
 }
