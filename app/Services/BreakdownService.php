@@ -170,7 +170,7 @@ class BreakdownService
         // Determine trend and scoring start/end dates
         $trendStart = $dateFrom ? $dateFrom->copy() : \Carbon\Carbon::now()->subDays(6)->startOfDay();
         $trendEnd = $dateTo ? $dateTo->copy() : \Carbon\Carbon::now()->endOfDay();
-        
+
         $scoringHours = $trendStart->diffInHours($trendEnd);
         $scoringHours = max($scoringHours, 1);
 
@@ -260,7 +260,7 @@ class BreakdownService
         // 8. breakdown_trend
         $breakdownsByDate = (clone $dashboardQuery)
             ->selectRaw('DATE(breakdown_date_time) as date, COUNT(*) as count')
-            ->groupBy('date')
+            ->groupBy(DB::raw('DATE(breakdown_date_time)'))
             ->pluck('count', 'date');
 
         $breakdownTrend = [];
