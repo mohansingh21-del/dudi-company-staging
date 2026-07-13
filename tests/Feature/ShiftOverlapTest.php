@@ -116,11 +116,11 @@ class ShiftOverlapTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonFragment([
-            'message' => 'Shift start time cannot be same as an existing shift.'
+            'message' => 'Shift timings overlap with an existing shift.'
         ]);
     }
 
-    public function test_can_create_overlapping_shift_with_different_start_time()
+    public function test_cannot_create_overlapping_shift_with_different_start_time()
     {
         // Create a night shift: 22:00 to 06:00
         Shift::create([
@@ -141,9 +141,9 @@ class ShiftOverlapTest extends TestCase
             'is_night_shift' => 0
         ]);
 
-        $response->assertStatus(200);
-        $this->assertDatabaseHas('shifts', [
-            'shift_name' => 'Early Morning Shift'
+        $response->assertStatus(422);
+        $response->assertJsonFragment([
+            'message' => 'Shift timings overlap with an existing shift.'
         ]);
     }
 
@@ -201,7 +201,7 @@ class ShiftOverlapTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonFragment([
-            'message' => 'Shift start time cannot be same as an existing shift.'
+            'message' => 'Shift timings overlap with an existing shift.'
         ]);
     }
 
@@ -258,5 +258,40 @@ class ShiftOverlapTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonStructure(['errors' => ['name']]);
+    }
+
+    public function test_cannot_update_shift_to_overlapping_timings_with_another()
+    {
+        Shift::create([
+            'shift_name' => 'Night Shift',
+            'start_time' => '22:00:00',
+            'end_time' => '06:00:00',
+            'minimum_working_hours' => 8.00,
+            'is_night_shift' => 1,
+            'is_active' => 1
+        ]);
+
+        $shift2 = Shift::create([
+            'shift_name' => 'Evening Shift',
+            'start_time' => '16:00:00',
+            'end_time' => '22:00:00',
+            'minimum_working_hours' => 6.00,
+            'is_night_shift' => 0,
+            'is_active' => 1
+        ]);
+
+        // Update shift 2 to overlap with shift 1 (e.g. 16:00 to 23:00, overlaps from 22:00 to 23:00)
+        $response = $this->putJson("/api/v1/admin/shift/{$shift2->id}", [
+            'name' => 'Evening Shift Updated',
+            'start_time' => '16:00',
+            'end_time' => '23:00',
+            'minimum_working_hours' => 7.00,
+            'is_night_shift' => 0
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonFragment([
+            'message' => 'Shift timings overlap with an existing shift.'
+        ]);
     }
 }

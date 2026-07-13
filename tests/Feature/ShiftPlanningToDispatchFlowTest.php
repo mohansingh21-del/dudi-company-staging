@@ -366,6 +366,7 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'end_time' => '08:30:00',
             'quantity_bcm' => 100.00,
             'distance_meters' => 1000.00,
+            'total_cycles' => 1,
         ])->assertStatus(201);
 
         $this->postJson('/api/v1/dispatch/trips', [
@@ -380,6 +381,7 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'end_time' => '09:10:00',
             'quantity_bcm' => 120.00,
             'distance_meters' => 1000.00,
+            'total_cycles' => 1,
         ])->assertStatus(201);
 
         // Dumper 2: 2 trips, total quantity 170 BCM, cycle times 15 and 15 min (average 15.0 min)
@@ -395,6 +397,7 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'end_time' => '08:25:00',
             'quantity_bcm' => 80.00,
             'distance_meters' => 1000.00,
+            'total_cycles' => 1,
         ])->assertStatus(201);
 
         $this->postJson('/api/v1/dispatch/trips', [
@@ -409,6 +412,7 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'end_time' => '08:50:00',
             'quantity_bcm' => 90.00,
             'distance_meters' => 1000.00,
+            'total_cycles' => 1,
         ])->assertStatus(201);
 
         // Dumper 3: 1 trip, total quantity 95 BCM, cycle time 17 min (average 17.0 min)
@@ -424,6 +428,7 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'end_time' => '08:32:00',
             'quantity_bcm' => 95.00,
             'distance_meters' => 1000.00,
+            'total_cycles' => 1,
         ])->assertStatus(201);
 
         // Verify shift plan's actual_bcm is updated

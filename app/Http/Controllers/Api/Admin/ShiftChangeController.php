@@ -82,6 +82,8 @@ class ShiftChangeController extends Controller
                     'site' => optional($employee->site)->site_name,
                     'department' => optional($employee->department)->name,
                     'shift' => optional(optional($employee->currentShiftAssignment)->shift)->shift_name,
+                    'relay' => $employee->relay_shift,
+                    'relay_shift' => $employee->relay_shift,
                 ];
             });
 
@@ -225,6 +227,13 @@ class ShiftChangeController extends Controller
                 ], 404);
             }
 
+            if ($employee->relay_shift === 'general') {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Shift rotation is not allowed for general shift employees.'
+                ], 422);
+            }
+
             $targetShiftId = $request->shift_id;
 
             DB::transaction(function () use ($employee, $targetShiftId) {
@@ -282,6 +291,13 @@ class ShiftChangeController extends Controller
                 ], 404);
             }
 
+            if ($employee->relay_shift === 'general') {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Shift rotation/override is not allowed for general shift employees.'
+                ], 422);
+            }
+
             $targetShiftId = $request->shift_id;
 
             DB::transaction(function () use ($employee, $targetShiftId) {
@@ -323,6 +339,13 @@ class ShiftChangeController extends Controller
 
             $employee1 = Employee::find($request->employee_id);
             $employee2 = Employee::find($request->swap_with_employee_id);
+
+            if ($employee1->relay_shift === 'general' || $employee2->relay_shift === 'general') {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Shift swap is not allowed for general shift employees.'
+                ], 422);
+            }
 
             $assignment1 = EmployeeShiftAssignment::where('employee_id', $employee1->id)->first();
             $assignment2 = EmployeeShiftAssignment::where('employee_id', $employee2->id)->first();
@@ -444,6 +467,7 @@ class ShiftChangeController extends Controller
                 ->toArray();
 
             // Find employee's first assignment date
+            $assignment = EmployeeShiftAssignment::where('employee_id', $employee->id)->first();
             $firstAssignmentDate = null;
             $earliestHistory = EmployeeShiftHistory::where('employee_id', $employee->id)
                 ->orderBy('change_date', 'asc')

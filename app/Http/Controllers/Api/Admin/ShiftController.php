@@ -64,7 +64,7 @@ class ShiftController extends Controller
         if ($this->isShiftOverlapping($request->start_time, $request->end_time)) {
             return response()->json([
                 'status' => 422,
-                'message' => 'Shift start time cannot be same as an existing shift.'
+                'message' => 'Shift timings overlap with an existing shift.'
             ], 422);
         }
 
@@ -114,7 +114,7 @@ class ShiftController extends Controller
         if ($this->isShiftOverlapping($request->start_time, $request->end_time, $id)) {
             return response()->json([
                 'status' => 422,
-                'message' => 'Shift start time cannot be same as an existing shift.'
+                'message' => 'Shift timings overlap with an existing shift.'
             ], 422);
         }
 
@@ -545,15 +545,52 @@ class ShiftController extends Controller
 
     private function isShiftOverlapping($startTime, $endTime, $excludeId = null)
     {
-        $formattedStartTime = \Carbon\Carbon::parse($startTime)->format('H:i:00');
+        $newStart = \Carbon\Carbon::parse($startTime)->format('H:i:s');
+        $newEnd = \Carbon\Carbon::parse($endTime)->format('H:i:s');
 
-        $query = Shift::where('is_active', 1)
-            ->where('start_time', $formattedStartTime);
+        $getIntervals = function ($start, $end) {
+            $intervals = [];
+            if ($start < $end) {
+                $intervals[] = ['start' => $start, 'end' => $end];
+            } elseif ($start > $end) {
+                $intervals[] = ['start' => $start, 'end' => '24:00:00'];
+                if ($end !== '00:00:00') {
+                    $intervals[] = ['start' => '00:00:00', 'end' => $end];
+                }
+            } else {
+                $intervals[] = ['start' => '00:00:00', 'end' => '24:00:00'];
+            }
+            return $intervals;
+        };
+
+        $newIntervals = $getIntervals($newStart, $newEnd);
+
+        $query = Shift::where('is_active', 1);
 
         if ($excludeId !== null) {
             $query->where('id', '!=', $excludeId);
         }
 
-        return $query->exists();
+        $existingShifts = $query->get();
+
+        foreach ($existingShifts as $existingShift) {
+            $existStart = \Carbon\Carbon::parse($existingShift->start_time)->format('H:i:s');
+            $existEnd = \Carbon\Carbon::parse($existingShift->end_time)->format('H:i:s');
+
+            $existingIntervals = $getIntervals($existStart, $existEnd);
+
+            foreach ($newIntervals as $newInt) {
+                foreach ($existingIntervals as $existInt) {
+                    $maxStart = max($newInt['start'], $existInt['start']);
+                    $minEnd = min($newInt['end'], $existInt['end']);
+
+                    if ($maxStart < $minEnd) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 }

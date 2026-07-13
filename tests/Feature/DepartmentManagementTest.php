@@ -82,6 +82,7 @@ class DepartmentManagementTest extends TestCase
             'name' => 'Employee in Dep 1',
             'department_id' => $dep1->id,
             'joining_date' => '2026-01-01',
+            'relay_shift' => 'relay_1',
             'is_active' => 1
         ]);
 
@@ -90,6 +91,7 @@ class DepartmentManagementTest extends TestCase
             'name' => 'Employee in Dep 2',
             'department_id' => $dep2->id,
             'joining_date' => '2026-01-01',
+            'relay_shift' => 'relay_1',
             'is_active' => 1
         ]);
 

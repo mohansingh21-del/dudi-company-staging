@@ -47,6 +47,58 @@ class Employee extends Model
         return $this->hasMany(EmployeeShiftAssignment::class);
     }
 
+    public function getShiftIdForDate($dateStr)
+    {
+        $assignments = $this->shiftAssignments()->get();
+
+        $assignment = $assignments->filter(function ($assign) use ($dateStr) {
+            $from = $assign->from_date ?: ($assign->created_at ? $assign->created_at->toDateString() : now()->toDateString());
+            $to = $assign->to_date;
+            return $from && $dateStr >= $from && (is_null($to) || $dateStr <= $to);
+        })->first();
+
+        if ($assignment) {
+            return $assignment->shift_id;
+        }
+
+        $nextChange = EmployeeShiftHistory::where('employee_id', $this->id)
+            ->where('change_date', '>', $dateStr)
+            ->orderBy('change_date', 'asc')
+            ->orderBy('id', 'asc')
+            ->first();
+
+        if ($nextChange) {
+            return $nextChange->old_shift_id ?: null;
+        }
+
+        $latestChange = EmployeeShiftHistory::where('employee_id', $this->id)
+            ->where('change_date', '<=', $dateStr)
+            ->orderBy('change_date', 'desc')
+            ->orderBy('id', 'desc')
+            ->first();
+
+        if ($latestChange) {
+            return $latestChange->new_shift_id;
+        }
+
+        $firstAssignment = $assignments->sortBy('id')->first();
+        if ($firstAssignment) {
+            $from = $firstAssignment->from_date ?: ($firstAssignment->created_at ? $firstAssignment->created_at->toDateString() : now()->toDateString());
+            if ($dateStr < $from) {
+                return null;
+            }
+        }
+
+        $latestAssignment = $assignments->sortByDesc('id')->first();
+        return $latestAssignment ? $latestAssignment->shift_id : null;
+    }
+
+    public function getShiftForDate($dateStr)
+    {
+        $shiftId = $this->getShiftIdForDate($dateStr);
+        return $shiftId ? Shift::find($shiftId) : null;
+    }
+
     public function shiftHistory()
     {
         return $this->hasMany(EmployeeShiftHistory::class);

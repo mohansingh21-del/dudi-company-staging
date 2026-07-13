@@ -962,4 +962,58 @@ class WorkforceDeploymentTest extends TestCase
         $this->assertEquals(1, $response2->json('stats.present'));
         $this->assertEquals(0, $response2->json('stats.absent'));
     }
+
+    public function test_deploy_workforce_cleans_up_stale_rotations()
+    {
+        $planningDate = '2026-06-23';
+
+        // 1. Create Shift Plan for Shift A
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shiftA->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TEST-ROT'
+        ]);
+
+        // 2. Assign employee 1 to Shift A
+        $assignment = EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee1->id,
+            'shift_id' => $this->shiftA->id,
+            'from_date' => $planningDate,
+            'to_date' => null
+        ]);
+
+        // 3. Load relay workforce - employee 1 is deployed on shift plan
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/load-relay");
+        $response->assertStatus(200);
+        $response->assertJsonCount(1, 'data');
+        $this->assertEquals($this->employee1->id, $response->json('data.0.employee_id'));
+
+        // 4. Now, shift roster changes. We end the shift A assignment and move employee 1 to Shift B on the same day.
+        $assignment->delete();
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee1->id,
+            'shift_id' => $this->shiftB->id,
+            'from_date' => $planningDate,
+            'to_date' => null
+        ]);
+
+        // 5. Load relay workforce again.
+        // It should clean up the stale deployment for employee 1 since their current shift (Shift B) doesn't match the plan (Shift A)
+        $response2 = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/load-relay");
+        $response2->assertStatus(200);
+        
+        // Assert employee 1 is no longer deployed on Shift A plan
+        $response2->assertJsonCount(0, 'data');
+        $this->assertDatabaseMissing('shift_workforce_deployments', [
+            'shift_plan_id' => $shiftPlan->id,
+            'employee_id' => $this->employee1->id,
+            'status' => 'active',
+        ]);
+    }
 }

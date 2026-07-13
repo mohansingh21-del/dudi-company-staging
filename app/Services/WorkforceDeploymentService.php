@@ -45,6 +45,19 @@ class WorkforceDeploymentService
 
         $planningDate = $shiftPlan->planning_date->format('Y-m-d');
 
+        // Clean up any existing active deployments for this shift plan that are no longer assigned to this shift due to rotation
+        $existingDeployments = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlanId)
+            ->active()
+            ->get();
+        foreach ($existingDeployments as $dep) {
+            if (!$dep->is_borrowed) {
+                $emp = Employee::find($dep->employee_id);
+                if ($emp && $emp->getShiftIdForDate($planningDate) != $shiftPlan->shift_id) {
+                    $dep->delete();
+                }
+            }
+        }
+
         // Fetch employee IDs who are on approved leave on this planning date
         $onLeaveEmployeeIds = \App\Models\Leave::where('status', 'approved')
             ->whereDate('from_date', '<=', $planningDate)
@@ -60,18 +73,15 @@ class WorkforceDeploymentService
 
         $unavailableEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
 
-        // Get employees assigned to this shift_plan's shift_id on this date (excluding leave/absent)
-        $employees = Employee::where('is_active', true)
+        // Get active employees not unavailable
+        $activeEmployees = Employee::where('is_active', true)
             ->whereNotIn('id', $unavailableEmployeeIds)
-            ->whereHas('shiftAssignments', function ($query) use ($shiftPlan, $planningDate) {
-                $query->where('shift_id', $shiftPlan->shift_id)
-                    ->where('from_date', '<=', $planningDate)
-                    ->where(function ($sub) use ($planningDate) {
-                        $sub->whereNull('to_date')
-                            ->orWhere('to_date', '>=', $planningDate);
-                    });
-            })
             ->get();
+
+        // Filter by shift on this date
+        $employees = $activeEmployees->filter(function ($employee) use ($planningDate, $shiftPlan) {
+            return $employee->getShiftIdForDate($planningDate) == $shiftPlan->shift_id;
+        });
 
         // Get all shift plan IDs on this planning date
         $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
@@ -221,23 +231,11 @@ class WorkforceDeploymentService
 
         $unavailableEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
 
-        // Query available employees assigned to OTHER shifts on this date (excluding leave/absent/already deployed)
+        // Query active employees who are not unavailable and not already deployed
         $query = Employee::where('is_active', true)
             ->whereNotIn('id', $unavailableEmployeeIds)
-            ->whereHas('shiftAssignments', function ($q) use ($shiftPlan, $planningDate, $shiftId) {
-                if ($shiftId) {
-                    $q->where('shift_id', $shiftId);
-                } else {
-                    $q->where('shift_id', '!=', $shiftPlan->shift_id);
-                }
-                $q->where('from_date', '<=', $planningDate)
-                    ->where(function ($sub) use ($planningDate) {
-                        $sub->whereNull('to_date')
-                            ->orWhere('to_date', '>=', $planningDate);
-                    });
-            })
             ->whereNotIn('id', $deployedEmployeeIds)
-            ->with(['designation', 'shiftAssignments.shift']);
+            ->with(['designation']);
 
         if ($search) {
             $query->where(function ($q) use ($search) {
@@ -246,20 +244,26 @@ class WorkforceDeploymentService
             });
         }
 
-        $employees = $query->get();
+        $allEmployees = $query->get();
+
+        // Filter by shift on this date
+        $employees = $allEmployees->filter(function ($emp) use ($shiftPlan, $planningDate, $shiftId) {
+            $empShiftId = $emp->getShiftIdForDate($planningDate);
+            if (is_null($empShiftId)) {
+                return false;
+            }
+            if ($shiftId) {
+                return $empShiftId == $shiftId;
+            } else {
+                return $empShiftId != $shiftPlan->shift_id;
+            }
+        });
 
         // Exclude employees whose home shift is invalid for borrowing
-        $employees = $employees->filter(function ($emp) use ($shiftPlan) {
-            $planningDate = $shiftPlan->planning_date->format('Y-m-d');
-            $activeAssignment = $emp->shiftAssignments
-                ->filter(function ($assignment) use ($planningDate) {
-                    return $assignment->from_date <= $planningDate
-                        && (is_null($assignment->to_date) || $assignment->to_date >= $planningDate);
-                })
-                ->first();
-
-            if ($activeAssignment && $activeAssignment->shift) {
-                $validationError = $this->validateBorrowingFromShift($activeAssignment->shift, $shiftPlan);
+        $employees = $employees->filter(function ($emp) use ($shiftPlan, $planningDate) {
+            $homeShift = $emp->getShiftForDate($planningDate);
+            if ($homeShift) {
+                $validationError = $this->validateBorrowingFromShift($homeShift, $shiftPlan);
                 if ($validationError) {
                     return false;
                 }
@@ -273,17 +277,8 @@ class WorkforceDeploymentService
                 $designationName = $emp->designation->name;
             }
 
-            // Find their home shift assignment on this date to get their original shift name
-            $activeAssignment = $emp->shiftAssignments
-                ->filter(function ($assignment) use ($planningDate) {
-                    return $assignment->from_date <= $planningDate
-                        && (is_null($assignment->to_date) || $assignment->to_date >= $planningDate);
-                })
-                ->first();
-
-            $shiftName = ($activeAssignment && $activeAssignment->shift)
-                ? $activeAssignment->shift->shift_name
-                : null;
+            $homeShift = $emp->getShiftForDate($planningDate);
+            $shiftName = $homeShift ? $homeShift->shift_name : null;
 
             return [
                 'employee_id' => $emp->id,
@@ -769,20 +764,11 @@ class WorkforceDeploymentService
                 $machineName = $machine->equipmentName->name;
             }
 
-            // Find their home shift assignment on this date to get their original shift name
-            $activeAssignment = null;
-            if ($employee && $employee->relationLoaded('shiftAssignments')) {
-                $activeAssignment = $employee->shiftAssignments
-                    ->filter(function ($assignment) use ($planningDate) {
-                        return $assignment->from_date <= $planningDate
-                            && (is_null($assignment->to_date) || $assignment->to_date >= $planningDate);
-                    })
-                    ->first();
+            $homeShiftName = null;
+            if ($employee) {
+                $homeShift = $employee->getShiftForDate($planningDate);
+                $homeShiftName = $homeShift ? $homeShift->shift_name : null;
             }
-
-            $homeShiftName = ($activeAssignment && $activeAssignment->shift)
-                ? $activeAssignment->shift->shift_name
-                : null;
 
             return [
                 'id' => $dep->id,
@@ -812,13 +798,9 @@ class WorkforceDeploymentService
 
         // Get active employee IDs assigned to this shift on this planning date
         $shiftEmployeeIds = Employee::where('is_active', true)
-            ->whereHas('shiftAssignments', function ($q) use ($shiftPlan, $planningDate) {
-                $q->where('shift_id', $shiftPlan->shift_id)
-                    ->where('from_date', '<=', $planningDate)
-                    ->where(function ($sub) use ($planningDate) {
-                        $sub->whereNull('to_date')
-                            ->orWhere('to_date', '>=', $planningDate);
-                    });
+            ->get()
+            ->filter(function ($emp) use ($shiftPlan, $planningDate) {
+                return $emp->getShiftIdForDate($planningDate) == $shiftPlan->shift_id;
             })
             ->pluck('id')
             ->toArray();

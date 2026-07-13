@@ -254,13 +254,9 @@ class ShiftClosureService
         $plannedWorkforce = 0;
         if ($planningDate) {
             $plannedWorkforce = \App\Models\Employee::where('is_active', true)
-                ->whereHas('shiftAssignments', function ($q) use ($shift, $planningDate) {
-                    $q->where('shift_id', $shift->shift_id)
-                        ->where('from_date', '<=', $planningDate)
-                        ->where(function ($sub) use ($planningDate) {
-                            $sub->whereNull('to_date')
-                                ->orWhere('to_date', '>=', $planningDate);
-                        });
+                ->get()
+                ->filter(function ($emp) use ($shift, $planningDate) {
+                    return $emp->getShiftIdForDate($planningDate) == $shift->shift_id;
                 })
                 ->count();
         }
@@ -276,15 +272,10 @@ class ShiftClosureService
             $leaveCount = Leave::where('status', 'approved')
                 ->whereDate('from_date', '<=', $planningDate)
                 ->whereDate('to_date', '>=', $planningDate)
-                ->whereHas('employee', function ($q) use ($shift, $planningDate) {
-                    $q->whereHas('shiftAssignments', function ($sq) use ($shift, $planningDate) {
-                        $sq->where('shift_id', $shift->shift_id)
-                            ->where('from_date', '<=', $planningDate)
-                            ->where(function ($sub) use ($planningDate) {
-                                $sub->whereNull('to_date')
-                                    ->orWhere('to_date', '>=', $planningDate);
-                            });
-                    });
+                ->get()
+                ->filter(function ($leave) use ($shift, $planningDate) {
+                    $emp = $leave->employee;
+                    return $emp && $emp->getShiftIdForDate($planningDate) == $shift->shift_id;
                 })
                 ->count();
         }

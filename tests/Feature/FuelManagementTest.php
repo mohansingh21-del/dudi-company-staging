@@ -498,7 +498,6 @@ class FuelManagementTest extends TestCase
         $this->postJson('/api/v1/admin/fuel-entries', $payload)->assertStatus(201);
 
         $response = $this->getJson('/api/v1/admin/fuel-entries/performance?period=custom&date_from=2026-06-27&date_to=2026-06-27');
-
         $response->assertStatus(200)
             ->assertJsonStructure([
                 'status',

@@ -628,7 +628,7 @@ class FuelService
     {
         list($dateFrom, $dateTo) = $this->resolveDateRange($filters, 'today');
 
-        $query = FuelEntry::where('status', 'active');
+        $query = FuelEntry::where('fuel_entries.status', 'active');
 
         if ($dateFrom) {
             $query->whereHas('shiftPlan', function ($q) use ($dateFrom) {
@@ -786,7 +786,7 @@ class FuelService
     {
         list($dateFrom, $dateTo) = $this->resolveDateRange($filters, 'today');
 
-        $query = FuelEntry::where('status', 'active');
+        $query = FuelEntry::where('fuel_entries.status', 'active');
 
         if ($dateFrom) {
             $query->whereHas('shiftPlan', function ($q) use ($dateFrom) {
