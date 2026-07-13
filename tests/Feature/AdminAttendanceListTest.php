@@ -720,4 +720,125 @@ class AdminAttendanceListTest extends TestCase
         $dataAbsent = collect($responseAbsent->json('data'));
         $this->assertNull($dataAbsent->firstWhere('employee_id', $this->employee2->id));
     }
+
+    public function test_bulk_update_status_resolves_id_collision_correctly()
+    {
+        // 1. Create Employee A
+        $employeeA = Employee::create([
+            'employee_code' => 'EMPAAAA',
+            'name' => 'Employee A',
+            'joining_date' => '2026-06-01',
+            'is_active' => 1,
+            'site_id' => $this->site->id,
+            'department_id' => $this->departmentId,
+            'designation_id' => $this->employee1->designation_id,
+        ]);
+
+        // 2. Create Employee B
+        $employeeB = Employee::create([
+            'employee_code' => 'EMPBBBB',
+            'name' => 'Employee B',
+            'joining_date' => '2026-06-01',
+            'is_active' => 1,
+            'site_id' => $this->site->id,
+            'department_id' => $this->departmentId,
+            'designation_id' => $this->employee1->designation_id,
+        ]);
+
+        // 3. Create an AttendanceProcessed record for Employee B on 2026-06-15.
+        // This record will have an auto-incremented primary key ID.
+        $attendanceRecordB = AttendanceProcessed::create([
+            'employee_id' => $employeeB->id,
+            'date' => '2026-06-15',
+            'shift_id' => $employeeB->shift_id,
+            'attendance_status' => 'absent',
+            'working_hours' => 0.00,
+            'late_minutes' => 0,
+            'early_exit_minutes' => 0,
+        ]);
+
+        $collidingId = $attendanceRecordB->id;
+
+        // Ensure Employee A's ID matches the colliding ID to simulate a collision.
+        // We delete any existing employee with that ID (except Employee B), then update Employee A's ID.
+        if ($collidingId !== $employeeB->id) {
+            Employee::where('id', $collidingId)->delete();
+            Employee::where('id', $employeeA->id)->update(['id' => $collidingId]);
+            $employeeA->id = $collidingId;
+        } else {
+            // If they happen to be the same, we create another employee to force a collision
+            $employeeC = Employee::create([
+                'employee_code' => 'EMPCCCC',
+                'name' => 'Employee C',
+                'joining_date' => '2026-06-01',
+                'is_active' => 1,
+                'site_id' => $this->site->id,
+                'department_id' => $this->departmentId,
+                'designation_id' => $this->employee1->designation_id,
+            ]);
+            // Create a new record to get a different ID
+            $attendanceRecordC = AttendanceProcessed::create([
+                'employee_id' => $employeeB->id,
+                'date' => '2026-06-15',
+                'shift_id' => $employeeB->shift_id,
+                'attendance_status' => 'absent',
+                'working_hours' => 0.00,
+                'late_minutes' => 0,
+                'early_exit_minutes' => 0,
+            ]);
+            $collidingId = $attendanceRecordC->id;
+            Employee::where('id', $collidingId)->delete();
+            Employee::where('id', $employeeC->id)->update(['id' => $collidingId]);
+            $employeeA = $employeeC;
+            $employeeA->id = $collidingId;
+            $attendanceRecordB = $attendanceRecordC;
+        }
+
+        // Now we have:
+        // - AttendanceProcessed with ID = $collidingId on 2026-06-15 belonging to Employee B.
+        // - Employee A with ID = $collidingId.
+        
+        // Let's call bulkUpdateStatus on 2026-06-15 (where the collision exists).
+        // Since there is a collision, it should prioritize the specific date context record
+        // (Employee B's record) and NOT fall back to Employee A.
+        $response1 = $this->patchJson('/api/v1/admin/attendance/bulk-status', [
+            'attendance_ids' => [$collidingId],
+            'attendance_status' => 'present',
+            'remarks' => 'Collision Date Test',
+            'date' => '2026-06-15'
+        ]);
+
+        $response1->assertStatus(200);
+
+        // Employee B's record should be updated to present
+        $attendanceRecordB->refresh();
+        $this->assertEquals('present', $attendanceRecordB->attendance_status);
+        $this->assertEquals('Collision Date Test', $attendanceRecordB->remarks);
+
+        // Employee A's record for 2026-06-15 should NOT exist
+        $recordA = AttendanceProcessed::where('employee_id', $employeeA->id)
+            ->where('date', '2026-06-15')
+            ->first();
+        $this->assertNull($recordA);
+
+        // Now call bulkUpdateStatus on a different date: 2026-06-16.
+        // On 2026-06-16, there is NO AttendanceProcessed record with ID = $collidingId.
+        // So no collision exists! It should fall back to Employee ID lookup and create Employee A's record.
+        $response2 = $this->patchJson('/api/v1/admin/attendance/bulk-status', [
+            'attendance_ids' => [$collidingId],
+            'attendance_status' => 'present',
+            'remarks' => 'No Collision Date Test',
+            'date' => '2026-06-16'
+        ]);
+
+        $response2->assertStatus(200);
+
+        // Employee A's record for 2026-06-16 should be created and marked present
+        $recordA2 = AttendanceProcessed::where('employee_id', $employeeA->id)
+            ->where('date', '2026-06-16')
+            ->first();
+        $this->assertNotNull($recordA2);
+        $this->assertEquals('present', $recordA2->attendance_status);
+        $this->assertEquals('No Collision Date Test', $recordA2->remarks);
+    }
 }
