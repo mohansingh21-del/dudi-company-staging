@@ -60,6 +60,7 @@ class UpdateDispatchTripRequest extends FormRequest
             $shiftId = $this->has('shift_id') ? $this->input('shift_id') : $trip->shift_id;
             $tripDateTime = $this->has('trip_date_time') ? $this->input('trip_date_time') : ($trip->trip_date_time ? $trip->trip_date_time->toDateTimeString() : null);
 
+            $shiftPlanId = null;
             if ($tripDateTime) {
                 $planningDate = \Carbon\Carbon::parse($tripDateTime)->format('Y-m-d');
                 $shiftPlan = \App\Models\ShiftPlan::where('site_id', $siteId)
@@ -68,6 +69,23 @@ class UpdateDispatchTripRequest extends FormRequest
                     ->first();
                 if ($shiftPlan) {
                     $this->merge(['shift_plan_id' => $shiftPlan->id]);
+                    $shiftPlanId = $shiftPlan->id;
+                }
+            }
+
+            if (!$shiftPlanId) {
+                $shiftPlanId = $trip->shift_plan_id;
+            }
+
+            $dumperId = $this->has('dumper_equipment_id') ? $this->input('dumper_equipment_id') : $trip->dumper_equipment_id;
+            $excavatorId = $this->input('excavator_equipment_id');
+
+            if ($shiftPlanId && $dumperId && (is_null($excavatorId) || $excavatorId === '')) {
+                $dumperAllocation = \App\Models\ShiftEquipmentAllocation::where('shift_plan_id', $shiftPlanId)
+                    ->where('equipment_name_id', $dumperId)
+                    ->first();
+                if ($dumperAllocation && $dumperAllocation->parent_equipment_id) {
+                    $this->merge(['excavator_equipment_id' => $dumperAllocation->parent_equipment_id]);
                 }
             }
         }

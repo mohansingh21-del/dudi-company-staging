@@ -542,7 +542,9 @@ class FuelService
         ];
 
         $perPage = isset($filters['per_page']) ? (int) $filters['per_page'] : 20;
-        $records = $query->latest()->paginate($perPage);
+        $records = $query->orderBy('fuel_entries.created_at', 'DESC')
+            ->orderBy('fuel_entries.id', 'DESC')
+            ->paginate($perPage);
 
         $efficiencyTrends = [];
         $trendItems = collect($records->items())->reverse();
@@ -965,7 +967,10 @@ class FuelService
             $query->where('shift_plans.site_id', $filters['site_id']);
         }
 
-        $query->groupBy('shift_plans.planning_date', 'shifts.id', 'shifts.shift_name', 'equipment_names.id', 'equipment_names.equipment_name');
+        $query->groupBy('shift_plans.planning_date', 'shifts.id', 'shifts.shift_name', 'equipment_names.id', 'equipment_names.equipment_name')
+            ->orderBy('shift_plans.planning_date', 'DESC')
+            ->orderBy('shifts.id', 'DESC')
+            ->orderBy('equipment_names.id', 'DESC');
 
         $perPage = isset($filters['per_page']) ? (int) $filters['per_page'] : 20;
         $records = $query->paginate($perPage);

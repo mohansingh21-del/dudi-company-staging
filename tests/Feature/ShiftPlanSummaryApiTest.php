@@ -449,4 +449,81 @@ class ShiftPlanSummaryApiTest extends TestCase
         $this->assertEquals(12.5, $data['fleet_performance']['haul_cycle_avg_minutes']);
         $this->assertEquals(135.0, $data['fleet_performance']['payload_avg_bcm']);
     }
+
+    public function test_summary_actual_bcm_fallback_when_excavator_id_null()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create a shift plan
+        $response = $this->postJson('/api/v1/admin/shift-plans', [
+            'planning_date' => '2026-07-03',
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 1000.00,
+            'supervisor_id' => $this->supervisorEmp->id,
+            'site_incharge_id' => $this->inchargeEmp->id,
+        ]);
+        $response->assertStatus(201);
+        $shiftPlanId = $response->json('data.id');
+
+        $shiftPlan = ShiftPlan::find($shiftPlanId);
+
+        // 2. Equipment Allocations
+        $dumperCat = Equipment::create(['name' => 'Dumper', 'is_active' => true]);
+        $excCat = Equipment::create(['name' => 'Excavator', 'is_active' => true]);
+        $dumper = EquipmentName::create(['equipment_name' => 'DMP-99', 'equipment_id' => $dumperCat->id, 'is_active' => true]);
+        $exc = EquipmentName::create(['equipment_name' => 'EXC-99', 'equipment_id' => $excCat->id, 'is_active' => true]);
+
+        $allocExc = ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $exc->id,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => Carbon::now(),
+        ]);
+
+        $allocDumper = ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $dumper->id,
+            'parent_equipment_id' => $exc->id,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => Carbon::now(),
+        ]);
+
+        // 3. Create dispatch trip with excavator_equipment_id = null
+        DispatchTrip::create([
+            'trip_reference_no' => 'TRP-999',
+            'shift_plan_id' => $shiftPlan->id,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'dumper_equipment_id' => $dumper->id,
+            'driver_id' => $this->supervisorEmp->id,
+            'excavator_equipment_id' => null, // Explicitly null
+            'loading_point_id' => $this->loadingPoint->id,
+            'dumping_point_id' => $this->dumpingPoint->id,
+            'trip_date_time' => Carbon::parse('2026-07-03 09:00:00'),
+            'start_time' => Carbon::parse('2026-07-03 09:00:00'),
+            'end_time' => Carbon::parse('2026-07-03 09:10:00'),
+            'cycle_time_minutes' => 10.00,
+            'quantity_bcm' => 250.00,
+            'total_cycles' => 1,
+            'status' => 'completed',
+            'created_by' => $this->adminUser->id,
+        ]);
+
+        // 4. Mark shift plan completed
+        $shiftPlan->update(['status' => 'completed']);
+
+        // 5. Get summary
+        $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/summary");
+        $response->assertStatus(200);
+
+        $data = $response->json('data');
+        $excPerformance = $data['equipment_summary']['excavator_performance'];
+
+        // Assert there is one excavator performance record and its actual_bcm is 250.00
+        $this->assertCount(1, $excPerformance);
+        $this->assertEquals('EXC-99', $excPerformance[0]['asset_id']);
+        $this->assertEquals(250.00, $excPerformance[0]['actual_bcm']);
+        $this->assertEquals(25.00, $excPerformance[0]['efficiency']); // 250 / 1000 = 25%
+    }
 }

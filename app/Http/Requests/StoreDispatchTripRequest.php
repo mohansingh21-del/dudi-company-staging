@@ -59,6 +59,19 @@ class StoreDispatchTripRequest extends FormRequest
                 ->first();
             if ($shiftPlan) {
                 $this->merge(['shift_plan_id' => $shiftPlan->id]);
+                $shiftPlanId = $shiftPlan->id;
+            }
+        }
+
+        $dumperId = $this->input('dumper_equipment_id');
+        $excavatorId = $this->input('excavator_equipment_id');
+
+        if ($shiftPlanId && $dumperId && (is_null($excavatorId) || $excavatorId === '')) {
+            $dumperAllocation = \App\Models\ShiftEquipmentAllocation::where('shift_plan_id', $shiftPlanId)
+                ->where('equipment_name_id', $dumperId)
+                ->first();
+            if ($dumperAllocation && $dumperAllocation->parent_equipment_id) {
+                $this->merge(['excavator_equipment_id' => $dumperAllocation->parent_equipment_id]);
             }
         }
     }

@@ -311,6 +311,7 @@ class DispatchTripService
             'shiftPlan.shift:id,shift_name',
         ])
             ->orderBy('start_time', 'DESC')
+            ->orderBy('id', 'DESC')
             ->paginate($perPage);
 
         return [

@@ -249,8 +249,21 @@ class ShiftPlanSummaryService
                 ->first();
             $operatorName = $deployment && $deployment->employee ? $deployment->employee->name : 'N/A';
 
+            $childDumperIds = ShiftEquipmentAllocation::where('shift_plan_id', $shift->id)
+                ->where('parent_equipment_id', $allocation->equipment_name_id)
+                ->pluck('equipment_name_id')
+                ->toArray();
+
             $actualBcm = round((float) DispatchTrip::where('shift_plan_id', $shift->id)
-                ->where('excavator_equipment_id', $allocation->equipment_name_id)
+                ->where(function ($query) use ($allocation, $childDumperIds) {
+                    $query->where('excavator_equipment_id', $allocation->equipment_name_id);
+                    if (!empty($childDumperIds)) {
+                        $query->orWhere(function ($sub) use ($childDumperIds) {
+                            $sub->whereNull('excavator_equipment_id')
+                                ->whereIn('dumper_equipment_id', $childDumperIds);
+                        });
+                    }
+                })
                 ->sum('quantity_bcm'), 2);
 
             $efficiency = 0.00;
