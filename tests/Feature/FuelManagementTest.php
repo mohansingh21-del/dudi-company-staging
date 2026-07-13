@@ -555,6 +555,80 @@ class FuelManagementTest extends TestCase
             ]);
     }
 
+    public function test_fuel_management_apis_sorting_desc()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // 1. Create a second published shift plan for a future date (e.g. 2026-06-30)
+        $futureShiftPlan = ShiftPlan::create([
+            'planning_date' => '2026-06-30',
+            'shift_id'      => $this->shift->id,
+            'site_id'       => $this->site->id,
+            'target_bcm'    => 1000,
+            'status'        => 'published',
+            'supervisor_id' => $this->adminUser->id,
+            'site_incharge_id' => $this->adminUser->id,
+            'created_by'    => $this->adminUser->id,
+            'reference_no'  => 'SP-PUBLISHED-002',
+        ]);
+
+        $allocationFuture = ShiftEquipmentAllocation::create([
+            'shift_plan_id'     => $futureShiftPlan->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'allocated_by'      => $this->adminUser->id,
+            'allocation_time'   => now(),
+        ]);
+
+        // 2. Create first fuel entry (older, planning date 2026-06-27)
+        $payload1 = [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_log_date'           => '2026-06-27',
+        ];
+        $res1 = $this->postJson('/api/v1/admin/fuel-entries', $payload1);
+        $res1->assertStatus(201);
+        $id1 = $res1->json('data.id');
+
+        // Wait a moment or tweak database created_at if needed, but ID increment is sufficient for order check.
+        // Let's create second fuel entry (newer, planning date 2026-06-30)
+        $payload2 = [
+            'shift_plan_id'           => $futureShiftPlan->id,
+            'equipment_allocation_id' => $allocationFuture->id,
+            'operator_id'             => $this->adminUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 200.00,
+            'closing_fuel'            => 90.00,
+            'fuel_log_date'           => '2026-06-30',
+        ];
+        $res2 = $this->postJson('/api/v1/admin/fuel-entries', $payload2);
+        $res2->assertStatus(201);
+        $id2 = $res2->json('data.id');
+
+        // 3. Test listRegister endpoint (fuel entries register)
+        $listResponse = $this->getJson('/api/v1/admin/fuel-entries');
+        $listResponse->assertStatus(200);
+        $listData = $listResponse->json('data');
+
+        // Since it is descending order, index 0 should be the newer entry (id2) and index 1 should be the older one (id1)
+        $this->assertEquals($id2, $listData[0]['id']);
+        $this->assertEquals($id1, $listData[1]['id']);
+
+        // 4. Test allocation tracking endpoint
+        $trackingResponse = $this->getJson('/api/v1/admin/fuel-entries/allocation-tracking');
+        $trackingResponse->assertStatus(200);
+        $trackingData = $trackingResponse->json('data');
+
+        // It groups by planning_date. Since it is descending order, index 0 should be 2026-06-30 and index 1 should be 2026-06-27
+        $this->assertEquals('2026-06-30', $trackingData[0]['planning_date']);
+        $this->assertEquals('2026-06-27', $trackingData[1]['planning_date']);
+    }
+
     public function test_summary_reporting()
     {
         Sanctum::actingAs($this->adminUser);

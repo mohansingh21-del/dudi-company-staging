@@ -265,6 +265,227 @@ class ShiftPlanService
     }
 
     /**
+     * Get a consolidated read-only view of a shift plan with its
+     * equipment allocations and deployed workforce.
+     *
+     * @param  int  $id
+     * @return array
+     */
+    public function viewShiftPlan($id)
+    {
+        $shiftPlan = ShiftPlan::with([
+            'shift',
+            'site',
+            'supervisor.employee',
+            'siteIncharge.employee',
+            'creator.employee',
+            'publisher.employee',
+            'equipmentAllocations.equipmentName.equipment',
+            'workforceDeployments' => function ($q) {
+                $q->where('status', 'active');
+            },
+            'workforceDeployments.employee.designation',
+            'workforceDeployments.employee.shiftAssignments.shift',
+            'workforceDeployments.assignedMachine.equipmentName',
+        ])->find($id);
+
+        if (!$shiftPlan) {
+            return [
+                'status' => 404,
+                'message' => 'Shift Plan not found.',
+                'data' => null,
+            ];
+        }
+
+        // ── Shift Plan Details ────────────────────────────────────
+        $supervisorEmployee = optional($shiftPlan->supervisor)->employee;
+        $siteInchargeEmployee = optional($shiftPlan->siteIncharge)->employee;
+        $creatorEmployee = optional($shiftPlan->creator)->employee;
+        $publisherEmployee = optional($shiftPlan->publisher)->employee;
+
+        $shiftPlanData = [
+            'id' => $shiftPlan->id,
+            'reference_no' => $shiftPlan->reference_no,
+            'planning_date' => $shiftPlan->planning_date ? $shiftPlan->planning_date->format('Y-m-d') : null,
+            'shift_id' => $shiftPlan->shift_id,
+            'shift_name' => optional($shiftPlan->shift)->shift_name,
+            'site_id' => $shiftPlan->site_id,
+            'site_name' => optional($shiftPlan->site)->site_name,
+            'target_bcm' => !is_null($shiftPlan->target_bcm) ? (string) round((float) $shiftPlan->target_bcm, 2) : null,
+            'actual_bcm' => !is_null($shiftPlan->actual_bcm) ? (string) round((float) $shiftPlan->actual_bcm, 2) : null,
+            'supervisor_id' => $supervisorEmployee ? $supervisorEmployee->id : $shiftPlan->supervisor_id,
+            'supervisor_name' => $supervisorEmployee ? $supervisorEmployee->name : optional($shiftPlan->supervisor)->email,
+            'supervisor_code' => $supervisorEmployee ? $supervisorEmployee->employee_code : null,
+            'site_incharge_id' => $siteInchargeEmployee ? $siteInchargeEmployee->id : $shiftPlan->site_incharge_id,
+            'site_incharge_name' => $siteInchargeEmployee ? $siteInchargeEmployee->name : optional($shiftPlan->siteIncharge)->email,
+            'site_incharge_code' => $siteInchargeEmployee ? $siteInchargeEmployee->employee_code : null,
+            'equipment_count' => (int) $shiftPlan->equipment_count,
+            'status' => $shiftPlan->status,
+            'created_by' => $shiftPlan->created_by,
+            'creator_name' => $creatorEmployee ? $creatorEmployee->name : optional($shiftPlan->creator)->email,
+            'published_by' => $shiftPlan->published_by,
+            'publisher_name' => $publisherEmployee ? $publisherEmployee->name : optional($shiftPlan->publisher)->email,
+            'published_at' => $shiftPlan->published_at ? $shiftPlan->published_at->toDateTimeString() : null,
+            'created_at' => $shiftPlan->created_at ? $shiftPlan->created_at->toDateTimeString() : null,
+            'updated_at' => $shiftPlan->updated_at ? $shiftPlan->updated_at->toDateTimeString() : null,
+        ];
+
+        // ── Equipment Allocations ─────────────────────────────────
+        $allocations = $shiftPlan->equipmentAllocations;
+        $topLevel = $allocations->whereNull('parent_equipment_id')->values();
+        $nested = $allocations->whereNotNull('parent_equipment_id')->values();
+
+        $machineryAllocations = $topLevel->map(function ($allocation) use ($nested) {
+            $machine = $allocation->equipmentName;
+            $category = $machine ? $machine->equipment : null;
+
+            $childAllocations = $nested->filter(function ($child) use ($machine) {
+                return $machine && $child->parent_equipment_id == $machine->id;
+            })->values();
+
+            $dumpers = $childAllocations->map(function ($child) {
+                $childMachine = $child->equipmentName;
+                return [
+                    'allocation_id' => $child->id,
+                    'machine_id' => $childMachine ? $childMachine->id : null,
+                    'machine_number' => $childMachine ? $childMachine->equipment_name : null,
+                ];
+            });
+
+            return [
+                'allocation_id' => $allocation->id,
+                'machine_id' => $machine ? $machine->id : null,
+                'machine_number' => $machine ? $machine->equipment_name : null,
+                'category_id' => $category ? $category->id : null,
+                'category_name' => $category ? $category->name : null,
+                'dumpers' => $dumpers->toArray(),
+            ];
+        })->values()->toArray();
+
+        // ── Deployed Workforce ────────────────────────────────────
+        $planningDate = $shiftPlan->planning_date->format('Y-m-d');
+        $shiftName = optional($shiftPlan->shift)->shift_name;
+
+        // Exclude employees on leave or absent
+        $onLeaveEmployeeIds = \App\Models\Leave::where('status', 'approved')
+            ->whereDate('from_date', '<=', $planningDate)
+            ->whereDate('to_date', '>=', $planningDate)
+            ->pluck('employee_id')
+            ->toArray();
+
+        $absentEmployeeIds = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)
+            ->whereIn('attendance_status', ['absent', 'leave', 'rest_day'])
+            ->pluck('employee_id')
+            ->toArray();
+
+        $excludeEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
+
+        $deployments = $shiftPlan->workforceDeployments
+            ->filter(function ($dep) use ($excludeEmployeeIds) {
+                return !in_array($dep->employee_id, $excludeEmployeeIds);
+            })
+            ->values();
+
+        $workforce = $deployments->map(function ($dep) use ($planningDate, $shiftName) {
+            $employee = $dep->employee;
+            $machine = $dep->assignedMachine;
+
+            $designationName = null;
+            if ($employee && $employee->designation) {
+                $designationName = $employee->designation->name;
+            }
+
+            $machineName = null;
+            if ($machine && $machine->equipmentName) {
+                $machineName = $machine->equipmentName->name;
+            }
+
+            $homeShiftName = null;
+            if ($employee) {
+                $homeShift = $employee->getShiftForDate($planningDate);
+                $homeShiftName = $homeShift ? $homeShift->shift_name : null;
+            }
+
+            return [
+                'id' => $dep->id,
+                'employee_id' => $dep->employee_id,
+                'employee_name' => $employee ? $employee->name : null,
+                'employee_code' => $employee ? $employee->employee_code : null,
+                'designation' => $dep->designation ?: $designationName,
+                'relay_shift' => $dep->relay_shift,
+                'shift_name' => $shiftName,
+                'home_shift_name' => $homeShiftName,
+                'assigned_machine' => $machineName,
+                'is_borrowed' => (bool) $dep->is_borrowed,
+                'home_relay_shift' => $dep->home_relay_shift,
+                'borrowing_reason' => $dep->borrowing_reason,
+                'status' => $dep->status,
+            ];
+        })->values()->toArray();
+
+        // ── Summary Stats ─────────────────────────────────────────
+        $shiftEmployeeIds = \App\Models\Employee::where('is_active', true)
+            ->get()
+            ->filter(function ($emp) use ($shiftPlan, $planningDate) {
+                return $emp->getShiftIdForDate($planningDate) == $shiftPlan->shift_id;
+            })
+            ->pluck('id')
+            ->toArray();
+
+        $attendanceRecords = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)->get();
+        $hasAttendanceRecords = $attendanceRecords->isNotEmpty();
+
+        $plannedCount = count($shiftEmployeeIds);
+        $onLeaveCount = count(array_intersect($shiftEmployeeIds, $onLeaveEmployeeIds));
+
+        if ($hasAttendanceRecords) {
+            $presentEmployeeIds = $attendanceRecords
+                ->whereIn('attendance_status', ['present', 'half_day'])
+                ->pluck('employee_id')
+                ->toArray();
+
+            $presentCount = \App\Models\ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlan->id)
+                ->active()
+                ->regular()
+                ->whereIn('employee_id', $presentEmployeeIds)
+                ->whereNotIn('employee_id', $excludeEmployeeIds)
+                ->count();
+        } else {
+            $presentCount = 0;
+        }
+
+        $absentCount = $attendanceRecords
+            ->whereIn('employee_id', $shiftEmployeeIds)
+            ->where('attendance_status', 'absent')
+            ->count();
+
+        $borrowedCount = \App\Models\ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlan->id)
+            ->active()
+            ->borrowed()
+            ->whereNotIn('employee_id', $excludeEmployeeIds)
+            ->count();
+
+        $summary = [
+            'planned' => $plannedCount,
+            'present' => $presentCount,
+            'leave' => $onLeaveCount,
+            'absent' => $absentCount,
+            'borrowed' => $borrowedCount,
+        ];
+
+        return [
+            'status' => 200,
+            'message' => 'Shift Plan view retrieved successfully.',
+            'data' => [
+                'shift_plan' => $shiftPlanData,
+                'machinery_allocations' => $machineryAllocations,
+                'workforce' => $workforce,
+                'summary' => $summary,
+            ],
+        ];
+    }
+
+    /**
      * Update an existing shift plan.
      *
      * @param  int    $id

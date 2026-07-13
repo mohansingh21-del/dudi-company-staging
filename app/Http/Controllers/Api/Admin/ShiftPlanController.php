@@ -341,4 +341,36 @@ class ShiftPlanController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * GET /admin/shift-plans/{id}/view
+     * Returns a consolidated read-only view of the shift plan with
+     * equipment allocations and deployed workforce.
+     */
+    public function view($id)
+    {
+        try {
+            $result = $this->service->viewShiftPlan($id);
+
+            if ($result['status'] === 404) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => $result['message'],
+                    'data' => [],
+                ], 404);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => $result['message'],
+                'data' => $result['data'],
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+                'data' => [],
+            ], 500);
+        }
+    }
 }

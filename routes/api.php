@@ -416,6 +416,7 @@ Route::prefix('v1')->group(function () {
             Route::patch('shift-plans/{id}/status', [ShiftPlanController::class, 'updateStatus']);
             Route::apiResource('shift-plans', ShiftPlanController::class);
             Route::get('shift-plans/{shift_id}/summary', [ShiftPlanController::class, 'summary']);
+            Route::get('shift-plans/{id}/view', [ShiftPlanController::class, 'view']);
 
             Route::prefix('shift-plans/{shift_plan_id}')->group(function () {
                 Route::get('equipment/available', [EquipmentAllocationController::class, 'available']);
