@@ -12,6 +12,7 @@ use App\Http\Requests\StoreEquipmentNameRequest;
 use App\Http\Requests\UpdateEquipmentNameRequest;
 
 use App\Http\Resources\EquipmentNameResource;
+use App\Http\Resources\PublicEquipmentNameResource;
 
 class EquipmentNameController extends Controller
 {
@@ -376,7 +377,7 @@ class EquipmentNameController extends Controller
                 return response()->json([
                     'status' => 200,
                     'message' => 'Equipment names fetched successfully',
-                    'data' => EquipmentNameResource::collection($equipmentNames),
+                    'data' => PublicEquipmentNameResource::collection($equipmentNames),
                     'pagination' => [
                         'current_page' => $equipmentNames->currentPage(),
                         'last_page' => $equipmentNames->lastPage(),
@@ -393,7 +394,7 @@ class EquipmentNameController extends Controller
             return response()->json([
                 'status' => 200,
                 'message' => 'Equipment names fetched successfully',
-                'data' => EquipmentNameResource::collection($equipmentNames)
+                'data' => PublicEquipmentNameResource::collection($equipmentNames)
             ]);
         } catch (\Throwable $th) {
             return response()->json([

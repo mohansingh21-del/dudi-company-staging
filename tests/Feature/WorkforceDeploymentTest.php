@@ -419,7 +419,14 @@ class WorkforceDeploymentTest extends TestCase
                 'planned',
                 'present',
                 'leave',
-                'borrowed'
+                'borrowed',
+                'absent',
+                'rest_day',
+                'deployed',
+                'not_deployed',
+                'removed',
+                'deployed_in_other_shift',
+                'borrowed_in_other_shift'
             ]
         ]);
         $this->assertEquals('removed', ShiftWorkforceDeployment::find($deployment->id)->status);
@@ -473,7 +480,9 @@ class WorkforceDeploymentTest extends TestCase
         // 1. Auto-load: Should not load employee 1 because Ramesh is on leave
         $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/load-relay");
         $response->assertStatus(200);
-        $response->assertJsonCount(0, 'data'); // Ramesh is excluded because of approved leave
+        $response->assertJsonCount(1, 'data'); // Ramesh is included in the list
+        $this->assertNull($response->json('data.0.id')); // but not deployed (id is null)
+        $this->assertEquals('On Leave', $response->json('data.0.status'));
 
         // 2. Available for borrowing: Should not show employee 2 because Suresh is marked rest_day
         $response = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/available-employees");
@@ -631,7 +640,13 @@ class WorkforceDeploymentTest extends TestCase
                 'present',
                 'leave',
                 'borrowed',
-                'absent'
+                'absent',
+                'rest_day',
+                'deployed',
+                'not_deployed',
+                'removed',
+                'deployed_in_other_shift',
+                'borrowed_in_other_shift'
             ]
         ]);
 
@@ -641,6 +656,12 @@ class WorkforceDeploymentTest extends TestCase
         $this->assertEquals(1, $stats['leave']);    // Employee 2
         $this->assertEquals(1, $stats['borrowed']); // Employee 4
         $this->assertEquals(0, $stats['absent']);   // No absent employees
+        $this->assertEquals(0, $stats['rest_day']);
+        $this->assertEquals(0, $stats['deployed']);
+        $this->assertEquals(0, $stats['not_deployed']);
+        $this->assertEquals(0, $stats['removed']);
+        $this->assertEquals(0, $stats['deployed_in_other_shift']);
+        $this->assertEquals(0, $stats['borrowed_in_other_shift']);
 
         // 8. Remove the borrowed employee
         $borrowedDeployment = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlan->id)
@@ -661,6 +682,12 @@ class WorkforceDeploymentTest extends TestCase
         $this->assertEquals(1, $stats2['leave']);
         $this->assertEquals(1, $stats2['borrowed']); // Still 1 even though removed!
         $this->assertEquals(0, $stats2['absent']);
+        $this->assertEquals(0, $stats2['rest_day']);
+        $this->assertEquals(0, $stats2['deployed']);
+        $this->assertEquals(0, $stats2['not_deployed']);
+        $this->assertEquals(1, $stats2['removed']);
+        $this->assertEquals(0, $stats2['deployed_in_other_shift']);
+        $this->assertEquals(0, $stats2['borrowed_in_other_shift']);
     }
 
     public function test_deployed_employee_who_goes_on_leave_is_excluded_from_present_and_list()
@@ -715,7 +742,8 @@ class WorkforceDeploymentTest extends TestCase
 
         // 5. Get list again — Employee 1 should NOT be in the list, present count is 0, leave count is 1
         $response2 = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce");
-        $response2->assertJsonCount(0, 'data');
+        $response2->assertJsonCount(1, 'data'); // Employee 1 is in the list
+        $this->assertEquals('On Leave', $response2->json('data.0.status'));
         $this->assertEquals(0, $response2->json('stats.present'));
         $this->assertEquals(1, $response2->json('stats.leave'));
     }
@@ -869,7 +897,8 @@ class WorkforceDeploymentTest extends TestCase
 
         // 5. Get list again — Employee 1 should NOT be in the list, present count is 0, absent count is 1
         $response2 = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce");
-        $response2->assertJsonCount(0, 'data');
+        $response2->assertJsonCount(1, 'data'); // Employee 1 is in the list
+        $this->assertEquals('Absent', $response2->json('data.0.status'));
         $this->assertEquals(0, $response2->json('stats.present'));
         $this->assertEquals(1, $response2->json('stats.absent'));
 

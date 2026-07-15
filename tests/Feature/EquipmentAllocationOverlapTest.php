@@ -423,5 +423,8 @@ class EquipmentAllocationOverlapTest extends TestCase
         $response->assertJsonFragment([
             'message' => 'Machine cannot be allocated as it is currently in breakdown or maintenance.'
         ]);
+        $response->assertJsonValidationErrors([
+            'machine_id' => 'Machine cannot be allocated as it is currently in breakdown or maintenance.'
+        ], 'data');
     }
 }

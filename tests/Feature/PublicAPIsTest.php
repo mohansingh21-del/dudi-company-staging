@@ -861,4 +861,143 @@ class PublicAPIsTest extends TestCase
             ]
         ]);
     }
+
+    public function test_get_public_equipment_names_statuses_and_reasons()
+    {
+        // 1. Create a category
+        $dumperCategory = Equipment::create(['name' => 'DumperCategory', 'is_active' => 1]);
+
+        // 2. Create an active & available machine
+        $activeMachine = EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DM-ACTIVE-001',
+            'is_active' => 1,
+        ]);
+
+        // 3. Create an inactive machine
+        $inactiveMachine = EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DM-INACTIVE-002',
+            'is_active' => 0,
+        ]);
+
+        // 4. Create a machine in maintenance (breakdown ticket open)
+        $maintenanceMachine = EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DM-MAINTENANCE-003',
+            'is_active' => 1,
+        ]);
+
+        $breakdownType = BreakdownType::create([
+            'breakdown_type' => 'Hydraulic Issue',
+            'description' => 'Hydraulic system failure',
+            'is_active' => 1,
+        ]);
+
+        BreakdownTicket::create([
+            'ticket_number' => 'BT-TEST-888',
+            'shift_id' => $this->shift->id,
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name_id' => $maintenanceMachine->id,
+            'breakdown_date_time' => now()->toDateTimeString(),
+            'reported_by' => $this->supervisorEmployee->id,
+            'breakdown_type_id' => $breakdownType->id,
+            'severity' => 'HIGH',
+            'status' => 'open',
+            'description' => 'Test breakdown description',
+        ]);
+
+        // 5. Create a machine allocated to an active shift plan
+        $allocatedMachine = EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DM-ALLOCATED-004',
+            'is_active' => 1,
+        ]);
+
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => now()->format('Y-m-d'),
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 10000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-ALLOC-TEST-99'
+        ]);
+
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $allocatedMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        // Call GET /api/v1/machine-names/{id}
+        $response = $this->getJson("/api/v1/machine-names/{$dumperCategory->id}");
+
+        $response->assertStatus(200);
+
+        // Check the structures in response data
+        $data = $response->json('data');
+        
+        $this->assertCount(3, $data);
+
+        // Assert details of each machine
+        $activeRes = collect($data)->firstWhere('id', $activeMachine->id);
+        $this->assertEquals('available', $activeRes['status']);
+        $this->assertNull($activeRes['short_reason']);
+
+        // Inactive machine should NOT be returned
+        $this->assertNull(collect($data)->firstWhere('id', $inactiveMachine->id));
+
+        $maintenanceRes = collect($data)->firstWhere('id', $maintenanceMachine->id);
+        $this->assertEquals('unavailable', $maintenanceRes['status']);
+        $this->assertEquals('In maintenance', $maintenanceRes['short_reason']);
+
+        $allocatedRes = collect($data)->firstWhere('id', $allocatedMachine->id);
+        $this->assertEquals('unavailable', $allocatedRes['status']);
+        $this->assertEquals('Already allocated', $allocatedRes['short_reason']);
+    }
+
+    public function test_get_public_equipment_names_pagination_and_search()
+    {
+        $dumperCategory = Equipment::create(['name' => 'DumperCategory2', 'is_active' => 1]);
+
+        EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DM-SEARCH-1',
+            'is_active' => 1,
+        ]);
+
+        EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DM-SEARCH-2',
+            'is_active' => 1,
+        ]);
+
+        // Search test
+        $responseSearch = $this->getJson("/api/v1/machine-names/{$dumperCategory->id}?search=DM-SEARCH-1");
+        $responseSearch->assertStatus(200);
+        $this->assertCount(1, $responseSearch->json('data'));
+        $this->assertEquals('DM-SEARCH-1', $responseSearch->json('data.0.equipment_name'));
+
+        // Pagination test
+        $responsePaginated = $this->getJson("/api/v1/machine-names/{$dumperCategory->id}?limit=1");
+        $responsePaginated->assertStatus(200);
+        $this->assertCount(1, $responsePaginated->json('data'));
+        $responsePaginated->assertJsonStructure([
+            'pagination' => [
+                'current_page',
+                'last_page',
+                'per_page',
+                'total',
+                'from',
+                'to',
+            ]
+        ]);
+        $this->assertEquals(2, $responsePaginated->json('pagination.total'));
+    }
 }
+

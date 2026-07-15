@@ -293,4 +293,39 @@ class FuelEntryController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * POST /api/v1/fuel-entries/import
+     */
+    public function import(\Illuminate\Http\Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls,csv',
+        ]);
+
+        try {
+            $import = new \App\Imports\FuelImport();
+            \Maatwebsite\Excel\Facades\Excel::import($import, $request->file('file'));
+
+            if (count($import->getErrors()) > 0) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Import completed with errors.',
+                    'errors' => $import->getErrors(),
+                ], 422);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Fuel entries imported successfully.',
+                'success_count' => $import->getSuccessCount(),
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to import fuel entries',
+                'error' => $th->getMessage(),
+            ], 500);
+        }
+    }
 }

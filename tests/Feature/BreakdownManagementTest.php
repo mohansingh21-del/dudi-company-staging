@@ -864,4 +864,195 @@ class BreakdownManagementTest extends TestCase
         $this->assertCount(2, $dashboard['downtime_by_machine']);
         $this->assertCount(2, $dashboard['reliability_ranking']);
     }
+
+    public function test_can_bulk_import_breakdown_tickets_route()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        \Maatwebsite\Excel\Facades\Excel::fake();
+
+        $file = \Illuminate\Http\UploadedFile::fake()->create('breakdowns.xlsx');
+
+        $response = $this->postJson('/api/v1/admin/maintenance/breakdowns/import', [
+            'file' => $file,
+        ]);
+
+        $response->assertStatus(200);
+
+        \Maatwebsite\Excel\Facades\Excel::assertImported('breakdowns.xlsx', function (\App\Imports\BreakdownImport $import) {
+            return true;
+        });
+    }
+
+    public function test_breakdown_import_logic()
+    {
+        $rows = collect([
+            [
+                'breakdown_date_time' => '2026-06-26 12:00:00',
+                'shift_name'          => 'Day Shift',
+                'employee_code'       => 'EMP_ADM',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'breakdown_type'      => 'Mechanical',
+                'severity'            => 'HIGH',
+                'description'         => 'Hose leak resolved.',
+                'repair_start_time'   => '2026-06-26 10:00:00',
+                'repair_end_time'     => '2026-06-26 12:30:00',
+                'action_taken'        => 'Hose replaced.',
+            ],
+            [
+                'breakdown_date_time' => '2026-06-26 14:00:00',
+                'shift_name'          => 'Day Shift',
+                'employee_code'       => 'EMP_WRK',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'breakdown_type'      => 'Electrical',
+                'severity'            => 'LOW',
+                'description'         => 'Open electrical issue.',
+                'downtime_start'      => '2026-06-26 14:00:00',
+                'downtime_end'        => '',
+                'resolution_notes'    => '',
+            ]
+        ]);
+
+        $import = new \App\Imports\BreakdownImport();
+        $import->collection($rows);
+
+        $this->assertEquals(2, $import->getSuccessCount());
+        $this->assertCount(0, $import->getErrors());
+
+        // Verify Closed Ticket
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'shift_id'                => $this->shift->id,
+            'reported_by'             => $this->adminUser->id, // EMP_ADM resolves to adminUser->id
+            'equipment_id'            => $this->equipment->id,
+            'equipment_name_id'       => $this->equipmentName->id,
+            'equipment_allocation_id' => $this->allocation->id, // Resolved automatically
+            'breakdown_type_id'       => 1, // Mechanical
+            'severity'                => 'HIGH',
+            'description'             => 'Hose leak resolved.',
+            'status'                  => 'closed',
+            'downtime_minutes'        => 150,
+            'resolution_notes'        => 'Hose replaced.',
+        ]);
+
+        // Verify Open Ticket
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'shift_id'                => $this->shift->id,
+            'reported_by'             => $this->workerUser->id, // EMP_WRK resolves to workerUser->id
+            'equipment_id'            => $this->equipment->id,
+            'equipment_name_id'       => $this->equipmentName->id,
+            'equipment_allocation_id' => $this->allocation->id, // Resolved automatically
+            'breakdown_type_id'       => 2, // Electrical
+            'severity'                => 'LOW',
+            'description'             => 'Open electrical issue.',
+            'status'                  => 'open',
+            'downtime_end'            => null,
+            'downtime_minutes'        => null,
+        ]);
+    }
+
+    public function test_breakdown_import_logic_handles_errors()
+    {
+        $rows = collect([
+            [
+                'breakdown_date_time' => '2026-06-26 12:00:00',
+                'shift_name'          => 'Non Existent Shift',
+                'employee_code'       => 'EMP_ADM',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'breakdown_type'      => 'Mechanical',
+                'severity'            => 'HIGH',
+                'description'         => 'Hose leak resolved.',
+            ]
+        ]);
+
+        $import = new \App\Imports\BreakdownImport();
+        $import->collection($rows);
+
+        $this->assertEquals(0, $import->getSuccessCount());
+        $this->assertCount(1, $import->getErrors());
+        $this->assertStringContainsString("Shift with name 'Non Existent Shift' not found.", $import->getErrors()[0]);
+    }
+
+    public function test_breakdown_import_logic_validation_if_machine_not_assigned()
+    {
+        // Setup another equipment name that is NOT allocated to the shift plan
+        $unassignedEquipmentName = EquipmentName::create([
+            'equipment_id'   => $this->equipment->id,
+            'equipment_name' => 'EX99-Excavator-CAT-UNASSIGNED',
+            'is_active'      => 1,
+        ]);
+
+        $rows = collect([
+            [
+                'breakdown_date_time' => '2026-06-26 12:00:00',
+                'shift_name'          => 'Day Shift',
+                'employee_code'       => 'EMP_ADM',
+                'equipment_name'      => 'EX99-Excavator-CAT-UNASSIGNED',
+                'breakdown_type'      => 'Mechanical',
+                'severity'            => 'HIGH',
+                'description'         => 'Hose leak resolved.',
+            ]
+        ]);
+
+        $import = new \App\Imports\BreakdownImport();
+        $import->collection($rows);
+
+        $this->assertEquals(0, $import->getSuccessCount());
+        $this->assertCount(1, $import->getErrors());
+        $this->assertStringContainsString("Machine 'EX99-Excavator-CAT-UNASSIGNED' is not assigned in that shift plan.", $import->getErrors()[0]);
+    }
+
+    public function test_breakdown_import_logic_zero_time_validation_errors()
+    {
+        $rows = collect([
+            [
+                'breakdown_date_time' => '2026-06-26 12:00:00',
+                'shift_name'          => 'Day Shift',
+                'employee_code'       => 'EMP_ADM',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'breakdown_type'      => 'Mechanical',
+                'severity'            => 'HIGH',
+                'description'         => 'Hose leak resolved.',
+                'repair_start_time'   => '00:00:00',
+                'repair_end_time'     => '00:00',
+            ]
+        ]);
+
+        $import = new \App\Imports\BreakdownImport();
+        $import->collection($rows);
+
+        $this->assertEquals(0, $import->getSuccessCount());
+        $this->assertCount(3, $import->getErrors());
+        $this->assertStringContainsString("Repair Start Time cannot be 00:00:00 or 00:00.", $import->getErrors()[0]);
+        $this->assertStringContainsString("Repair End Time cannot be 00:00:00 or 00:00.", $import->getErrors()[1]);
+    }
+
+    public function test_breakdown_import_logic_pm_time_format()
+    {
+        $rows = collect([
+            [
+                'breakdown_date_time' => '2026-06-26 12:00:00',
+                'shift_name'          => 'Day Shift',
+                'employee_code'       => 'EMP_ADM',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'breakdown_type'      => 'Mechanical',
+                'severity'            => 'HIGH',
+                'description'         => 'Hose leak resolved.',
+                'repair_start_time'   => '05:00:00 PM',
+                'repair_end_time'     => '06:00:00 PM',
+            ]
+        ]);
+
+        $import = new \App\Imports\BreakdownImport();
+        $import->collection($rows);
+
+        $this->assertEquals(1, $import->getSuccessCount());
+        $this->assertCount(0, $import->getErrors());
+
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'downtime_start'      => '2026-06-26 17:00:00',
+            'downtime_end'        => '2026-06-26 18:00:00',
+            'downtime_minutes'    => 60,
+        ]);
+    }
 }

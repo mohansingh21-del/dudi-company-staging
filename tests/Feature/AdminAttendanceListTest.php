@@ -797,7 +797,7 @@ class AdminAttendanceListTest extends TestCase
         // Now we have:
         // - AttendanceProcessed with ID = $collidingId on 2026-06-15 belonging to Employee B.
         // - Employee A with ID = $collidingId.
-        
+
         // Let's call bulkUpdateStatus on 2026-06-15 (where the collision exists).
         // Since there is a collision, it should prioritize the specific date context record
         // (Employee B's record) and NOT fall back to Employee A.
@@ -840,5 +840,51 @@ class AdminAttendanceListTest extends TestCase
         $this->assertNotNull($recordA2);
         $this->assertEquals('present', $recordA2->attendance_status);
         $this->assertEquals('No Collision Date Test', $recordA2->remarks);
+    }
+
+    public function test_can_get_all_attendance_records_when_limit_is_null()
+    {
+        // Create 20 more employees to exceed the default limit of 15
+        for ($i = 0; $i < 20; $i++) {
+            Employee::create([
+                'employee_code' => 'EMP_LMT_' . $i,
+                'name' => 'Employee Limit ' . $i,
+                'joining_date' => '2026-01-01',
+                'is_active' => 1,
+                'site_id' => $this->site->id,
+                'department_id' => $this->departmentId,
+                'designation_id' => $this->employee1->designation_id,
+            ]);
+        }
+
+        // Total employees = 22 (20 new + employee1 + employee2)
+
+        // Query daily view with limit=null
+        $responseDailyNull = $this->getJson('/api/v1/admin/attendance?date=2026-06-01&view_type=daily&limit=null');
+        $responseDailyNull->assertStatus(200);
+        $this->assertCount(22, $responseDailyNull->json('data'));
+        $this->assertEquals(22, $responseDailyNull->json('pagination.total'));
+        $this->assertEquals(22, $responseDailyNull->json('pagination.per_page'));
+
+        // Query daily view with no limit parameter (should default to returning all records, i.e. 22)
+        $responseDailyDefault = $this->getJson('/api/v1/admin/attendance?date=2026-06-01&view_type=daily');
+        $responseDailyDefault->assertStatus(200);
+        $this->assertCount(22, $responseDailyDefault->json('data'));
+        $this->assertEquals(22, $responseDailyDefault->json('pagination.total'));
+        $this->assertEquals(22, $responseDailyDefault->json('pagination.per_page'));
+
+        // Query daily view with limit=15 (should return 15 records)
+        $responseDaily15 = $this->getJson('/api/v1/admin/attendance?date=2026-06-01&view_type=daily&limit=15');
+        $responseDaily15->assertStatus(200);
+        $this->assertCount(15, $responseDaily15->json('data'));
+        $this->assertEquals(22, $responseDaily15->json('pagination.total'));
+        $this->assertEquals(15, $responseDaily15->json('pagination.per_page'));
+
+        // Query monthly view with limit=null
+        $responseMonthlyNull = $this->getJson('/api/v1/admin/attendance?date=2026-06-01&view_type=monthly&limit=null');
+        $responseMonthlyNull->assertStatus(200);
+        $this->assertCount(22, $responseMonthlyNull->json('data'));
+        $this->assertEquals(22, $responseMonthlyNull->json('pagination.total'));
+        $this->assertEquals(22, $responseMonthlyNull->json('pagination.per_page'));
     }
 }

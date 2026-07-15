@@ -451,6 +451,7 @@ Route::prefix('v1')->group(function () {
             |--------------------------------------------------------------------------
             */
             Route::prefix('maintenance/breakdowns')->group(function () {
+                Route::post('import', [BreakdownController::class, 'import']);
                 Route::get('/', [BreakdownController::class, 'index']);
                 Route::get('{id}', [BreakdownController::class, 'show']);
                 Route::post('/', [BreakdownController::class, 'store']);
@@ -463,6 +464,7 @@ Route::prefix('v1')->group(function () {
             |--------------------------------------------------------------------------
             */
             Route::prefix('fuel-entries')->group(function () {
+                Route::post('import', [FuelEntryController::class, 'import']);
                 Route::get('/', [FuelEntryController::class, 'index']);
                 Route::post('/', [FuelEntryController::class, 'store']);
                 Route::get('dashboard', [FuelEntryController::class, 'dashboard']);
@@ -481,6 +483,7 @@ Route::prefix('v1')->group(function () {
     */
     Route::middleware(['auth:sanctum', 'role:super-admin,supervisor,site_incharge'])->prefix('admin/delays')->group(function () {
         Route::get('/', [DelayController::class, 'index']);
+        Route::post('import', [DelayController::class, 'import']);
         Route::get('{id}', [DelayController::class, 'show']);
         Route::post('/', [DelayController::class, 'store']);
         Route::put('{id}', [DelayController::class, 'update']);

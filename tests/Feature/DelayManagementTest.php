@@ -986,4 +986,157 @@ class DelayManagementTest extends TestCase
         $response->assertStatus(422)
             ->assertJsonValidationErrors(['delay_log_date']);
     }
+
+    public function test_can_bulk_import_delay_records_route()
+    {
+        Sanctum::actingAs($this->supervisorUser);
+
+        // Mock Excel import facade to prevent actual file writing/reading
+        \Maatwebsite\Excel\Facades\Excel::fake();
+
+        $file = \Illuminate\Http\UploadedFile::fake()->create('delays.xlsx');
+
+        $response = $this->postJson('/api/v1/admin/delays/import', [
+            'file' => $file,
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('status', 200);
+
+        \Maatwebsite\Excel\Facades\Excel::assertImported('delays.xlsx');
+    }
+
+    public function test_delay_import_logic()
+    {
+        // 1. Create Allocation for the machine in the published shift plan so it passes allocation checks
+        $allocation = \App\Models\ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $this->publishedShiftPlan->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        // Associate allocation to breakdown ticket
+        $this->breakdownTicket->update([
+            'equipment_allocation_id' => $allocation->id,
+        ]);
+
+        $rows = collect([
+            // Row 1: Valid Rain Delay
+            [
+                'shift_date'     => '2026-06-27',
+                'shift_name'     => 'Day Shift',
+                'delay_category' => 'Rain',
+                'start_time'     => '09:00:00',
+                'end_time'       => '10:30:00',
+                'description'    => 'Rain delay resolved.',
+                'severity'       => 'MEDIUM',
+            ],
+            // Row 2: Valid Machine Breakdown Delay linked to Breakdown Ticket
+            [
+                'shift_date'               => '2026-06-27',
+                'shift_name'               => 'Day Shift',
+                'delay_category'           => 'Machine Breakdown',
+                'start_time'               => '11:00:00',
+                'end_time'                 => '12:00:00',
+                'description'              => 'Excavator delay.',
+                'severity'                 => 'LOW',
+                'equipment_name'           => 'EX01-Excavator-CAT',
+                'linked_breakdown_ticket'  => 'BT-2026-001',
+            ]
+        ]);
+
+        $import = new \App\Imports\DelayImport();
+        $import->collection($rows);
+
+        $this->assertEquals(2, $import->getSuccessCount());
+        $this->assertCount(0, $import->getErrors());
+
+        // Assert Rain Delay
+        $this->assertDatabaseHas('delays', [
+            'shift_plan_id'     => $this->publishedShiftPlan->id,
+            'delay_category_id' => $this->rainCategory->id,
+            'duration_minutes'  => 90,
+            'description'       => 'Rain delay resolved.',
+        ]);
+
+        // Assert Machine Breakdown Delay
+        $this->assertDatabaseHas('delays', [
+            'shift_plan_id'       => $this->publishedShiftPlan->id,
+            'delay_category_id'   => $this->machineBreakdownCategory->id,
+            'duration_minutes'    => 60,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'linked_breakdown_id' => $this->breakdownTicket->id,
+        ]);
+    }
+
+    public function test_delay_import_logic_machine_breakdown_validation_errors()
+    {
+        $rows = collect([
+            // Machine Breakdown but equipment name not assigned in shift plan
+            [
+                'shift_date'     => '2026-06-27',
+                'shift_name'     => 'Day Shift',
+                'delay_category' => 'Machine Breakdown',
+                'start_time'     => '11:00:00',
+                'end_time'       => '12:00:00',
+                'description'    => 'Excavator delay.',
+                'equipment_name' => 'EX01-Excavator-CAT',
+            ]
+        ]);
+
+        $import = new \App\Imports\DelayImport();
+        $import->collection($rows);
+
+        $this->assertEquals(0, $import->getSuccessCount());
+        $this->assertCount(1, $import->getErrors());
+        $this->assertStringContainsString("Machine 'EX01-Excavator-CAT' is not assigned in that shift plan.", $import->getErrors()[0]);
+    }
+
+    public function test_delay_import_logic_zero_time_validation_errors()
+    {
+        $rows = collect([
+            [
+                'shift_date'     => '2026-06-27',
+                'shift_name'     => 'Day Shift',
+                'delay_category' => 'Rain',
+                'start_time'     => '00:00:00',
+                'end_time'       => '00:00',
+                'description'    => 'Rain delay resolved.',
+            ]
+        ]);
+
+        $import = new \App\Imports\DelayImport();
+        $import->collection($rows);
+
+        $this->assertEquals(0, $import->getSuccessCount());
+        $this->assertCount(2, $import->getErrors());
+        $this->assertStringContainsString("Start Time cannot be 00:00:00 or 00:00.", $import->getErrors()[0]);
+        $this->assertStringContainsString("End Time cannot be 00:00:00 or 00:00.", $import->getErrors()[1]);
+    }
+
+    public function test_delay_import_logic_pm_time_format()
+    {
+        $rows = collect([
+            [
+                'shift_date'     => '2026-06-27',
+                'shift_name'     => 'Day Shift',
+                'delay_category' => 'Rain',
+                'start_time'     => '05:00:00 PM',
+                'end_time'       => '06:00:00 PM',
+                'description'    => 'Rain delay resolved.',
+            ]
+        ]);
+
+        $import = new \App\Imports\DelayImport();
+        $import->collection($rows);
+
+        $this->assertEquals(1, $import->getSuccessCount());
+        $this->assertCount(0, $import->getErrors());
+
+        $this->assertDatabaseHas('delays', [
+            'start_time' => '2026-06-27 17:00:00',
+            'end_time'   => '2026-06-27 18:00:00',
+        ]);
+    }
 }

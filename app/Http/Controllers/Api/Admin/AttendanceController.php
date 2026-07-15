@@ -979,7 +979,7 @@ class AttendanceController extends Controller
     public function index_1122(Request $request)
     {
         try {
-            $limit = $request->input('limit', 10);
+            $limit = $request->input('limit', null);
             $viewType = strtolower($request->input('view_type', 'daily'));
 
             // Parse Date and View Type (daily or monthly)
@@ -1404,7 +1404,7 @@ class AttendanceController extends Controller
     {
 
         try {
-            $limit = $request->input('limit', 10);
+            $limit = $request->input('limit', null);
             ////  $viewType = strtolower($request->input('view_type', 'daily'));
 
             // Parse Date and View Type (daily or monthly)
@@ -1895,7 +1895,8 @@ class AttendanceController extends Controller
     public function index(Request $request)
     {
         try {
-            $limit = $request->input('limit', 10);
+            $limit = $request->input('limit', null);
+            $isLimitNull = (!is_numeric($limit) || (int)$limit <= 0);
             $viewType = strtolower($request->input('view_type', 'daily'));
 
             // Parse Date and View Type (daily or monthly)
@@ -2200,7 +2201,7 @@ class AttendanceController extends Controller
                     });
                 }
 
-                $employees = $employeeQuery->orderBy('name')->paginate($limit);
+                $employees = $employeeQuery->orderBy('name')->paginate($isLimitNull ? max(1, (clone $employeeQuery)->count()) : (int)$limit);
                 $employeeIds = $employees->pluck('id')->toArray();
 
                 // Fetch attendance counts for these employees
@@ -2428,7 +2429,7 @@ class AttendanceController extends Controller
                 }
             }
 
-            $employees = $employeeQuery->orderBy('name')->paginate($limit);
+            $employees = $employeeQuery->orderBy('name')->paginate($isLimitNull ? max(1, (clone $employeeQuery)->count()) : (int)$limit);
 
             $dates = [];
             $currentDate = $startDate->copy();

@@ -196,7 +196,9 @@ class EquipmentAllocationService
             return [
                 'status' => 422,
                 'message' => 'Machine Not Available For Allocation.',
-                'data' => [],
+                'data' => [
+                    'machine_id' => ['Machine Not Available For Allocation.']
+                ],
             ];
         }
 
@@ -209,7 +211,9 @@ class EquipmentAllocationService
             return [
                 'status' => 422,
                 'message' => 'Machine cannot be allocated as it is currently in breakdown or maintenance.',
-                'data' => [],
+                'data' => [
+                    'machine_id' => ['Machine cannot be allocated as it is currently in breakdown or maintenance.']
+                ],
             ];
         }
 

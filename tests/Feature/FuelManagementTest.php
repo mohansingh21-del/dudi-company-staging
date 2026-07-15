@@ -1212,4 +1212,127 @@ class FuelManagementTest extends TestCase
             'fuel_per_bcm' => 1.7000, // 170.00 / 100.00 = 1.7
         ]);
     }
+
+    public function test_fuel_entries_bulk_import_route_accessible()
+    {
+        // Try calling without authenticating
+        $this->postJson('/api/v1/admin/fuel-entries/import', [])->assertStatus(401);
+
+        // Try calling with a role that is not super-admin or supervisor
+        $role = Role::create(['name' => 'Operator', 'slug' => 'operator', 'is_active' => 1]);
+        $user = User::create(['email' => 'operator@test.com', 'password' => bcrypt('password'), 'is_active' => 1]);
+        $user->roles()->attach($role);
+
+        Sanctum::actingAs($user);
+        $this->postJson('/api/v1/admin/fuel-entries/import', [])->assertStatus(403);
+    }
+
+    public function test_fuel_import_logic_success()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        // Create Operator Employee
+        $opUser = User::create(['email' => 'operator1@test.com', 'password' => bcrypt('password'), 'is_active' => 1]);
+        $opRole = Role::create(['name' => 'Machine Operator', 'slug' => 'machine-operator', 'is_active' => 1]);
+        $opUser->roles()->attach($opRole);
+
+        // Let's link employee to the user
+        $roleUser = \DB::table('role_user')->where('user_id', $opUser->id)->first();
+        $opEmployeeId = \DB::table('employees')->insertGetId([
+            'role_user_id'  => $roleUser->id,
+            'employee_code' => 'EMP_OP_001',
+            'name'          => 'Operator One',
+            'joining_date'  => '2026-01-01',
+            'is_active'     => 1,
+            'created_at'    => now(),
+            'updated_at'    => now(),
+        ]);
+
+        $rows = collect([
+            [
+                'shift_date'          => '2026-06-27',
+                'shift_name'          => 'Day Shift',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'operator_code'       => 'EMP_OP_001',
+                'fuel_source'         => 'Fuel Tanker',
+                'opening_fuel'        => '100.00',
+                'fuel_issued'         => '150.00',
+                'closing_fuel'        => '80.00',
+                'hours_meter_reading' => '10.5',
+                'kilometer_reading'   => '150.0',
+                'remarks'             => 'Initial import refuel',
+            ]
+        ]);
+
+        $import = new \App\Imports\FuelImport();
+        $import->collection($rows);
+
+        $this->assertEquals(1, $import->getSuccessCount());
+        $this->assertCount(0, $import->getErrors());
+
+        $this->assertDatabaseHas('fuel_entries', [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'equipment_allocation_id' => $this->allocationPublished->id,
+            'operator_id'             => $opUser->id,
+            'fuel_source'             => 'fuel_tanker',
+            'opening_fuel'            => 100.00,
+            'fuel_issued'             => 150.00,
+            'closing_fuel'            => 80.00,
+            'fuel_consumption'        => 170.00, // 100 + 150 - 80
+            'hours_meter_reading'     => 10.5,
+            'kilometer_reading'       => 150.0,
+            'remarks'                 => 'Initial import refuel',
+        ]);
+    }
+
+    public function test_fuel_import_logic_validation_errors()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $rows = collect([
+            // Row 1: Missing required fields
+            [
+                'shift_date'          => '',
+                'shift_name'          => '',
+                'equipment_name'      => '',
+                'opening_fuel'        => '',
+                'fuel_issued'         => '',
+                'remarks'             => 'Incomplete',
+            ],
+            // Row 2: Closing fuel > opening + issued, invalid numeric types, shift plan draft/not published, invalid fuel source
+            [
+                'shift_date'          => '2026-06-28', // draft shift plan date
+                'shift_name'          => 'Day Shift',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'opening_fuel'        => 'abc',
+                'fuel_issued'         => '-10',
+                'closing_fuel'        => '50',
+                'fuel_source'         => 'invalid_source',
+            ],
+            // Row 3: Correct values but machine not allocated
+            [
+                'shift_date'          => '2026-06-27',
+                'shift_name'          => 'Day Shift',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'opening_fuel'        => '100',
+                'fuel_issued'         => '50',
+                'closing_fuel'         => '200', // 200 > 100 + 50
+            ]
+        ]);
+
+        $import = new \App\Imports\FuelImport();
+        $import->collection($rows);
+
+        $this->assertEquals(0, $import->getSuccessCount());
+        
+        $errors = $import->getErrors();
+        $this->assertGreaterThan(0, count($errors));
+
+        // Check if specific validation errors are collected
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Shift Date is required.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Opening Fuel is required.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Opening Fuel must be a numeric value')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Shift plan is not active or published.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Closing fuel cannot be greater than opening fuel + fuel issued.')));
+    }
 }

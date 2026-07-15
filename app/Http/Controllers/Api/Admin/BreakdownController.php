@@ -59,6 +59,44 @@ class BreakdownController extends Controller
     }
 
     /**
+     * POST /api/v1/admin/maintenance/breakdowns/import
+     */
+    public function import(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xls,xlsx,csv|max:5120',
+        ]);
+
+        try {
+            $import = new \App\Imports\BreakdownImport();
+            \Maatwebsite\Excel\Facades\Excel::import($import, $request->file('file'));
+
+            $errors = $import->getErrors();
+            $successCount = $import->getSuccessCount();
+
+            if (count($errors) > 0) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Import completed with " . count($errors) . " errors. {$successCount} records imported successfully.",
+                    'errors' => $errors
+                ], 422);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => "Successfully imported {$successCount} breakdown records."
+            ], 200);
+
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to import breakdown tickets.',
+                'error' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * POST /api/v1/maintenance/breakdowns
      */
     public function store(StoreBreakdownRequest $request)
