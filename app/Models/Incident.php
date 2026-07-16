@@ -14,6 +14,7 @@ class Incident extends Model
         'incident_no',
         'incident_date',
         'shift_id',
+        'shift_plan_id',
         'incident_type_id',
         'severity',
         'status',
@@ -26,6 +27,12 @@ class Incident extends Model
         'preventive_measures'
 
     ];
+
+
+    public function shiftPlan()
+    {
+        return $this->belongsTo(ShiftPlan::class, 'shift_plan_id');
+    }
 
 
     public function media()

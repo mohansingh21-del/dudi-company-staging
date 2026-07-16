@@ -958,7 +958,7 @@ class PublicAPIsTest extends TestCase
 
         $allocatedRes = collect($data)->firstWhere('id', $allocatedMachine->id);
         $this->assertEquals('unavailable', $allocatedRes['status']);
-        $this->assertEquals('Already allocated', $allocatedRes['short_reason']);
+        $this->assertEquals('Already allocated to ' . $this->shift->shift_name, $allocatedRes['short_reason']);
     }
 
     public function test_get_public_equipment_names_pagination_and_search()

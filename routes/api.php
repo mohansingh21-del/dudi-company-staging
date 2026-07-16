@@ -180,6 +180,7 @@ Route::prefix('v1')->group(function () {
         Route::get('dispatch/fleet-performance', [DispatchTripController::class, 'fleetPerformance']);
 
         Route::middleware(['role:super-admin,supervisor,site-incharge'])->group(function () {
+            Route::post('dispatch/trips/import', [DispatchTripController::class, 'import']);
             Route::post('dispatch/trips', [DispatchTripController::class, 'store']);
             Route::put('dispatch/trips/{id}', [DispatchTripController::class, 'update']);
         });
@@ -253,6 +254,7 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('incident-types', IncidentTypeController::class);
 
             Route::patch('incident-types/{id}/status', [IncidentTypeController::class, 'toggleStatus']);
+            Route::post('incidents/import', [IncidentController::class, 'import']);
             Route::apiResource('incidents', IncidentController::class);
             Route::patch(
                 'incidents/{incident}',

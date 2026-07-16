@@ -25,11 +25,12 @@ class PublicEquipmentNameResource extends JsonResource
         } elseif (BreakdownTicket::where('equipment_name_id', $this->id)->where('status', '!=', 'closed')->exists()) {
             $status = 'unavailable';
             $shortReason = 'In maintenance';
-        } elseif (ShiftEquipmentAllocation::where('equipment_name_id', $this->id)->whereHas('shiftPlan', function ($q) {
+        } elseif ($allocation = ShiftEquipmentAllocation::where('equipment_name_id', $this->id)->whereHas('shiftPlan', function ($q) {
             $q->notClosed();
-        })->exists()) {
+        })->first()) {
             $status = 'unavailable';
-            $shortReason = 'Already allocated';
+            $shiftName = optional(optional($allocation->shiftPlan)->shift)->shift_name;
+            $shortReason = $shiftName ? "Already allocated to {$shiftName}" : "Already allocated";
         }
 
         return [

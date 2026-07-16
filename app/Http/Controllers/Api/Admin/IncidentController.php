@@ -447,6 +447,7 @@ class IncidentController extends Controller
 
                 'shift_id' => $request->shift_id,
 
+                'shift_plan_id' => $request->shift_plan_id,
 
                 'incident_type_id' => $request->incident_type_id,
 
@@ -575,6 +576,9 @@ class IncidentController extends Controller
                 'shift_id' =>
                 $request->shift_id,
 
+                'shift_plan_id' =>
+                $request->shift_plan_id,
+
                 'incident_type_id' =>
                 $request->incident_type_id,
 
@@ -644,6 +648,41 @@ class IncidentController extends Controller
                 'message' => $th->getMessage()
 
             ]);
+        }
+    }
+
+    public function import(Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xls,xlsx,csv|max:5120',
+        ]);
+
+        try {
+            $import = new \App\Imports\IncidentImport();
+            \Maatwebsite\Excel\Facades\Excel::import($import, $request->file('file'));
+
+            $errors = $import->getErrors();
+            $successCount = $import->getSuccessCount();
+
+            if (count($errors) > 0) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Import completed with " . count($errors) . " errors. {$successCount} records imported successfully.",
+                    'errors' => $errors
+                ], 422);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => "Successfully imported {$successCount} incident records."
+            ], 200);
+
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to import incidents.',
+                'error' => $th->getMessage()
+            ], 500);
         }
     }
 }

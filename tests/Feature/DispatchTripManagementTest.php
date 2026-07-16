@@ -908,4 +908,133 @@ class DispatchTripManagementTest extends TestCase
             'total_cycles' => 8,
         ]);
     }
+
+    public function test_dispatch_bulk_import_route_accessible()
+    {
+        // Try calling without authenticating
+        $this->postJson('/api/v1/dispatch/trips/import', [])->assertStatus(401);
+
+        // Try calling with a role that is not supervisor, site-incharge, or super-admin
+        Sanctum::actingAs($this->otherUser);
+        $this->postJson('/api/v1/dispatch/trips/import', [])->assertStatus(403);
+    }
+
+    public function test_dispatch_import_logic_success()
+    {
+        Sanctum::actingAs($this->supervisorUser);
+
+        $rows = collect([
+            [
+                'shift_date'          => '2026-07-02',
+                'shift_name'          => 'Day Shift',
+                'dumper_name'         => 'DMP-01',
+                'driver_code'         => 'EMP-SUP-001',
+                'excavator_name'      => 'EXC-01',
+                'loading_point'       => 'Loading Pit A',
+                'dumping_point'       => 'Waste Dump B',
+                'start_time'          => '09:00:00',
+                'end_time'            => '09:20:00',
+                'quantity_bcm'        => '15.5',
+                'distance'            => '1200',
+                'total_cycles'        => '1',
+            ]
+        ]);
+
+        $import = new \App\Imports\DispatchImport();
+        $import->collection($rows);
+
+        $this->assertEquals(1, $import->getSuccessCount());
+        $this->assertCount(0, $import->getErrors());
+
+        $this->assertDatabaseHas('dispatch_trips', [
+            'shift_plan_id'           => $this->publishedShiftPlan->id,
+            'shift_id'                => $this->shift->id,
+            'site_id'                 => $this->site->id,
+            'dumper_equipment_id'     => $this->dumperName->id,
+            'driver_id'               => $this->supervisorEmployee->id,
+            'excavator_equipment_id'  => $this->excavatorName->id,
+            'loading_point_id'        => $this->loadingPoint->id,
+            'dumping_point_id'        => $this->dumpingPoint->id,
+            'start_time'              => '2026-07-02 09:00:00',
+            'end_time'                => '2026-07-02 09:20:00',
+            'cycle_time_minutes'      => 20.00,
+            'quantity_bcm'            => 15.5,
+            'distance_meters'         => 1200,
+            'total_cycles'            => 1,
+        ]);
+
+        // Check that actual_bcm has updated on ShiftPlan
+        $this->assertDatabaseHas('shift_plans', [
+            'id'                      => $this->publishedShiftPlan->id,
+            'actual_bcm'              => 15.5,
+        ]);
+    }
+
+    public function test_dispatch_import_logic_validation_errors()
+    {
+        Sanctum::actingAs($this->supervisorUser);
+
+        $rows = collect([
+            // Row 1: Missing fields, zero times, invalid numeric inputs
+            [
+                'shift_date'          => '',
+                'shift_name'          => '',
+                'dumper_name'         => '',
+                'driver_code'         => '',
+                'loading_point'       => '',
+                'dumping_point'       => '',
+                'start_time'          => '00:00:00',
+                'end_time'            => '00:00',
+                'quantity_bcm'        => '-5',
+                'total_cycles'        => 'abc',
+                'distance'            => '-10',
+            ],
+            // Row 2: Unallocated Dumper and mismatch Excavator name
+            [
+                'shift_date'          => '2026-07-02',
+                'shift_name'          => 'Day Shift',
+                'dumper_name'         => 'DMP-99', // not allocated
+                'driver_code'         => 'EMP-SUP-001',
+                'excavator_name'      => 'EXC-01',
+                'loading_point'       => 'Loading Pit A',
+                'dumping_point'       => 'Waste Dump B',
+                'start_time'          => '10:00:00',
+                'end_time'            => '10:10:00',
+                'quantity_bcm'        => '10',
+                'total_cycles'        => '1',
+            ],
+            // Row 3: End time <= Start time
+            [
+                'shift_date'          => '2026-07-02',
+                'shift_name'          => 'Day Shift',
+                'dumper_name'         => 'DMP-01',
+                'driver_code'         => 'EMP-SUP-001',
+                'excavator_name'      => 'EXC-01',
+                'loading_point'       => 'Loading Pit A',
+                'dumping_point'       => 'Waste Dump B',
+                'start_time'          => '10:20:00',
+                'end_time'            => '10:15:00', // end before start
+                'quantity_bcm'        => '10',
+                'total_cycles'        => '1',
+            ]
+        ]);
+
+        $import = new \App\Imports\DispatchImport();
+        $import->collection($rows);
+
+        $this->assertEquals(0, $import->getSuccessCount());
+        
+        $errors = $import->getErrors();
+        $this->assertGreaterThan(0, count($errors));
+
+        // Assert all errors collected at once
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Shift Date is required.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Dumper Name is required.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Start Time cannot be 00:00:00 or 00:00.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'End Time cannot be 00:00:00 or 00:00.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Quantity BCM must be a numeric value greater than 0.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Total Cycles must be an integer value greater than 0.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Selected Dumper Is Not Assigned To Current Shift.')));
+        $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'The end time must be after the start time.')));
+    }
 }
