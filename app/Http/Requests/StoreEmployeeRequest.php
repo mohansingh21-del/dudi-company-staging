@@ -41,7 +41,7 @@ class StoreEmployeeRequest extends FormRequest
 
             'supervisor_id' => 'nullable|exists:employees,id',
             
-            'relay_shift' => 'nullable|in:general,relay_1,relay_2,relay_3',
+            'relay_id' => 'nullable|exists:relays,id',
 
             'status' => 'in:0,1',
         ];

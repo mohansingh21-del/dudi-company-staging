@@ -14,8 +14,8 @@ class ShiftWorkforceDeployment extends Model
     protected $fillable = [
         'shift_plan_id',
         'employee_id',
-        'relay_shift',
-        'home_relay_shift',
+        'relay_id',
+        'home_relay_id',
         'assigned_machine_id',
         'designation',
         'is_borrowed',
@@ -52,6 +52,22 @@ class ShiftWorkforceDeployment extends Model
     public function employee()
     {
         return $this->belongsTo(Employee::class, 'employee_id');
+    }
+
+    /**
+     * The deployed employee's active relay.
+     */
+    public function relay()
+    {
+        return $this->belongsTo(Relay::class, 'relay_id');
+    }
+
+    /**
+     * The deployed employee's home relay.
+     */
+    public function homeRelay()
+    {
+        return $this->belongsTo(Relay::class, 'home_relay_id');
     }
 
     /**

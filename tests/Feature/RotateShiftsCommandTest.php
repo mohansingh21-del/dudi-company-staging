@@ -48,12 +48,16 @@ class RotateShiftsCommandTest extends TestCase
         $shift2->is_active = 1;
         $shift2->save();
 
-        // Create an employee with relay_shift = 'general' (should NOT be rotated)
+        // Create relays
+        $relayGeneral = \App\Models\Relay::create(['name' => 'General', 'is_rotating' => false, 'is_active' => true]);
+        $relayA = \App\Models\Relay::create(['name' => 'Relay A', 'is_rotating' => true, 'is_active' => true]);
+
+        // Create an employee with non-rotating relay (should NOT be rotated)
         $employeeGeneral = Employee::create([
             'employee_code' => 'EMP001',
             'name' => 'General Employee',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'general',
+            'relay_id' => $relayGeneral->id,
             'is_active' => 1
         ]);
 
@@ -63,12 +67,12 @@ class RotateShiftsCommandTest extends TestCase
             'from_date' => '2026-06-01'
         ]);
 
-        // Create an employee with relay_shift = 'relay_1' (should be rotated)
+        // Create an employee with rotating relay (should be rotated)
         $employeeRelay = Employee::create([
             'employee_code' => 'EMP002',
             'name' => 'Relay Employee',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_1',
+            'relay_id' => $relayA->id,
             'is_active' => 1
         ]);
 
@@ -76,6 +80,18 @@ class RotateShiftsCommandTest extends TestCase
             'employee_id' => $employeeRelay->id,
             'shift_id' => $shift1->id,
             'from_date' => '2026-06-01'
+        ]);
+
+        // Seed previous week mapping for Relay A to trigger rotation from shift 1 to 3
+        $today = \Carbon\Carbon::today();
+        $prevWeekStart = $today->copy()->subWeeks(1)->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
+        $prevWeekEnd = $today->copy()->subWeeks(1)->startOfWeek(\Carbon\Carbon::MONDAY)->addDays(6)->toDateString();
+
+        \App\Models\RelayShiftMapping::create([
+            'week_start_date' => $prevWeekStart,
+            'week_end_date' => $prevWeekEnd,
+            'relay_id' => $relayA->id,
+            'shift_id' => $shift1->id,
         ]);
 
         // Run the rotation command
@@ -88,10 +104,10 @@ class RotateShiftsCommandTest extends TestCase
             'shift_id' => $shift1->id,
         ]);
 
-        // Relay employee should be rotated to Shift 3 (next in active sequence [1, 3, 2])
+        // Relay employee should be rotated to Shift 2 (next in descending active sequence [3, 1, 2])
         $this->assertDatabaseHas('employee_shift_assignments', [
             'employee_id' => $employeeRelay->id,
-            'shift_id' => $shift3->id,
+            'shift_id' => $shift2->id,
         ]);
     }
 
@@ -121,11 +137,15 @@ class RotateShiftsCommandTest extends TestCase
             'is_active' => 1
         ]);
 
+        // Create relays
+        $relayGeneral = \App\Models\Relay::create(['name' => 'General', 'is_rotating' => false, 'is_active' => true]);
+        $relayA = \App\Models\Relay::create(['name' => 'Relay A', 'is_rotating' => true, 'is_active' => true]);
+
         $employeeGeneral = Employee::create([
             'employee_code' => 'EMP003',
             'name' => 'General Employee 2',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'general',
+            'relay_id' => $relayGeneral->id,
             'is_active' => 1
         ]);
         EmployeeShiftAssignment::create([
@@ -138,7 +158,7 @@ class RotateShiftsCommandTest extends TestCase
             'employee_code' => 'EMP004',
             'name' => 'Relay Employee 2',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_1',
+            'relay_id' => $relayA->id,
             'is_active' => 1
         ]);
         EmployeeShiftAssignment::create([

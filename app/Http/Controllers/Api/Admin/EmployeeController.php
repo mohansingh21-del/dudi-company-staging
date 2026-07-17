@@ -430,18 +430,21 @@ class EmployeeController extends Controller
         }
 
         try {
-            $excludedRelayShifts = ['general'];
             $limit = $request->input('limit', 10);
 
             if ($id !== null) {
                 $employees = Employee::where('is_active', 1)
-                    ->whereNotIn('relay_shift', $excludedRelayShifts)
+                    ->whereHas('relay', function ($query) {
+                        $query->where('is_rotating', true);
+                    })
                     ->whereHas('shiftAssignments', function ($query) use ($id) {
                         $query->where('shift_id', $id);
                     });
             } else {
                 $employees = Employee::where('is_active', 1)
-                    ->whereNotIn('relay_shift', $excludedRelayShifts)
+                    ->whereHas('relay', function ($query) {
+                        $query->where('is_rotating', true);
+                    })
                     ->whereDoesntHave('shiftAssignments');
             }
 

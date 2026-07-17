@@ -42,7 +42,7 @@ class UpdateEmployeeRequest extends FormRequest
 
                'status' => 'in:0,1',
 
-               'relay_shift' => 'nullable|in:general,relay_1,relay_2,relay_3',
+               'relay_id' => 'nullable|exists:relays,id',
 
 
           ];

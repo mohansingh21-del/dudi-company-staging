@@ -20,10 +20,10 @@ class WorkforceDeploymentService
      * ALL active employees regardless of relay_shift.
      *
      * @param  int          $shiftPlanId
-     * @param  string|null  $relayShift  e.g. 'relay_1', 'relay_2', 'relay_3', 'general'
+     * @param  int|string|null  $relayId  e.g. Relay ID or Relay Name
      * @return array
      */
-    public function loadRelayWorkforce($shiftPlanId, $relayShift = null, $limit = 15)
+    public function loadRelayWorkforce($shiftPlanId, $relayId = null, $limit = 15)
     {
         $shiftPlan = ShiftPlan::with('shift')->find($shiftPlanId);
 
@@ -74,9 +74,20 @@ class WorkforceDeploymentService
         $unavailableEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
 
         // Get active employees not unavailable
-        $activeEmployees = Employee::where('is_active', true)
-            ->whereNotIn('id', $unavailableEmployeeIds)
-            ->get();
+        $employeeQuery = Employee::where('is_active', true)
+            ->whereNotIn('id', $unavailableEmployeeIds);
+
+        if ($relayId) {
+            if (is_numeric($relayId)) {
+                $employeeQuery->where('relay_id', $relayId);
+            } else {
+                $employeeQuery->whereHas('relay', function ($q) use ($relayId) {
+                    $q->where('name', $relayId);
+                });
+            }
+        }
+
+        $activeEmployees = $employeeQuery->get();
 
         // Filter by shift on this date
         $employees = $activeEmployees->filter(function ($employee) use ($planningDate, $shiftPlan) {
@@ -122,7 +133,7 @@ class WorkforceDeploymentService
                 $deployment = ShiftWorkforceDeployment::create([
                     'shift_plan_id' => $shiftPlanId,
                     'employee_id' => $employee->id,
-                    'relay_shift' => $employee->relay_shift,
+                    'relay_id' => $employee->relay_id,
                     'designation' => $designationName,
                     'is_borrowed' => false,
                     'deployed_by' => $userId,
@@ -284,7 +295,8 @@ class WorkforceDeploymentService
                 'employee_id' => $emp->id,
                 'employee_code' => $emp->employee_code,
                 'employee_name' => $emp->name,
-                'home_relay_shift' => $emp->relay_shift,
+                'home_relay_id' => $emp->relay_id,
+                'home_relay_shift' => optional($emp->relay)->name,
                 'shift_name' => $shiftName, // The original shift name they are assigned to
                 'designation' => $designationName,
                 'availability_status' => 'Available',
@@ -459,8 +471,8 @@ class WorkforceDeploymentService
                 $deployment = ShiftWorkforceDeployment::create([
                     'shift_plan_id' => $shiftPlanId,
                     'employee_id' => $employee->id,
-                    'relay_shift' => $employee->relay_shift,
-                    'home_relay_shift' => $employee->relay_shift,
+                    'relay_id' => $employee->relay_id,
+                    'home_relay_id' => $employee->relay_id,
                     'designation' => $designationName,
                     'is_borrowed' => true,
                     'borrowing_reason' => $reason,
@@ -763,12 +775,14 @@ class WorkforceDeploymentService
                 'employee_name' => $emp->name,
                 'employee_code' => $emp->employee_code,
                 'designation' => $activeDep && $activeDep->designation ? $activeDep->designation : $designationName,
-                'relay_shift' => $activeDep ? $activeDep->relay_shift : $emp->relay_shift,
+                'relay_id' => $activeDep ? $activeDep->relay_id : $emp->relay_id,
+                'relay_shift' => $activeDep && $activeDep->relay ? $activeDep->relay->name : optional($emp->relay)->name,
                 'shift_name' => $shiftPlan->shift ? $shiftPlan->shift->shift_name : null,
                 'home_shift_name' => $homeShiftName,
                 'assigned_machine' => $machineName,
                 'is_borrowed' => $dep ? (bool) $dep->is_borrowed : false,
-                'home_relay_shift' => $dep ? $dep->home_relay_shift : $emp->relay_shift,
+                'home_relay_id' => $dep ? $dep->home_relay_id : $emp->relay_id,
+                'home_relay_shift' => $dep && $dep->homeRelay ? $dep->homeRelay->name : optional($emp->relay)->name,
                 'borrowing_reason' => $dep ? $dep->borrowing_reason : null,
                 'status' => $status,
             ];
@@ -930,12 +944,14 @@ class WorkforceDeploymentService
                 'employee_name' => $employee ? $employee->name : null,
                 'employee_code' => $employee ? $employee->employee_code : null,
                 'designation' => $dep->designation ? $dep->designation : $designationName,
-                'relay_shift' => $dep->relay_shift,
+                'relay_id' => $dep->relay_id,
+                'relay_shift' => $dep->relay ? $dep->relay->name : null,
                 'shift_name' => $shiftName, // The shift of the current shift plan
                 'home_shift_name' => $homeShiftName, // The home shift of the employee on this date
                 'assigned_machine' => $machineName,
                 'is_borrowed' => (bool) $dep->is_borrowed,
-                'home_relay_shift' => $dep->home_relay_shift,
+                'home_relay_id' => $dep->home_relay_id,
+                'home_relay_shift' => $dep->homeRelay ? $dep->homeRelay->name : null,
                 'borrowing_reason' => $dep->borrowing_reason,
                 'status' => $dep->status,
             ];

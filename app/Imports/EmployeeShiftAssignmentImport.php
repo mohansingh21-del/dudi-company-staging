@@ -62,15 +62,15 @@ class EmployeeShiftAssignmentImport implements ToCollection, WithHeadingRow
             }
 
             // Find employee by employee_code
-            $employee = Employee::where('employee_code', $empCode)->first();
+            $employee = Employee::with('relay')->where('employee_code', $empCode)->first();
 
             if (!$employee) {
                 $this->errors[] = "Row {$rowNum}: Employee with code '{$empCode}' not found.";
                 continue;
             }
 
-            if ($employee->relay_shift === 'general') {
-                $this->errors[] = "Row {$rowNum}: Shift assignment is not allowed for general shift employee '{$employee->name}'.";
+            if (!$employee->relay_id || !$employee->relay || !$employee->relay->is_rotating) {
+                $this->errors[] = "Row {$rowNum}: Shift assignment is not allowed for non-rotating/general shift employee '{$employee->name}'.";
                 continue;
             }
 

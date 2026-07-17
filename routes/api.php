@@ -17,6 +17,7 @@ use App\Http\Controllers\Api\Admin\BranchController;
 use App\Http\Controllers\Api\Admin\DesignationController;
 use App\Http\Controllers\Api\Admin\SiteController;
 use App\Http\Controllers\Api\Admin\ShiftController;
+use App\Http\Controllers\Api\Admin\RelayController;
 use App\Http\Controllers\Api\Admin\EmployeeShiftAssignmentController;
 use App\Http\Controllers\Api\Admin\LeaveTypeController;
 use App\Http\Controllers\Api\Admin\HolidayController;
@@ -154,6 +155,7 @@ Route::prefix('v1')->group(function () {
         Route::get('breakdown-types', [BreakdownTypeController::class, 'publicIndex']);
         Route::get('delay-categories', [DelayCategoryController::class, 'publicIndex']);
         Route::get('shifts', [ShiftController::class, 'getPublicShifts']);
+        Route::get('relays', [RelayController::class, 'getPublicRelays']);
         Route::get('employees', [EmployeeController::class, 'getPublicEmployees']);
         Route::get('active-employees', [EmployeeController::class, 'getActiveEmployees']);
         Route::get('sites', [SiteController::class, 'getPublicSites']);
@@ -205,8 +207,10 @@ Route::prefix('v1')->group(function () {
 
             Route::patch('sites/{id}/status', [SiteController::class, 'toggleStatus']);
             Route::apiResource('shift', ShiftController::class);
-
             Route::patch('shift/{id}/status', [ShiftController::class, 'toggleStatus']);
+
+            Route::apiResource('relays', RelayController::class);
+            Route::patch('relays/{id}/status', [RelayController::class, 'toggleStatus']);
             Route::apiResource('leavetype', LeaveTypeController::class);
 
             Route::patch('leavetype/{id}/status', [LeaveTypeController::class, 'toggleStatus']);

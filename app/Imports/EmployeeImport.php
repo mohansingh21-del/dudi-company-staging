@@ -24,6 +24,26 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
                 continue;
             }
 
+            $relay = null;
+            if (!empty($row['relay'])) {
+                $relay = \App\Models\Relay::where('id', $row['relay'])
+                    ->orWhere('name', $row['relay'])
+                    ->first();
+            } elseif (!empty($row['relay_shift'])) {
+                $relayName = $row['relay_shift'];
+                // Normalize legacy names
+                if (strtolower($relayName) === 'relay_1') {
+                    $relayName = 'Relay A';
+                } elseif (strtolower($relayName) === 'relay_2') {
+                    $relayName = 'Relay B';
+                } elseif (strtolower($relayName) === 'relay_3') {
+                    $relayName = 'Relay C';
+                }
+                $relay = \App\Models\Relay::where('name', $relayName)
+                    ->orWhere('id', $row['relay_shift'])
+                    ->first();
+            }
+
             $department = !empty($row['department'])
                 ? Department::where('id', $row['department'])
                 ->orWhere('name', $row['department'])
@@ -65,7 +85,7 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
               
                 'is_active' => (int) ($row['status'] ?? 1),
 
-                'relay_shift' => $row['relay_shift'],
+                'relay_id' => $relay ? $relay->id : null,
             ]);
         }
     }

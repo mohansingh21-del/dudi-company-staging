@@ -245,8 +245,7 @@ class AttendanceController extends Controller
             $shift = $attendance ? $attendance->shift : null;
             $shiftId = $attendance ? $attendance->shift_id : null;
             if (!$shift) {
-                $shiftAssignment = \App\Models\EmployeeShiftAssignment::where('employee_id', $employee->id)->first();
-                $shiftId = $shiftAssignment ? $shiftAssignment->shift_id : null;
+                $shiftId = $employee->shift_id;
                 $shift = $shiftId ? \App\Models\Shift::find($shiftId) : null;
             }
 
@@ -2502,10 +2501,8 @@ class AttendanceController extends Controller
                             $status = 'holiday';
                         }
 
-                        $shiftId = optional($employee->currentShiftAssignment)->shift_id;
-                        $shiftName = optional(
-                            optional($employee->currentShiftAssignment)->shift
-                        )->shift_name;
+                        $shiftId = $employee->shift_id;
+                        $shiftName = $shiftId ? optional(\App\Models\Shift::find($shiftId))->shift_name : null;
 
                         $data[] = [
                             'id' => null,

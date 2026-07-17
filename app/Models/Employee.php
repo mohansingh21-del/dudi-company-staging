@@ -10,12 +10,18 @@ class Employee extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['role_user_id', 'employee_code', 'name', 'father_name', 'dob', 'gender', 'mobile', 'address', 'emergency_contact', 'joining_date', 'employee_type', 'department_id', 'designation_id', 'site_id', 'supervisor_id', 'salary_type', 'basic_salary', 'pf_applicable', 'pf_number', 'bank_name', 'bank_account_number', 'ifsc_code', 'mess_deduction_applicable', 'other_deduction_appliacble', 'other_deduction', 'is_active', 'relay_shift', 'pf_amount', 'mess_deduction_amount', 'rest_days'];
+    protected $fillable = ['role_user_id', 'employee_code', 'name', 'father_name', 'dob', 'gender', 'mobile', 'address', 'emergency_contact', 'joining_date', 'employee_type', 'department_id', 'designation_id', 'site_id', 'supervisor_id', 'salary_type', 'basic_salary', 'pf_applicable', 'pf_number', 'bank_name', 'bank_account_number', 'ifsc_code', 'mess_deduction_applicable', 'other_deduction_appliacble', 'other_deduction', 'is_active', 'relay_id', 'pf_amount', 'mess_deduction_amount', 'rest_days'];
 
     protected $casts = [
         'dob' => 'date:Y-m-d',
         'joining_date' => 'date:Y-m-d',
     ];
+
+    public function relay()
+    {
+        return $this->belongsTo(Relay::class, 'relay_id');
+    }
+
     public function roleUser()
     {
         return $this->belongsTo(RoleUser::class, 'role_user_id');
@@ -49,6 +55,21 @@ class Employee extends Model
 
     public function getShiftIdForDate($dateStr)
     {
+        // 1. Check individual override for this employee on this date
+        $override = EmployeeShiftOverride::getForDate($this->id, $dateStr);
+        if ($override) {
+            return $override->shift_id;
+        }
+
+        // 2. Check relay shift mapping for this date (Option B: relay-based lookup)
+        if ($this->relay_id && $this->relay && $this->relay->is_rotating) {
+            $mapping = RelayShiftMapping::getForDate($this->relay_id, $dateStr);
+            if ($mapping) {
+                return $mapping->shift_id;
+            }
+        }
+
+        // 3. Fallback to legacy employee_shift_assignments (for historical data before relay mappings)
         $assignments = $this->shiftAssignments()->get();
 
         $assignment = $assignments->filter(function ($assign) use ($dateStr) {
@@ -116,7 +137,21 @@ class Employee extends Model
 
     public function getShiftIdAttribute()
     {
-        return optional($this->currentShiftAssignment)->shift_id;
+        // 1. Check employee_shift_assignments
+        $assignmentShiftId = optional($this->currentShiftAssignment)->shift_id;
+        if ($assignmentShiftId) {
+            return $assignmentShiftId;
+        }
+
+        // 2. Fallback to relay shift mapping for current week
+        if ($this->relay_id) {
+            $mapping = RelayShiftMapping::getForDate($this->relay_id, now()->toDateString());
+            if ($mapping) {
+                return $mapping->shift_id;
+            }
+        }
+
+        return null;
     }
 
     public function getPreviousShiftAttribute()

@@ -62,12 +62,16 @@ class ShiftChangeSwapEmployeesTest extends TestCase
             'is_active' => 1
         ]);
 
+        // Create relays
+        $relayA = \App\Models\Relay::create(['name' => 'Relay A', 'is_rotating' => true, 'is_active' => true]);
+        $relayB = \App\Models\Relay::create(['name' => 'Relay B', 'is_rotating' => true, 'is_active' => true]);
+
         // Create employees
         $this->employee1 = Employee::create([
             'employee_code' => 'EMP001',
             'name' => 'Ravi Verma',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_1',
+            'relay_id' => $relayA->id,
             'is_active' => 1
         ]);
 
@@ -75,7 +79,7 @@ class ShiftChangeSwapEmployeesTest extends TestCase
             'employee_code' => 'EMP002',
             'name' => 'Suman Sharma',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_2',
+            'relay_id' => $relayB->id,
             'is_active' => 1
         ]);
     }
@@ -95,6 +99,10 @@ class ShiftChangeSwapEmployeesTest extends TestCase
             'shift_id' => $this->shiftB->id,
             'from_date' => '2026-06-01',
         ]);
+
+        // Get initial relay IDs
+        $relayAId = $this->employee1->relay_id;
+        $relayBId = $this->employee2->relay_id;
 
         // Request shift swap
         $response = $this->postJson('/api/v1/admin/shift-rotation/swap', [
@@ -136,6 +144,10 @@ class ShiftChangeSwapEmployeesTest extends TestCase
             'new_shift_id' => $this->shiftA->id,
             'user_id' => $this->adminUser->id,
         ]);
+
+        // Assert employee relays have also swapped
+        $this->assertEquals($relayBId, $this->employee1->refresh()->relay_id);
+        $this->assertEquals($relayAId, $this->employee2->refresh()->relay_id);
     }
 
     public function test_cannot_swap_shifts_if_employee_missing_assignment()
@@ -155,7 +167,7 @@ class ShiftChangeSwapEmployeesTest extends TestCase
         $response->assertStatus(422);
         $response->assertJson([
             'status' => 422,
-            'message' => "Employee 'Suman Sharma' does not have a shift assignment."
+            'message' => "Employee 'Suman Sharma' does not have a shift assigned."
         ]);
     }
 

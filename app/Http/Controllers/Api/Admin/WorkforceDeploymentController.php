@@ -32,10 +32,10 @@ class WorkforceDeploymentController extends Controller
     public function loadRelay(Request $request, $shiftPlanId)
     {
         try {
-            $relayShift = $request->input('relay_shift');
+            $relayId = $request->input('relay_id', $request->input('relay_shift'));
             $limit = $request->input('limit', 15);
 
-            $result = $this->service->loadRelayWorkforce($shiftPlanId, $relayShift, $limit);
+            $result = $this->service->loadRelayWorkforce($shiftPlanId, $relayId, $limit);
 
             return response()->json([
                 'status'     => $result['status'],
