@@ -54,26 +54,44 @@ class ShiftChangeController extends Controller
             }
 
             if ($request->filled('from_date')) {
-                $query->whereHas('currentShiftAssignment', function ($q) use ($request) {
-                    $q->where(function ($sub) use ($request) {
-                        $sub->whereNotNull('from_date')
-                            ->where('from_date', '>=', $request->from_date)
-                            ->orWhere(function ($sub2) use ($request) {
-                                $sub2->whereNull('from_date')
-                                     ->whereDate('created_at', '>=', $request->from_date);
+                $fromDate = $request->from_date;
+                $query->where(function ($q) use ($fromDate) {
+                    $q->whereHas('currentShiftAssignment', function ($sub) use ($fromDate) {
+                        $sub->where(function ($sub2) use ($fromDate) {
+                            $sub2->whereNotNull('from_date')
+                                 ->where('from_date', '>=', $fromDate)
+                                 ->orWhere(function ($sub3) use ($fromDate) {
+                                     $sub3->whereNull('from_date')
+                                          ->whereDate('created_at', '>=', $fromDate);
+                                 });
+                        });
+                    })
+                    ->orWhere(function ($sub) use ($fromDate) {
+                        $sub->whereDoesntHave('currentShiftAssignment')
+                            ->whereHas('relay.shiftMappings', function ($m) use ($fromDate) {
+                                $m->where('week_start_date', '>=', $fromDate);
                             });
                     });
                 });
             }
 
             if ($request->filled('to_date')) {
-                $query->whereHas('currentShiftAssignment', function ($q) use ($request) {
-                    $q->where(function ($sub) use ($request) {
-                        $sub->whereNotNull('from_date')
-                            ->where('from_date', '<=', $request->to_date)
-                            ->orWhere(function ($sub2) use ($request) {
-                                $sub2->whereNull('from_date')
-                                     ->whereDate('created_at', '<=', $request->to_date);
+                $toDate = $request->to_date;
+                $query->where(function ($q) use ($toDate) {
+                    $q->whereHas('currentShiftAssignment', function ($sub) use ($toDate) {
+                        $sub->where(function ($sub2) use ($toDate) {
+                            $sub2->whereNotNull('from_date')
+                                 ->where('from_date', '<=', $toDate)
+                                 ->orWhere(function ($sub3) use ($toDate) {
+                                     $sub3->whereNull('from_date')
+                                          ->whereDate('created_at', '<=', $toDate);
+                                 });
+                        });
+                    })
+                    ->orWhere(function ($sub) use ($toDate) {
+                        $sub->whereDoesntHave('currentShiftAssignment')
+                            ->whereHas('relay.shiftMappings', function ($m) use ($toDate) {
+                                $m->where('week_start_date', '<=', $toDate);
                             });
                     });
                 });
