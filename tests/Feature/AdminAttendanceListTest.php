@@ -526,7 +526,7 @@ class AdminAttendanceListTest extends TestCase
             'summary' => [
                 'total_employees' => 2,
                 'present' => 1,
-                'absent' => 1,
+                'absent' => 0,
                 'half_day' => 0,
                 'leaves' => 0,
             ]
@@ -543,7 +543,7 @@ class AdminAttendanceListTest extends TestCase
         $this->assertNotNull($emp2Data);
         $this->assertEquals($this->employee2->id, $emp2Data['employee_id']);
         $this->assertEquals('15 Jun 2026', $emp2Data['date']);
-        $this->assertEquals('absent', $emp2Data['attendance_status']);
+        $this->assertNull($emp2Data['attendance_status']);
 
         // Also test without month and year parameters
         $response2 = $this->getJson('/api/v1/admin/attendance?from_date=2026-06-15&view_type=daily');
@@ -554,7 +554,7 @@ class AdminAttendanceListTest extends TestCase
             'summary' => [
                 'total_employees' => 2,
                 'present' => 1,
-                'absent' => 1,
+                'absent' => 0,
                 'half_day' => 0,
                 'leaves' => 0,
             ]
@@ -571,7 +571,7 @@ class AdminAttendanceListTest extends TestCase
         $this->assertNotNull($emp2Data2);
         $this->assertEquals($this->employee2->id, $emp2Data2['employee_id']);
         $this->assertEquals('15 Jun 2026', $emp2Data2['date']);
-        $this->assertEquals('absent', $emp2Data2['attendance_status']);
+        $this->assertNull($emp2Data2['attendance_status']);
     }
 
     public function test_monthly_attendance_list_shows_paid_and_unpaid_leaves()

@@ -709,7 +709,7 @@ class AttendanceController extends Controller
 
                 $record = $attendanceRecords->get($dateString);
 
-                $status = 'Absent';
+                $status = null;
                 $checkIn = '--:--';
                 $checkOut = '--:--';
                 $duration = '0h 0m';
@@ -2085,7 +2085,7 @@ class AttendanceController extends Controller
                             $hasLeave = isset($leaveEmployeeIdsSet[$emp->id]);
                             $isHoliday = $isGeneralHoliday || isset($holidaySiteIdsSet[$emp->site_id]);
 
-                            $status = 'absent';
+                            $status = null;
                             if ($hasLeave) {
                                 $status = 'leave';
                             } elseif ($isHoliday) {
@@ -2494,7 +2494,7 @@ class AttendanceController extends Controller
                             })
                             ->exists();
 
-                        $status = 'absent';
+                        $status = null;
                         if ($hasLeave) {
                             $status = 'leave';
                         } elseif ($isHoliday) {
