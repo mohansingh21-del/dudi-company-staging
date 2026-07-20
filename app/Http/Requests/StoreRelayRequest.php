@@ -24,18 +24,15 @@ class StoreRelayRequest extends FormRequest
                 'exists:shifts,id',
                 function ($attribute, $value, $fail) {
                     if ($value && $this->input('is_rotating', true)) {
-                        $today = now();
-                        $weekStart = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
+                        $rotatingRelays = \App\Models\Relay::where('is_active', 1)
+                            ->where('is_rotating', true)
+                            ->get();
 
-                        $exists = \App\Models\RelayShiftMapping::where('week_start_date', $weekStart)
-                            ->where('shift_id', $value)
-                            ->whereHas('relay', function ($q) {
-                                $q->where('is_rotating', true);
-                            })
-                            ->exists();
-
-                        if ($exists) {
-                            $fail('The selected shift is already assigned to another rotating relay for this week.');
+                        foreach ($rotatingRelays as $relay) {
+                            if ($relay->current_shift_id == $value) {
+                                $fail('The selected shift is already assigned to another rotating relay.');
+                                break;
+                            }
                         }
                     }
                 }

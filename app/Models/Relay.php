@@ -25,6 +25,23 @@ class Relay extends Model
         return $this->hasMany(RelayShiftMapping::class);
     }
 
+    public function getCurrentShiftIdAttribute()
+    {
+        $today = now()->toDateString();
+        $mapping = $this->shiftMappings()
+            ->where('week_start_date', '<=', $today)
+            ->where('week_end_date', '>=', $today)
+            ->first();
+
+        if (!$mapping) {
+            $mapping = $this->shiftMappings()
+                ->orderBy('week_start_date', 'desc')
+                ->first();
+        }
+
+        return $mapping ? $mapping->shift_id : null;
+    }
+
     public function employees()
     {
         return $this->hasMany(Employee::class);

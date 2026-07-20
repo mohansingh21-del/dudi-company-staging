@@ -33,19 +33,16 @@ class UpdateRelayRequest extends FormRequest
                         }
 
                         if ($isRotating) {
-                            $today = now();
-                            $weekStart = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
-                            
-                            $exists = \App\Models\RelayShiftMapping::where('week_start_date', $weekStart)
-                                ->where('shift_id', $value)
-                                ->where('relay_id', '!=', $relayId)
-                                ->whereHas('relay', function ($q) {
-                                    $q->where('is_rotating', true);
-                                })
-                                ->exists();
+                            $rotatingRelays = \App\Models\Relay::where('id', '!=', $relayId)
+                                ->where('is_active', 1)
+                                ->where('is_rotating', true)
+                                ->get();
 
-                            if ($exists) {
-                                $fail('The selected shift is already assigned to another rotating relay for this week.');
+                            foreach ($rotatingRelays as $relay) {
+                                if ($relay->current_shift_id == $value) {
+                                    $fail('The selected shift is already assigned to another rotating relay.');
+                                    break;
+                                }
                             }
                         }
                     }

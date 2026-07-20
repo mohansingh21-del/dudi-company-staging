@@ -67,6 +67,14 @@ class Employee extends Model
             if ($mapping) {
                 return $mapping->shift_id;
             }
+
+            // Fallback: if no mapping for the date, and date is today, use latest mapping
+            if ($dateStr === now()->toDateString()) {
+                $latestMapping = RelayShiftMapping::getLatestForRelay($this->relay_id);
+                if ($latestMapping) {
+                    return $latestMapping->shift_id;
+                }
+            }
         }
 
         // 3. Fallback to legacy employee_shift_assignments (for historical data before relay mappings)
@@ -137,10 +145,10 @@ class Employee extends Model
 
     public function getShiftIdAttribute()
     {
-        // 1. Check employee_shift_assignments
-        $assignmentShiftId = optional($this->currentShiftAssignment)->shift_id;
-        if ($assignmentShiftId) {
-            return $assignmentShiftId;
+        // 1. Check individual override for today
+        $override = EmployeeShiftOverride::getForDate($this->id, now()->toDateString());
+        if ($override) {
+            return $override->shift_id;
         }
 
         // 2. Fallback to relay shift mapping for current week
@@ -149,6 +157,18 @@ class Employee extends Model
             if ($mapping) {
                 return $mapping->shift_id;
             }
+
+            // Fallback: If no mapping for today, use the latest relay mapping
+            $latestMapping = RelayShiftMapping::getLatestForRelay($this->relay_id);
+            if ($latestMapping) {
+                return $latestMapping->shift_id;
+            }
+        }
+
+        // 3. Fallback to legacy current shift assignment
+        $assignmentShiftId = optional($this->currentShiftAssignment)->shift_id;
+        if ($assignmentShiftId) {
+            return $assignmentShiftId;
         }
 
         return null;
