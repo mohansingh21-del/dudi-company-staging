@@ -14,11 +14,24 @@ class AlterHolidaysTable extends Migration
     public function up()
     {
         Schema::table('holidays', function (Blueprint $table) {
-            $table->dropColumn(['date', 'title']);
-            $table->string('holiday_name');
-            $table->date('holiday_date');
-            $table->unsignedBigInteger('site_id')->nullable();
-            $table->string('holiday_type')->nullable();
+            if (Schema::hasColumn('holidays', 'date')) {
+                $table->dropColumn('date');
+            }
+            if (Schema::hasColumn('holidays', 'title')) {
+                $table->dropColumn('title');
+            }
+            if (!Schema::hasColumn('holidays', 'holiday_name')) {
+                $table->string('holiday_name');
+            }
+            if (!Schema::hasColumn('holidays', 'holiday_date')) {
+                $table->date('holiday_date');
+            }
+            if (!Schema::hasColumn('holidays', 'site_id')) {
+                $table->unsignedBigInteger('site_id')->nullable();
+            }
+            if (!Schema::hasColumn('holidays', 'holiday_type')) {
+                $table->string('holiday_type')->nullable();
+            }
         });
     }
 

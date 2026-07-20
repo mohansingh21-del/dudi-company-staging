@@ -7,12 +7,36 @@ use Illuminate\Validation\Rule;
 
 class StoreIncidentRequest extends FormRequest
 {
-
     public function authorize()
     {
         return true;
     }
 
+    protected function prepareForValidation()
+    {
+        if ($this->filled('incident_date')) {
+            try {
+                $value = $this->input('incident_date');
+                $date = null;
+
+                if (\Carbon\Carbon::hasFormat($value, 'Y-m-d H:i:s')) {
+                    $date = \Carbon\Carbon::createFromFormat('Y-m-d H:i:s', $value);
+                } elseif (\Carbon\Carbon::hasFormat($value, 'd/m/Y H:i:s')) {
+                    $date = \Carbon\Carbon::createFromFormat('d/m/Y H:i:s', $value);
+                } elseif (\Carbon\Carbon::hasFormat($value, 'd/m/Y')) {
+                    $date = \Carbon\Carbon::createFromFormat('d/m/Y', $value)->setTimeFromTimeString(now()->format('H:i:s'));
+                } elseif (\Carbon\Carbon::hasFormat($value, 'Y-m-d')) {
+                    $date = \Carbon\Carbon::createFromFormat('Y-m-d', $value)->setTimeFromTimeString(now()->format('H:i:s'));
+                }
+
+                if ($date) {
+                    $this->merge([
+                        'incident_date' => $date->format('Y-m-d H:i:s')
+                    ]);
+                }
+            } catch (\Throwable $e) {}
+        }
+    }
 
     public function rules()
     {
@@ -21,13 +45,17 @@ class StoreIncidentRequest extends FormRequest
 
             'incident_date' => [
                 'required',
-                'date_format:d/m/Y',
+                'bail',
+                'date_format:Y-m-d H:i:s',
                 function ($attribute, $value, $fail) {
+                    try {
+                        $date = \Carbon\Carbon::createFromFormat('Y-m-d H:i:s', $value);
 
-                    $date = \Carbon\Carbon::createFromFormat('d/m/Y', $value);
-
-                    if ($date->isFuture()) {
-                        $fail('Incident date cannot be a future date.');
+                        if ($date->isFuture()) {
+                            $fail('Incident date cannot be a future date.');
+                        }
+                    } catch (\Throwable $e) {
+                        $fail('The ' . $attribute . ' does not match the format Y-m-d H:i:s.');
                     }
                 }
             ],
@@ -128,7 +156,7 @@ class StoreIncidentRequest extends FormRequest
             $shiftPlan = null;
             if ($incidentDate && $shiftId && $locationId) {
                 try {
-                    $parsedDate = \Carbon\Carbon::createFromFormat('d/m/Y', $incidentDate)->format('Y-m-d');
+                    $parsedDate = \Carbon\Carbon::createFromFormat('Y-m-d H:i:s', $incidentDate)->format('Y-m-d');
                     $shiftPlan = \App\Models\ShiftPlan::where('planning_date', $parsedDate)
                         ->where('shift_id', $shiftId)
                         ->where('site_id', $locationId)

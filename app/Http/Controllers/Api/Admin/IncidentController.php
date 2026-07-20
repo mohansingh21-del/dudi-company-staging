@@ -440,9 +440,9 @@ class IncidentController extends Controller
 
 
                 'incident_date' => \Carbon\Carbon::createFromFormat(
-                    'd/m/Y',
+                    'Y-m-d H:i:s',
                     $request->incident_date
-                )->format('Y-m-d'),
+                )->format('Y-m-d H:i:s'),
 
 
                 'shift_id' => $request->shift_id,
@@ -569,9 +569,9 @@ class IncidentController extends Controller
             $incident->update([
 
                 'incident_date' => \Carbon\Carbon::createFromFormat(
-                    'd/m/Y',
+                    'Y-m-d H:i:s',
                     $request->incident_date
-                )->format('Y-m-d'),
+                )->format('Y-m-d H:i:s'),
 
                 'shift_id' =>
                 $request->shift_id,

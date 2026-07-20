@@ -334,4 +334,66 @@ class IncidentManagementTest extends TestCase
             'equipment_name_id' => $this->equipmentName->id
         ]);
     }
+
+    public function test_api_store_incident_validation_handles_invalid_date_format_gracefully()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $response = $this->postJson('/api/v1/admin/incidents', [
+            'incident_date' => '16-07-2026 12:00:00', // Invalid format with trailing data
+            'shift_id' => $this->shift->id,
+            'incident_type_id' => $this->incidentType->id,
+            'severity' => 'MEDIUM',
+            'location_id' => $this->site->id,
+            'equipment_id' => $this->equipment->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'incident_description' => 'Test description',
+            'action_taken' => 'Test action'
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['incident_date']);
+    }
+
+    public function test_api_store_incident_with_valid_datetime()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $shiftPlan = \App\Models\ShiftPlan::create([
+            'planning_date' => '2026-07-16',
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 1000,
+            'supervisor_id' => $this->adminUser->id,
+            'site_incharge_id' => $this->adminUser->id,
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-INC-API-003',
+        ]);
+
+        \App\Models\ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        $response = $this->postJson('/api/v1/admin/incidents', [
+            'incident_date' => '16/07/2026 14:35:10',
+            'shift_id' => $this->shift->id,
+            'incident_type_id' => $this->incidentType->id,
+            'severity' => 'MEDIUM',
+            'location_id' => $this->site->id,
+            'equipment_id' => $this->equipment->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'incident_description' => 'Test description with datetime',
+            'action_taken' => 'Test action'
+        ]);
+
+        $response->assertStatus(200);
+        $this->assertDatabaseHas('incidents', [
+            'incident_date' => '2026-07-16 14:35:10',
+            'shift_plan_id' => $shiftPlan->id,
+        ]);
+    }
 }
+

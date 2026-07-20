@@ -80,6 +80,9 @@ class IncidentImport implements ToCollection, WithHeadingRow
             if ($dateStr !== '') {
                 try {
                     $incidentDate = $this->parseDate($dateStr);
+                    if (strpos($dateStr, ':') === false) {
+                        $incidentDate->setTimeFromTimeString(now()->format('H:i:s'));
+                    }
                     if ($incidentDate->isFuture()) {
                         $rowErrors[] = "Incident date cannot be a future date.";
                     }
@@ -194,7 +197,7 @@ class IncidentImport implements ToCollection, WithHeadingRow
 
                     Incident::create([
                         'incident_no'          => $incidentNo,
-                        'incident_date'        => $incidentDate->format('Y-m-d'),
+                        'incident_date'        => $incidentDate->format('Y-m-d H:i:s'),
                         'shift_id'             => $shift->id,
                         'shift_plan_id'        => $shiftPlan ? $shiftPlan->id : null,
                         'incident_type_id'     => $incidentType->id,
