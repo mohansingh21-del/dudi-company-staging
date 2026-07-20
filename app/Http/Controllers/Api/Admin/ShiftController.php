@@ -377,27 +377,32 @@ class ShiftController extends Controller
                     ];
                 }
 
-                $workforceDrivers = \App\Models\ShiftWorkforceDeployment::with('employee')
+                $drivers = [];
+                $workforce = [];
+                $deployments = \App\Models\ShiftWorkforceDeployment::with(['employee.designation'])
                     ->where('shift_plan_id', $shiftPlan->id)
                     ->where('status', 'active')
-                    ->where(function ($q) {
-                        $q->where('designation', 'Driver')
-                            ->orWhere('designation', 'driver')
-                            ->orWhereHas('employee.designation', function ($sub) {
-                                $sub->where('slug', 'driver');
-                            });
-                    })
-                    ->get()
-                    ->map(function ($deployment) {
-                        $emp = $deployment->employee;
-                        return [
-                            'id' => $emp ? $emp->id : null,
-                            'employee_code' => $emp ? $emp->employee_code : null,
-                            'name' => $emp ? $emp->name : null,
-                            'mobile' => $emp ? $emp->mobile : null,
-                            'designation' => $deployment->designation ?? ($emp && $emp->designation ? $emp->designation->name : null),
-                        ];
-                    })->values()->all();
+                    ->get();
+
+                foreach ($deployments as $deployment) {
+                    $emp = $deployment->employee;
+                    $designationName = $deployment->designation ?? ($emp && $emp->designation ? $emp->designation->name : null);
+                    $slug = $emp && $emp->designation ? $emp->designation->slug : null;
+
+                    $item = [
+                        'id' => $emp ? $emp->id : null,
+                        'employee_code' => $emp ? $emp->employee_code : null,
+                        'name' => $emp ? $emp->name : null,
+                        'mobile' => $emp ? $emp->mobile : null,
+                        'designation' => $designationName,
+                    ];
+
+                    if ($deployment->designation === 'Driver' || $deployment->designation === 'driver' || $slug === 'driver') {
+                        $drivers[] = $item;
+                    } else {
+                        $workforce[] = $item;
+                    }
+                }
 
                 return response()->json([
                     'status' => 200,
@@ -409,8 +414,8 @@ class ShiftController extends Controller
                         'end_time' => $matchedShift->end_time,
                         'shift_plan_id' => $shiftPlan ? $shiftPlan->id : null,
                         'site' => $siteData,
-                        'drivers' => $workforceDrivers,
-                        'workforce' => $workforceDrivers,
+                        'drivers' => $drivers,
+                        'workforce' => $workforce,
                         'machines' => $machines,
                     ]
                 ], 200);
@@ -492,27 +497,32 @@ class ShiftController extends Controller
                         ];
                     }
 
-                    $workforceDrivers = \App\Models\ShiftWorkforceDeployment::with('employee')
+                    $drivers = [];
+                    $workforce = [];
+                    $deployments = \App\Models\ShiftWorkforceDeployment::with(['employee.designation'])
                         ->where('shift_plan_id', $shiftPlan->id)
                         ->where('status', 'active')
-                        ->where(function ($q) {
-                            $q->where('designation', 'Driver')
-                                ->orWhere('designation', 'driver')
-                                ->orWhereHas('employee.designation', function ($sub) {
-                                    $sub->where('slug', 'driver');
-                                });
-                        })
-                        ->get()
-                        ->map(function ($deployment) {
-                            $emp = $deployment->employee;
-                            return [
-                                'id' => $emp ? $emp->id : null,
-                                'employee_code' => $emp ? $emp->employee_code : null,
-                                'name' => $emp ? $emp->name : null,
-                                'mobile' => $emp ? $emp->mobile : null,
-                                'designation' => $deployment->designation ?? ($emp && $emp->designation ? $emp->designation->name : null),
-                            ];
-                        })->values()->all();
+                        ->get();
+
+                    foreach ($deployments as $deployment) {
+                        $emp = $deployment->employee;
+                        $designationName = $deployment->designation ?? ($emp && $emp->designation ? $emp->designation->name : null);
+                        $slug = $emp && $emp->designation ? $emp->designation->slug : null;
+
+                        $item = [
+                            'id' => $emp ? $emp->id : null,
+                            'employee_code' => $emp ? $emp->employee_code : null,
+                            'name' => $emp ? $emp->name : null,
+                            'mobile' => $emp ? $emp->mobile : null,
+                            'designation' => $designationName,
+                        ];
+
+                        if ($deployment->designation === 'Driver' || $deployment->designation === 'driver' || $slug === 'driver') {
+                            $drivers[] = $item;
+                        } else {
+                            $workforce[] = $item;
+                        }
+                    }
 
                     $data[] = [
                         'id' => $matchedShift->id,
@@ -521,8 +531,8 @@ class ShiftController extends Controller
                         'end_time' => $matchedShift->end_time,
                         'shift_plan_id' => $shiftPlan->id,
                         'site' => $siteData,
-                        'drivers' => $workforceDrivers,
-                        'workforce' => $workforceDrivers,
+                        'drivers' => $drivers,
+                        'workforce' => $workforce,
                         'machines' => $machines,
                     ];
                 }

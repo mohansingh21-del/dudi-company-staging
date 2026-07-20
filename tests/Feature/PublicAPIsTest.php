@@ -827,6 +827,42 @@ class PublicAPIsTest extends TestCase
             'deployed_by' => $this->adminUser->id,
         ]);
 
+        $workerRole = Role::create([
+            'name' => 'Worker',
+            'slug' => 'worker',
+            'is_active' => 1
+        ]);
+
+        $workerUser = User::create([
+            'email' => 'testworker@test.com',
+            'password' => bcrypt('password'),
+            'is_active' => 1
+        ]);
+
+        $workerRoleUser = RoleUser::create([
+            'user_id' => $workerUser->id,
+            'role_id' => $workerRole->id
+        ]);
+
+        $workerEmployee = Employee::create([
+            'employee_code' => 'EMP-WRK-111',
+            'name' => 'Worker Alice',
+            'joining_date' => '2026-01-01',
+            'designation_id' => $workerRole->id,
+            'is_active' => 1,
+            'role_user_id' => $workerRoleUser->id,
+            'mobile' => '9876543211'
+        ]);
+
+        \App\Models\ShiftWorkforceDeployment::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'employee_id' => $workerEmployee->id,
+            'relay_shift' => 'general',
+            'designation' => 'Worker',
+            'status' => 'active',
+            'deployed_by' => $this->adminUser->id,
+        ]);
+
         $response = $this->getJson("/api/v1/shifts/by-datetime?date=2026-06-27&time=10:15:00");
 
         $response->assertStatus(200);
@@ -851,11 +887,11 @@ class PublicAPIsTest extends TestCase
                 ],
                 'workforce' => [
                     [
-                        'id' => $driverEmployee->id,
-                        'employee_code' => 'EMP-DRV-999',
-                        'name' => 'Driver Bob',
-                        'mobile' => '9876543210',
-                        'designation' => 'Driver',
+                        'id' => $workerEmployee->id,
+                        'employee_code' => 'EMP-WRK-111',
+                        'name' => 'Worker Alice',
+                        'mobile' => '9876543211',
+                        'designation' => 'Worker',
                     ]
                 ]
             ]
