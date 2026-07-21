@@ -18,7 +18,6 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
     public function collection(Collection $rows)
     {
         foreach ($rows as $row) {
-///dd($rows->first());
             // skip empty rows
             if (empty($row['employee_code'])) {
                 continue;
@@ -63,7 +62,7 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
                 'father_name' => $row['father_name'] ?? null,
 
                 'dob' => !empty($row['dob'])
-                    ? Carbon::createFromFormat('d/m/Y', $row['dob'])
+                    ? $this->parseDate($row['dob'])
                     : null,
 
                 'gender' => $row['gender'] ?? null,
@@ -72,49 +71,40 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
                 'emergency_contact' => $row['emergency_contact'] ?? null,
 
                 'joining_date' => !empty($row['joining_date'])
-                    ? Carbon::createFromFormat('d/m/Y', $row['joining_date'])
+                    ? $this->parseDate($row['joining_date'])
                     : null,
 
-
-              
                 'department_id' => $department ? $department->id : null,
                 'designation_id' => $designation ? $designation->id : null,
 
-
-               
-              
                 'is_active' => (int) ($row['status'] ?? 1),
 
                 'relay_id' => $relay ? $relay->id : null,
             ]);
         }
     }
-      public function customValidationMessages()
-{
-    return [
 
-        '*.employee_code.required' =>
-            'Employee Code is required.',
+    public function customValidationMessages()
+    {
+        return [
 
-        '*.employee_code.unique' =>
-            'Employee Code already exists.',
+            '*.employee_code.required' =>
+                'Employee Code is required.',
 
-        '*.name.required' =>
-            'Employee Name is required.',
+            '*.employee_code.unique' =>
+                'Employee Code already exists.',
 
-        '*.joining_date.required' =>
-            'Joining Date is required.',
+            '*.name.required' =>
+                'Employee Name is required.',
 
-        '*.joining_date.date_format' =>
-            'Joining Date must be in d/m/Y format.',
+            '*.joining_date.required' =>
+                'Joining Date is required.',
 
-        '*.mobile.unique' =>
-            'Mobile number already exists.',
+            '*.mobile.unique' =>
+                'Mobile number already exists.',
+        ];
+    }
 
-       
-       
-    ];
-}
     /* ===============================
         VALIDATION RULES
     =============================== */
@@ -127,7 +117,7 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
 
             '*.father_name' => 'nullable|string|max:255',
 
-            '*.dob' => 'nullable|date_format:d/m/Y',
+            '*.dob' => 'nullable',
 
             '*.gender' => 'nullable|in:male,female,other',
 
@@ -137,9 +127,7 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
 
             '*.emergency_contact' => 'nullable|max:15',
 
-            '*.joining_date' => 'required|date_format:d/m/Y',
-
-
+            '*.joining_date' => 'required',
 
             '*.basic_salary' => 'nullable|numeric|min:0',
 
@@ -157,11 +145,60 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
 
             '*.mess_deduction_applicable' => 'nullable|boolean',
 
-            '*.status' => 'in:0,1',
+            '*.status' => 'nullable|in:0,1',
 
             '*.other_deduction_appliacble' => 'nullable|boolean',
 
             '*.other_deduction' => 'nullable|numeric|min:0',
         ];
     }
+
+    private function parseDate($value): ?Carbon
+    {
+        if (empty($value)) {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value)->startOfDay();
+        }
+
+        if (is_numeric($value)) {
+            return Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($value))->startOfDay();
+        }
+
+        $value = trim((string) $value);
+
+        $formats = [
+            'd/m/Y',
+            'd/m/Y H:i:s',
+            'd/m/Y H:i',
+            'Y-m-d',
+            'Y-m-d H:i:s',
+            'Y-m-d H:i',
+            'd-m-Y',
+            'd-m-Y H:i:s',
+            'd-m-Y H:i',
+            'm/d/Y',
+            'm/d/Y H:i:s',
+        ];
+
+        foreach ($formats as $format) {
+            try {
+                $parsed = Carbon::createFromFormat($format, $value);
+                if ($parsed !== false) {
+                    return $parsed->startOfDay();
+                }
+            } catch (\Throwable $ex) {
+                continue;
+            }
+        }
+
+        try {
+            return Carbon::parse($value)->startOfDay();
+        } catch (\Throwable $e) {
+            throw new \Exception("Invalid date format: {$value}");
+        }
+    }
 }
+

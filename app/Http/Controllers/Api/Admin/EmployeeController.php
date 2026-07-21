@@ -246,35 +246,14 @@ class EmployeeController extends Controller
                 'message' => 'Employees imported successfully'
             ]);
         } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
-        } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
 
-            $formattedErrors = [];
-
-            foreach ($e->errors() as $row => $messages) {
-
-                foreach ($messages as $message) {
-
-                    $formattedErrors[] = [
-                        'row' => str_replace('*.', '', $row),
-                        'message' => $message
-                    ];
-                }
-            }
-
-            return response()->json([
-                'status' => 422,
-                'message' => 'Excel validation failed.',
-                'errors' => $formattedErrors
-            ], 422);
-        } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
-
-            $errors = [];
+            $failures = [];
 
             foreach ($e->failures() as $failure) {
 
-                $errors[] = [
+                $failures[] = [
                     'row' => $failure->row(),
-                    'column' => $failure->attribute(),
+                    'column' => str_replace('*.', '', $failure->attribute()),
                     'message' => implode(', ', $failure->errors()),
                     'value' => $failure->values()[$failure->attribute()] ?? null,
                 ];
@@ -283,8 +262,27 @@ class EmployeeController extends Controller
             return response()->json([
                 'status' => 422,
                 'message' => 'Excel validation failed.',
+                'errors' => $failures
+            ], 422);
+
+        } catch (\Illuminate\Validation\ValidationException $e) {
+
+            $errors = [];
+
+            foreach ($e->errors() as $row => $messages) {
+
+                $errors[] = [
+                    'row' => str_replace('row_', '', $row),
+                    'message' => $messages[0]
+                ];
+            }
+
+            return response()->json([
+                'status' => 422,
+                'message' => 'Excel validation failed.',
                 'errors' => $errors
             ], 422);
+
         } catch (\Throwable $th) {
 
             return response()->json([

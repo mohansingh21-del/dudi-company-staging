@@ -19,21 +19,13 @@ class PenaltyImport implements ToCollection, WithHeadingRow, WithValidation
                 continue;
             }
 
-            $employee = Employee::where('employee_code', $row['employee_code'])->first();
+            $employee = Employee::where('employee_code', trim((string) $row['employee_code']))->first();
             if (!$employee) {
                 continue;
             }
 
             // Parse date: handle Excel serial format or standard formats
-            try {
-                if (is_numeric($row['penalty_date'])) {
-                    $parsedDate = Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($row['penalty_date']));
-                } else {
-                    $parsedDate = Carbon::parse($row['penalty_date']);
-                }
-            } catch (\Exception $e) {
-                $parsedDate = Carbon::now();
-            }
+            $parsedDate = $this->parseDate($row['penalty_date'] ?? null) ?? Carbon::now();
 
             Penalty::create([
                 'employee_id' => $employee->id,
@@ -43,6 +35,54 @@ class PenaltyImport implements ToCollection, WithHeadingRow, WithValidation
                 'reason' => $row['reason'],
                 'amount' => $row['amount'],
             ]);
+        }
+    }
+
+    private function parseDate($value): ?Carbon
+    {
+        if (empty($value)) {
+            return null;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value)->startOfDay();
+        }
+
+        if (is_numeric($value)) {
+            return Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($value))->startOfDay();
+        }
+
+        $value = trim((string) $value);
+
+        $formats = [
+            'd/m/Y',
+            'd/m/Y H:i:s',
+            'd/m/Y H:i',
+            'Y-m-d',
+            'Y-m-d H:i:s',
+            'Y-m-d H:i',
+            'd-m-Y',
+            'd-m-Y H:i:s',
+            'd-m-Y H:i',
+            'm/d/Y',
+            'm/d/Y H:i:s',
+        ];
+
+        foreach ($formats as $format) {
+            try {
+                $parsed = Carbon::createFromFormat($format, $value);
+                if ($parsed !== false) {
+                    return $parsed->startOfDay();
+                }
+            } catch (\Throwable $ex) {
+                continue;
+            }
+        }
+
+        try {
+            return Carbon::parse($value)->startOfDay();
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 
@@ -56,3 +96,4 @@ class PenaltyImport implements ToCollection, WithHeadingRow, WithValidation
         ];
     }
 }
+
