@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use Carbon\Carbon;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -16,18 +17,7 @@ class StoreIncidentRequest extends FormRequest
     {
         if ($this->filled('incident_date')) {
             try {
-                $value = $this->input('incident_date');
-                $date = null;
-
-                if (\Carbon\Carbon::hasFormat($value, 'Y-m-d H:i:s')) {
-                    $date = \Carbon\Carbon::createFromFormat('Y-m-d H:i:s', $value);
-                } elseif (\Carbon\Carbon::hasFormat($value, 'd/m/Y H:i:s')) {
-                    $date = \Carbon\Carbon::createFromFormat('d/m/Y H:i:s', $value);
-                } elseif (\Carbon\Carbon::hasFormat($value, 'd/m/Y')) {
-                    $date = \Carbon\Carbon::createFromFormat('d/m/Y', $value)->setTimeFromTimeString(now()->format('H:i:s'));
-                } elseif (\Carbon\Carbon::hasFormat($value, 'Y-m-d')) {
-                    $date = \Carbon\Carbon::createFromFormat('Y-m-d', $value)->setTimeFromTimeString(now()->format('H:i:s'));
-                }
+                $date = $this->normalizeIncidentDate($this->input('incident_date'));
 
                 if ($date) {
                     $this->merge([
@@ -36,6 +26,51 @@ class StoreIncidentRequest extends FormRequest
                 }
             } catch (\Throwable $e) {}
         }
+    }
+
+    protected function normalizeIncidentDate($value): ?Carbon
+    {
+        if (blank($value)) {
+            return null;
+        }
+
+        $formats = [
+            'Y-m-d H:i:s',
+            'Y-m-d\TH:i:sP',
+            'Y-m-d\TH:i:s',
+            'd/m/Y H:i:s',
+            'd/m/Y',
+            'Y-m-d',
+        ];
+
+        foreach ($formats as $format) {
+            if (Carbon::hasFormat($value, $format)) {
+                $date = Carbon::createFromFormat($format, $value);
+
+                if (in_array($format, ['d/m/Y', 'Y-m-d'], true)) {
+                    $date->setTimeFromTimeString(now()->format('H:i:s'));
+                }
+
+                return $date;
+            }
+        }
+
+        try {
+            return Carbon::parse($value);
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    protected function isFutureIncidentDate($value): bool
+    {
+        $date = $this->normalizeIncidentDate($value);
+
+        if (!$date) {
+            return false;
+        }
+
+        return $date->greaterThan(now()->setTimezone($date->getTimezone()));
     }
 
     public function rules()
@@ -49,9 +84,7 @@ class StoreIncidentRequest extends FormRequest
                 'date_format:Y-m-d H:i:s',
                 function ($attribute, $value, $fail) {
                     try {
-                        $date = \Carbon\Carbon::createFromFormat('Y-m-d H:i:s', $value);
-
-                        if ($date->isFuture()) {
+                        if ($this->isFutureIncidentDate($value)) {
                             $fail('Incident date cannot be a future date.');
                         }
                     } catch (\Throwable $e) {
