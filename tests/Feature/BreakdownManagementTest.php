@@ -1055,4 +1055,42 @@ class BreakdownManagementTest extends TestCase
             'downtime_minutes'    => 60,
         ]);
     }
+
+    public function test_breakdown_import_prevents_duplicate_entries()
+    {
+        $duplicateRow = [
+            'breakdown_date_time' => '2026-06-26 09:00:00',
+            'shift_name'          => 'Day Shift',
+            'employee_code'       => 'EMP_ADM',
+            'equipment_name'      => 'EX01-Excavator-CAT',
+            'breakdown_type'      => 'Mechanical',
+            'severity'            => 'HIGH',
+            'description'         => 'Hydraulic failure.',
+            'repair_start_time'   => '2026-06-26 09:00:00',
+        ];
+
+        // 1. Import first record successfully
+        $import1 = new \App\Imports\BreakdownImport();
+        $import1->collection(collect([$duplicateRow]));
+        $this->assertEquals(1, $import1->getSuccessCount());
+
+        // 2. Import same record again -> should fail with DB duplicate error
+        $import2 = new \App\Imports\BreakdownImport();
+        $import2->collection(collect([$duplicateRow]));
+        $this->assertEquals(0, $import2->getSuccessCount());
+        $this->assertCount(1, $import2->getErrors());
+        $this->assertStringContainsString("already exists in database", $import2->getErrors()[0]);
+
+        // 3. Import duplicate rows in same file -> second row should fail with in-file duplicate error
+        $fileWithInFileDuplicates = collect([
+            array_merge($duplicateRow, ['breakdown_date_time' => '2026-06-26 15:00:00']),
+            array_merge($duplicateRow, ['breakdown_date_time' => '2026-06-26 15:00:00']),
+        ]);
+
+        $import3 = new \App\Imports\BreakdownImport();
+        $import3->collection($fileWithInFileDuplicates);
+        $this->assertEquals(1, $import3->getSuccessCount());
+        $this->assertCount(1, $import3->getErrors());
+        $this->assertStringContainsString("Duplicate row found in the uploaded file", $import3->getErrors()[0]);
+    }
 }

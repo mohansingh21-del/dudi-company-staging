@@ -690,6 +690,92 @@ class WorkforceDeploymentTest extends TestCase
         $this->assertEquals(0, $stats2['borrowed_in_other_shift']);
     }
 
+    public function test_shift_plan_view_summary_matches_load_relay_stats()
+    {
+        $planningDate = '2026-06-23';
+
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee1->id,
+            'shift_id' => $this->shiftA->id,
+            'from_date' => $planningDate
+        ]);
+
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee2->id,
+            'shift_id' => $this->shiftA->id,
+            'from_date' => $planningDate
+        ]);
+
+        $employee4 = Employee::create([
+            'employee_code' => 'EMP-004',
+            'name' => 'Borrowed Operator',
+            'joining_date' => '2026-01-01',
+            'designation_id' => $this->employee1->designation_id,
+            'is_active' => 1,
+            'relay_shift' => 'relay_4'
+        ]);
+
+        EmployeeShiftAssignment::create([
+            'employee_id' => $employee4->id,
+            'shift_id' => $this->shiftB->id,
+            'from_date' => $planningDate
+        ]);
+
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shiftA->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'active',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-VIEW-STATS'
+        ]);
+
+        \App\Models\AttendanceProcessed::create([
+            'employee_id' => $this->employee1->id,
+            'date' => $planningDate,
+            'attendance_status' => 'present'
+        ]);
+
+        \App\Models\Leave::create([
+            'employee_id' => $this->employee2->id,
+            'leave_type_id' => null,
+            'from_date' => $planningDate,
+            'to_date' => $planningDate,
+            'status' => 'approved',
+            'reason' => 'Sick leave'
+        ]);
+
+        $loadRelayResponse = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/load-relay");
+        $loadRelayResponse->assertStatus(200);
+
+        $viewAfterLoadRelayResponse = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/view");
+        $viewAfterLoadRelayResponse->assertStatus(200);
+
+        $this->assertSame(
+            $loadRelayResponse->json('stats'),
+            $viewAfterLoadRelayResponse->json('data.summary')
+        );
+
+        $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce/borrow", [
+            'employee_ids' => [$employee4->id],
+            'borrowing_reason' => 'Need support'
+        ])->assertStatus(201);
+
+        $workforceResponse = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/workforce");
+        $viewResponse = $this->getJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/view");
+
+        $workforceResponse->assertStatus(200);
+        $viewResponse->assertStatus(200);
+
+        $this->assertSame(
+            $workforceResponse->json('stats'),
+            $viewResponse->json('data.summary')
+        );
+    }
+
     public function test_deployed_employee_who_goes_on_leave_is_excluded_from_present_and_list()
     {
         $planningDate = '2026-06-23';

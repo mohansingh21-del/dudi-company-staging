@@ -19,10 +19,12 @@ class BreakdownImport implements ToCollection, WithHeadingRow
 {
     protected $successCount = 0;
     protected $errors = [];
+    protected $processedKeys = [];
 
     public function collection(Collection $rows)
     {
         $year = date('Y');
+        $this->processedKeys = [];
 
         foreach ($rows as $index => $row) {
             $rowArray = is_array($row) ? $row : (is_object($row) && method_exists($row, 'toArray') ? $row->toArray() : (array)$row);
@@ -135,6 +137,10 @@ class BreakdownImport implements ToCollection, WithHeadingRow
                             $downtimeEnd = $endCarbon;
                         }
                     }
+
+                    if ($downtimeStart && $breakdownDateTime->format('H:i:s') === '00:00:00') {
+                        $breakdownDateTime = $downtimeStart->copy();
+                    }
                 } catch (\Throwable $e) {
                     $rowErrors[] = "Date parsing error - " . $e->getMessage();
                 }
@@ -165,6 +171,37 @@ class BreakdownImport implements ToCollection, WithHeadingRow
                         $rowErrors[] = "Machine '{$eqNameStr}' is not assigned in that shift plan.";
                     } else {
                         $allocationId = $allocation->id;
+                    }
+                }
+            }
+
+            // 4.5 Validate Duplicate Entries
+            if ($eqName && $shift && $breakdownDateTime && $breakdownType) {
+                $formattedDateTime = $breakdownDateTime->format('H:i:s') === '00:00:00' 
+                    ? $breakdownDateTime->format('Y-m-d') 
+                    : $breakdownDateTime->format('Y-m-d H:i:s');
+                
+                $uniqueKey = sprintf(
+                    '%d_%d_%s_%d',
+                    $eqName->id,
+                    $shift->id,
+                    $breakdownDateTime->format('Y-m-d H:i:s'),
+                    $breakdownType->id
+                );
+
+                if (in_array($uniqueKey, $this->processedKeys)) {
+                    $rowErrors[] = "Duplicate row found in the uploaded file for Equipment '{$eqNameStr}', Shift '{$shiftName}' at {$formattedDateTime}.";
+                } else {
+                    $this->processedKeys[] = $uniqueKey;
+
+                    $existingTicket = BreakdownTicket::where('equipment_name_id', $eqName->id)
+                        ->where('shift_id', $shift->id)
+                        ->where('breakdown_date_time', $breakdownDateTime->format('Y-m-d H:i:s'))
+                        ->where('breakdown_type_id', $breakdownType->id)
+                        ->first();
+
+                    if ($existingTicket) {
+                        $rowErrors[] = "Breakdown ticket '{$existingTicket->ticket_number}' already exists in database for Equipment '{$eqNameStr}' on Shift '{$shiftName}' at {$formattedDateTime}.";
                     }
                 }
             }

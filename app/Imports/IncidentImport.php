@@ -19,9 +19,11 @@ class IncidentImport implements ToCollection, WithHeadingRow
 {
     protected $successCount = 0;
     protected $errors = [];
+    protected $processedKeys = [];
 
     public function collection(Collection $rows)
     {
+        $this->processedKeys = [];
         foreach ($rows as $index => $row) {
             $rowArray = is_array($row) ? $row : (is_object($row) && method_exists($row, 'toArray') ? $row->toArray() : (array)$row);
             $rowNum = $index + 2; // +1 for 0-based index offset, +1 for heading row
@@ -167,6 +169,37 @@ class IncidentImport implements ToCollection, WithHeadingRow
 
                     if (!$allocated) {
                         $rowErrors[] = "Machine '{$eqNameStr}' is not assigned to the shift plan for date " . ($incidentDate ? $incidentDate->format('d/m/Y') : $dateStr) . ", shift '{$shiftName}', and site '{$siteName}'.";
+                    }
+                }
+            }
+
+            // 4.5 Validate Duplicate Entries
+            if ($equipmentName && $shift && $incidentType && $incidentDate) {
+                $formattedDateTime = $incidentDate->format('H:i:s') === '00:00:00' 
+                    ? $incidentDate->format('Y-m-d') 
+                    : $incidentDate->format('Y-m-d H:i:s');
+
+                $uniqueKey = sprintf(
+                    '%d_%d_%d_%s',
+                    $equipmentName->id,
+                    $shift->id,
+                    $incidentType->id,
+                    $incidentDate->format('Y-m-d H:i:s')
+                );
+
+                if (in_array($uniqueKey, $this->processedKeys)) {
+                    $rowErrors[] = "Duplicate row found in the uploaded file for Machine '{$eqNameStr}', Shift '{$shiftName}' at {$formattedDateTime}.";
+                } else {
+                    $this->processedKeys[] = $uniqueKey;
+
+                    $existingIncident = Incident::where('equipment_name_id', $equipmentName->id)
+                        ->where('shift_id', $shift->id)
+                        ->where('incident_type_id', $incidentType->id)
+                        ->where('incident_date', $incidentDate->format('Y-m-d H:i:s'))
+                        ->first();
+
+                    if ($existingIncident) {
+                        $rowErrors[] = "Incident '{$existingIncident->incident_no}' already exists in database for Machine '{$eqNameStr}' on Shift '{$shiftName}' at {$formattedDateTime}.";
                     }
                 }
             }

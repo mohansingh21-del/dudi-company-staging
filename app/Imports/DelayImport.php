@@ -19,10 +19,12 @@ class DelayImport implements ToCollection, WithHeadingRow
 {
     protected $successCount = 0;
     protected $errors = [];
+    protected $processedKeys = [];
 
     public function collection(Collection $rows)
     {
         $year = date('Y');
+        $this->processedKeys = [];
 
         foreach ($rows as $index => $row) {
             $rowArray = is_array($row) ? $row : (is_object($row) && method_exists($row, 'toArray') ? $row->toArray() : (array)$row);
@@ -191,6 +193,40 @@ class DelayImport implements ToCollection, WithHeadingRow
                     }
                 } catch (\Throwable $e) {
                     $rowErrors[] = "Invalid time format.";
+                }
+            }
+
+            // 9.5 Validate Duplicate Entries
+            if ($shiftPlan && $delayCategory && $start) {
+                $startTimeStrFormatted = $start->format('H:i:s');
+                $eqIdStr = $eqName ? (string) $eqName->id : 'none';
+                
+                $uniqueKey = sprintf(
+                    '%d_%d_%s_%s',
+                    $shiftPlan->id,
+                    $delayCategory->id,
+                    $startTimeStrFormatted,
+                    $eqIdStr
+                );
+
+                if (in_array($uniqueKey, $this->processedKeys)) {
+                    $rowErrors[] = "Duplicate row found in the uploaded file for Category '{$categoryStr}', Shift '{$shiftName}' at start time {$startTimeStrFormatted}.";
+                } else {
+                    $this->processedKeys[] = $uniqueKey;
+
+                    $query = Delay::where('shift_plan_id', $shiftPlan->id)
+                        ->where('delay_category_id', $delayCategory->id)
+                        ->where('start_time', $startTimeStrFormatted);
+
+                    if ($eqName) {
+                        $query->where('equipment_name_id', $eqName->id);
+                    }
+
+                    $existingDelay = $query->first();
+
+                    if ($existingDelay) {
+                        $rowErrors[] = "Delay entry '{$existingDelay->delay_ref_no}' already exists in database for Category '{$categoryStr}' on Shift '{$shiftName}' at start time {$startTimeStrFormatted}.";
+                    }
                 }
             }
 

@@ -425,55 +425,9 @@ class ShiftPlanService
             ];
         })->values()->toArray();
 
-        // ── Summary Stats ─────────────────────────────────────────
-        $shiftEmployeeIds = \App\Models\Employee::where('is_active', true)
-            ->get()
-            ->filter(function ($emp) use ($shiftPlan, $planningDate) {
-                return $emp->getShiftIdForDate($planningDate) == $shiftPlan->shift_id;
-            })
-            ->pluck('id')
-            ->toArray();
-
-        $attendanceRecords = \App\Models\AttendanceProcessed::whereDate('date', $planningDate)->get();
-        $hasAttendanceRecords = $attendanceRecords->isNotEmpty();
-
-        $plannedCount = count($shiftEmployeeIds);
-        $onLeaveCount = count(array_intersect($shiftEmployeeIds, $onLeaveEmployeeIds));
-
-        if ($hasAttendanceRecords) {
-            $presentEmployeeIds = $attendanceRecords
-                ->whereIn('attendance_status', ['present', 'half_day'])
-                ->pluck('employee_id')
-                ->toArray();
-
-            $presentCount = \App\Models\ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlan->id)
-                ->active()
-                ->regular()
-                ->whereIn('employee_id', $presentEmployeeIds)
-                ->whereNotIn('employee_id', $excludeEmployeeIds)
-                ->count();
-        } else {
-            $presentCount = 0;
-        }
-
-        $absentCount = $attendanceRecords
-            ->whereIn('employee_id', $shiftEmployeeIds)
-            ->where('attendance_status', 'absent')
-            ->count();
-
-        $borrowedCount = \App\Models\ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlan->id)
-            ->active()
-            ->borrowed()
-            ->whereNotIn('employee_id', $excludeEmployeeIds)
-            ->count();
-
-        $summary = [
-            'planned' => $plannedCount,
-            'present' => $presentCount,
-            'leave' => $onLeaveCount,
-            'absent' => $absentCount,
-            'borrowed' => $borrowedCount,
-        ];
+        // Keep summary counts aligned with the workforce load/list APIs.
+        $workforceListResult = app(WorkforceDeploymentService::class)->getWorkforceList($shiftPlan->id);
+        $summary = $workforceListResult['stats'];
 
         return [
             'status' => 200,

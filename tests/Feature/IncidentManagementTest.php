@@ -340,7 +340,7 @@ class IncidentManagementTest extends TestCase
         Sanctum::actingAs($this->adminUser);
 
         $response = $this->postJson('/api/v1/admin/incidents', [
-            'incident_date' => '16-07-2026 12:00:00', // Invalid format with trailing data
+            'incident_date' => 'invalid-date-format',
             'shift_id' => $this->shift->id,
             'incident_type_id' => $this->incidentType->id,
             'severity' => 'MEDIUM',

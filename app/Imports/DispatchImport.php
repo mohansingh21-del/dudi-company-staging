@@ -21,10 +21,12 @@ class DispatchImport implements ToCollection, WithHeadingRow
 {
     protected $successCount = 0;
     protected $errors = [];
+    protected $processedKeys = [];
 
     public function collection(Collection $rows)
     {
         $dispatchService = resolve(DispatchTripService::class);
+        $this->processedKeys = [];
 
         foreach ($rows as $index => $row) {
             $rowArray = is_array($row) ? $row : (is_object($row) && method_exists($row, 'toArray') ? $row->toArray() : (array)$row);
@@ -284,6 +286,37 @@ class DispatchImport implements ToCollection, WithHeadingRow
                     
                     if (Carbon::parse($resolvedEnd)->lte(Carbon::parse($resolvedStart))) {
                         $rowErrors[] = "The end time must be after the start time.";
+                    }
+                }
+            }
+
+            // 11.5 Validate Duplicate Entries
+            if ($shiftPlan && $dumper && $loadingPoint && $dumpingPoint && $startTimeCarbon) {
+                $resolvedStart = DispatchTripService::resolveDateTimeFromTime($startTimeCarbon->format('H:i:s'), $shiftPlan);
+                $startTimeStrFormatted = $startTimeCarbon->format('H:i:s');
+                $uniqueKey = sprintf(
+                    '%d_%d_%d_%d_%s',
+                    $shiftPlan->id,
+                    $dumper->id,
+                    $loadingPoint->id,
+                    $dumpingPoint->id,
+                    $resolvedStart
+                );
+
+                if (in_array($uniqueKey, $this->processedKeys)) {
+                    $rowErrors[] = "Duplicate row found in the uploaded file for Dumper '{$dumperName}', Shift '{$shiftName}' at start time {$startTimeStrFormatted}.";
+                } else {
+                    $this->processedKeys[] = $uniqueKey;
+
+                    $existingTrip = DispatchTrip::where('shift_plan_id', $shiftPlan->id)
+                        ->where('dumper_equipment_id', $dumper->id)
+                        ->where('loading_point_id', $loadingPoint->id)
+                        ->where('dumping_point_id', $dumpingPoint->id)
+                        ->where('start_time', $resolvedStart)
+                        ->first();
+
+                    if ($existingTrip) {
+                        $rowErrors[] = "Dispatch trip '{$existingTrip->trip_reference_no}' already exists in database for Dumper '{$dumperName}' on Shift '{$shiftName}' at start time {$startTimeStrFormatted}.";
                     }
                 }
             }

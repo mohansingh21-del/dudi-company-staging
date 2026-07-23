@@ -19,10 +19,12 @@ class FuelImport implements ToCollection, WithHeadingRow
 {
     protected $successCount = 0;
     protected $errors = [];
+    protected $processedKeys = [];
 
     public function collection(Collection $rows)
     {
         $fuelService = resolve(FuelService::class);
+        $this->processedKeys = [];
 
         foreach ($rows as $index => $row) {
             $rowArray = is_array($row) ? $row : (is_object($row) && method_exists($row, 'toArray') ? $row->toArray() : (array) $row);
@@ -218,6 +220,33 @@ class FuelImport implements ToCollection, WithHeadingRow
                 $normalizedSource = strtolower(str_replace(' ', '_', $fuelSourceStr));
                 if (!in_array($normalizedSource, ['fuel_tanker', 'fuel_station', 'mobile_refueling_unit'])) {
                     $rowErrors[] = "Invalid Fuel Source. Must be fuel_tanker, fuel_station, or mobile_refueling_unit.";
+                }
+            }
+
+            // 12. Validate Duplicate Entries
+            if ($equipmentName && $shift && $shiftDate) {
+                $formattedDate = $shiftDate->toDateString();
+                $uniqueKey = sprintf(
+                    '%d_%d_%s',
+                    $equipmentName->id,
+                    $shift->id,
+                    $formattedDate
+                );
+
+                if (in_array($uniqueKey, $this->processedKeys)) {
+                    $rowErrors[] = "Duplicate row found in the uploaded file for Equipment '{$eqNameStr}', Shift '{$shiftName}' on date {$formattedDate}.";
+                } else {
+                    $this->processedKeys[] = $uniqueKey;
+
+                    $existingEntry = FuelEntry::where('equipment_name_id', $equipmentName->id)
+                        ->where('shift_id', $shift->id)
+                        ->where('fuel_log_date', $formattedDate)
+                        ->where('status', '!=', 'cancelled')
+                        ->first();
+
+                    if ($existingEntry) {
+                        $rowErrors[] = "Fuel entry already exists in database for Equipment '{$eqNameStr}' on Shift '{$shiftName}' on date {$formattedDate}.";
+                    }
                 }
             }
 

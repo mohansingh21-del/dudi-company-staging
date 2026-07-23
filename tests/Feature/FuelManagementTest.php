@@ -1335,4 +1335,45 @@ class FuelManagementTest extends TestCase
         $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Shift plan is not active or published.')));
         $this->assertTrue(collect($errors)->contains(fn($e) => str_contains($e, 'Closing fuel cannot be greater than opening fuel + fuel issued.')));
     }
+
+    public function test_fuel_import_prevents_duplicate_entries()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $row = [
+            'shift_date'          => '2026-06-27',
+            'shift_name'          => 'Day Shift',
+            'equipment_name'      => 'EX01-Excavator-CAT',
+            'operator_code'       => '',
+            'fuel_source'         => 'Fuel Tanker',
+            'opening_fuel'        => '100.00',
+            'fuel_issued'         => '150.00',
+            'closing_fuel'        => '80.00',
+            'hours_meter_reading' => '10.5',
+            'kilometer_reading'   => '150.0',
+            'remarks'             => 'Refuel duplicate test',
+        ];
+
+        // 1. First import succeeds
+        $import1 = new \App\Imports\FuelImport();
+        $import1->collection(collect([$row]));
+        $this->assertEquals(1, $import1->getSuccessCount());
+
+        // 2. Re-importing same record fails with database duplicate error
+        $import2 = new \App\Imports\FuelImport();
+        $import2->collection(collect([$row]));
+        $this->assertEquals(0, $import2->getSuccessCount());
+        $this->assertCount(1, $import2->getErrors());
+        $this->assertStringContainsString("Fuel entry already exists in database", $import2->getErrors()[0]);
+
+        // 3. Batch with in-file duplicates fails for 2nd row
+        $import3 = new \App\Imports\FuelImport();
+        $import3->collection(collect([
+            array_merge($row, ['opening_fuel' => '200.00']),
+            array_merge($row, ['opening_fuel' => '200.00']),
+        ]));
+        $this->assertEquals(0, $import3->getSuccessCount());
+        $this->assertGreaterThan(0, count($import3->getErrors()));
+        $this->assertTrue(collect($import3->getErrors())->contains(fn($e) => str_contains($e, 'Duplicate row found in the uploaded file') || str_contains($e, 'already exists in database')));
+    }
 }
