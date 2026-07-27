@@ -492,4 +492,84 @@ class InventoryController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Get active products that can still be deducted from inventory.
+     *
+     * "Available" means left_quantity is above min_stock, matching the rule
+     * InventoryStockService applies on deduction. A product sitting exactly at
+     * min_stock has stock on the shelf but cannot be issued, so it is excluded.
+     */
+    public function getAvailableProducts(Request $request)
+    {
+        try {
+            $query = Product::where('is_active', 1)
+                ->whereHas('inventory', function ($q) {
+                    $q->whereColumn('inventories.left_quantity', '>', 'products.min_stock');
+                })
+                ->with(['inventory', 'subCategory.category']);
+
+            // Optional Search on product / sub category / category name
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'LIKE', "%{$search}%")
+                        ->orWhereHas('subCategory', function ($q2) use ($search) {
+                            $q2->where('name', 'LIKE', "%{$search}%")
+                                ->orWhereHas('category', function ($q3) use ($search) {
+                                    $q3->where('name', 'LIKE', "%{$search}%");
+                                });
+                        });
+                });
+            }
+
+            $query->orderBy('name', 'asc');
+
+            $format = function ($product) {
+                $leftQuantity = (float) optional($product->inventory)->left_quantity;
+                $minStock = (float) $product->min_stock;
+
+                return [
+                    'product_id'         => $product->id,
+                    'name'               => $product->name,
+                    'sub_category_name'  => optional($product->subCategory)->name,
+                    'category_name'      => optional(optional($product->subCategory)->category)->name,
+                    'left_quantity'      => $leftQuantity,
+                    'min_stock'          => $minStock,
+                    'available_quantity' => $leftQuantity - $minStock,
+                ];
+            };
+
+            if ($request->filled('limit')) {
+                $products = $query->paginate($request->limit);
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Available products fetched successfully',
+                    'data' => collect($products->items())->map($format)->values()->toArray(),
+                    'pagination' => [
+                        'current_page' => $products->currentPage(),
+                        'last_page' => $products->lastPage(),
+                        'per_page' => $products->perPage(),
+                        'total' => $products->total(),
+                        'from' => $products->firstItem(),
+                        'to' => $products->lastItem(),
+                    ]
+                ]);
+            }
+
+            $products = $query->get();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Available products fetched successfully',
+                'data' => $products->map($format)->values()->toArray()
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
 }

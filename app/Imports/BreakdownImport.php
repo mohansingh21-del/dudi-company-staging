@@ -43,9 +43,12 @@ class BreakdownImport implements ToCollection, WithHeadingRow
             $typeStr = isset($rowArray['breakdown_type']) ? trim((string)$rowArray['breakdown_type']) : '';
             $severity = isset($rowArray['severity']) ? strtoupper(trim((string)$rowArray['severity'])) : '';
             $description = isset($rowArray['description']) ? trim((string)$rowArray['description']) : '';
-            $downtimeStartStr = isset($rowArray['repair_start_time']) ? trim((string)$rowArray['repair_start_time']) : (isset($rowArray['downtime_start']) ? trim((string)$rowArray['downtime_start']) : '');
-            $downtimeEndStr = isset($rowArray['repair_end_time']) ? trim((string)$rowArray['repair_end_time']) : (isset($rowArray['downtime_end']) ? trim((string)$rowArray['downtime_end']) : '');
             $resolutionNotes = isset($rowArray['action_taken']) ? trim((string)$rowArray['action_taken']) : (isset($rowArray['resolution_notes']) ? trim((string)$rowArray['resolution_notes']) : '');
+
+            // repair_start_time / repair_end_time (and their downtime_* aliases) are
+            // accepted in the sheet for backwards compatibility but deliberately
+            // ignored: downtime belongs to the service record now. They are neither
+            // validated nor imported, so old spreadsheets upload without error.
 
             $rowErrors = [];
 
@@ -67,14 +70,6 @@ class BreakdownImport implements ToCollection, WithHeadingRow
             }
             if ($severity === '') {
                 $rowErrors[] = "Severity is required.";
-            }
-
-            // Validate that times are not 00:00:00 or 00:00
-            if ($downtimeStartStr !== '' && $this->isZeroTime($downtimeStartStr)) {
-                $rowErrors[] = "Repair Start Time cannot be 00:00:00 or 00:00.";
-            }
-            if ($downtimeEndStr !== '' && $this->isZeroTime($downtimeEndStr)) {
-                $rowErrors[] = "Repair End Time cannot be 00:00:00 or 00:00.";
             }
 
             // 2. Resolve entities
@@ -116,42 +111,12 @@ class BreakdownImport implements ToCollection, WithHeadingRow
 
             // 3. Parse and validate dates
             $breakdownDateTime = null;
-            $downtimeStart = null;
-            $downtimeEnd = null;
             if ($dateTimeStr !== '') {
                 try {
                     $breakdownDateTime = $this->parseDate($dateTimeStr);
-                    if ($downtimeStartStr !== '') {
-                        $startCarbon = $this->parseTime($downtimeStartStr);
-                        if ($startCarbon->year < 2000 || !$this->hasDateSeparator($downtimeStartStr)) {
-                            $downtimeStart = Carbon::parse($breakdownDateTime->toDateString() . ' ' . $startCarbon->format('H:i:s'));
-                        } else {
-                            $downtimeStart = $startCarbon;
-                        }
-                    }
-                    if ($downtimeEndStr !== '') {
-                        $endCarbon = $this->parseTime($downtimeEndStr);
-                        if ($endCarbon->year < 2000 || !$this->hasDateSeparator($downtimeEndStr)) {
-                            $downtimeEnd = Carbon::parse($breakdownDateTime->toDateString() . ' ' . $endCarbon->format('H:i:s'));
-                        } else {
-                            $downtimeEnd = $endCarbon;
-                        }
-                    }
-
-                    if ($downtimeStart && $breakdownDateTime->format('H:i:s') === '00:00:00') {
-                        $breakdownDateTime = $downtimeStart->copy();
-                    }
                 } catch (\Throwable $e) {
                     $rowErrors[] = "Date parsing error - " . $e->getMessage();
                 }
-            }
-
-            if ($downtimeEnd && !$downtimeStart) {
-                $rowErrors[] = "Repair Start Time is required when Repair End Time is provided.";
-            }
-
-            if ($downtimeStart && $downtimeEnd && $downtimeEnd->lte($downtimeStart)) {
-                $rowErrors[] = "Repair End Time must be after Repair Start Time.";
             }
 
             // 4. Resolve equipment allocation
@@ -216,7 +181,7 @@ class BreakdownImport implements ToCollection, WithHeadingRow
 
             // 5. Database transaction to generate ticket number sequence and insert record
             try {
-                DB::transaction(function () use ($shift, $employee, $eqName, $breakdownType, $severity, $description, $breakdownDateTime, $downtimeStart, $downtimeEnd, $resolutionNotes, $allocationId, $year) {
+                DB::transaction(function () use ($shift, $employee, $eqName, $breakdownType, $severity, $description, $breakdownDateTime, $resolutionNotes, $allocationId, $year) {
                     $lastTicket = BreakdownTicket::whereYear('created_at', $year)
                         ->orderBy('id', 'DESC')
                         ->first();
@@ -241,19 +206,11 @@ class BreakdownImport implements ToCollection, WithHeadingRow
                         'severity'                => $severity,
                         'description'             => ($description !== '') ? $description : 'Imported breakdown record.',
                         'breakdown_date_time'     => $breakdownDateTime,
-                        'downtime_start'          => $downtimeStart,
+                        'resolution_notes'        => ($resolutionNotes !== '') ? $resolutionNotes : null,
+                        // Imported tickets are always raised open. They close when a
+                        // service record records their downtime window.
+                        'status'                  => 'open',
                     ];
-
-                    if ($downtimeEnd) {
-                        $data['downtime_end']     = $downtimeEnd;
-                        $data['downtime_minutes'] = $downtimeEnd->diffInMinutes($downtimeStart);
-                        $data['status']           = 'closed';
-                        $data['resolved_by']      = auth()->id() ?? $employee->id;
-                        $data['resolved_at']      = now();
-                        $data['resolution_notes'] = ($resolutionNotes !== '') ? $resolutionNotes : null;
-                    } else {
-                        $data['status']           = 'open';
-                    }
 
                     BreakdownTicket::create($data);
                     $this->successCount++;
@@ -262,54 +219,6 @@ class BreakdownImport implements ToCollection, WithHeadingRow
                 $this->errors[] = "Row {$rowNum}: Failed to save record - " . $th->getMessage();
             }
         }
-    }
-
-    private function isZeroTime(string $timeStr): bool
-    {
-        if (empty($timeStr)) {
-            return false;
-        }
-        try {
-            $timeCarbon = $this->parseTime($timeStr);
-            if (!$timeCarbon) {
-                return false;
-            }
-            return $timeCarbon->format('H:i:s') === '00:00:00';
-        } catch (\Throwable $e) {
-            return false;
-        }
-    }
-
-    private function parseTime($value)
-    {
-        if (empty($value)) {
-            return null;
-        }
-        if (is_numeric($value)) {
-            // Excel time is a fraction of a 24-hour day (e.g. 0.5 = 12:00 PM)
-            return Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($value));
-        }
-        
-        $value = trim($value);
-        try {
-            return Carbon::parse($value);
-        } catch (\Throwable $e) {
-            // Try different standard formats
-            $formats = ['H:i:s', 'H:i', 'h:i:s A', 'h:i A', 'g:i A', 'g:i:s A'];
-            foreach ($formats as $format) {
-                try {
-                    return Carbon::createFromFormat($format, $value);
-                } catch (\Throwable $ex) {
-                    continue;
-                }
-            }
-            throw new \Exception("Could not parse time: {$value}");
-        }
-    }
-
-    private function hasDateSeparator(string $str): bool
-    {
-        return strpos($str, '-') !== false || strpos($str, '/') !== false;
     }
 
     private function parseDate($value)
@@ -322,19 +231,35 @@ class BreakdownImport implements ToCollection, WithHeadingRow
         }
 
         $value = trim($value);
+        $parsed = null;
+
         try {
-            return Carbon::parse($value);
+            $parsed = Carbon::parse($value);
         } catch (\Throwable $e) {
             $formats = ['d/m/Y H:i:s', 'd/m/Y H:i', 'd/m/Y', 'Y-m-d H:i:s', 'Y-m-d H:i', 'Y-m-d'];
             foreach ($formats as $format) {
                 try {
-                    return Carbon::createFromFormat($format, $value);
+                    $parsed = Carbon::createFromFormat($format, $value);
+                    break;
                 } catch (\Throwable $ex) {
                     continue;
                 }
             }
+        }
+
+        if (!$parsed) {
             throw new \Exception("Could not parse date: {$value}");
         }
+
+        // Both Carbon::parse and createFromFormat fill the *current* time when the
+        // value carries only a date, which makes the same file import to a
+        // different breakdown_date_time on every run and defeats the duplicate
+        // check. A date without a time means midnight.
+        if (!preg_match('/\d{1,2}:\d{2}/', $value)) {
+            $parsed->startOfDay();
+        }
+
+        return $parsed;
     }
 
     public function getSuccessCount()

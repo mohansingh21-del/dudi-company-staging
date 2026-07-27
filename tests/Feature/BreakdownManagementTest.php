@@ -196,7 +196,7 @@ class BreakdownManagementTest extends TestCase
         ]);
     }
 
-    public function test_can_update_breakdown_ticket_status_to_closed()
+    public function test_cannot_update_breakdown_ticket_status_to_closed()
     {
         Sanctum::actingAs($this->adminUser);
 
@@ -211,29 +211,20 @@ class BreakdownManagementTest extends TestCase
             'severity'            => 'MEDIUM',
             'description'         => 'Testing update',
             'status'              => 'open',
-            'downtime_start'      => '2026-06-26 10:00:00',
         ]);
 
-        $payload = [
+        // Closure belongs to the service record now.
+        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", [
             'status'           => 'closed',
-            'downtime_end'     => '2026-06-26 12:30:00',
             'resolution_notes' => 'Fixed the leak.',
-        ];
+        ]);
 
-        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
-
-        $response->assertStatus(200)
-            ->assertJsonFragment([
-                'status'           => 'closed',
-                'downtime_minutes' => 150, // 10:00 to 12:30 is 150 minutes
-                'resolution_notes' => 'Fixed the leak.',
-            ]);
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors('status');
 
         $this->assertDatabaseHas('breakdown_tickets', [
-            'id'               => $ticket->id,
-            'status'           => 'closed',
-            'downtime_minutes' => 150,
-            'resolved_by'      => $this->adminUser->id,
+            'id'     => $ticket->id,
+            'status' => 'open',
         ]);
     }
 
@@ -252,34 +243,30 @@ class BreakdownManagementTest extends TestCase
             'severity'            => 'MEDIUM',
             'description'         => 'Testing update via POST',
             'status'              => 'open',
-            'downtime_start'      => '2026-06-26 10:00:00',
         ]);
 
         $payload = [
             '_method'          => 'PUT',
-            'status'           => 'closed',
-            'downtime_end'     => '2026-06-26 12:30:00',
-            'resolution_notes' => 'Fixed the leak via POST.',
+            'status'           => 'in_progress',
+            'severity'         => 'HIGH',
+            'resolution_notes' => 'Mechanic dispatched.',
         ];
 
         $response = $this->postJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
 
         $response->assertStatus(200)
             ->assertJsonFragment([
-                'status'           => 'closed',
-                'downtime_minutes' => 150,
-                'resolution_notes' => 'Fixed the leak via POST.',
+                'status'   => 'in_progress',
+                'severity' => 'HIGH',
             ]);
 
         $this->assertDatabaseHas('breakdown_tickets', [
-            'id'               => $ticket->id,
-            'status'           => 'closed',
-            'downtime_minutes' => 150,
-            'resolved_by'      => $this->adminUser->id,
+            'id'     => $ticket->id,
+            'status' => 'in_progress',
         ]);
     }
 
-    public function test_can_update_breakdown_ticket_by_providing_only_downtime_end()
+    public function test_downtime_fields_are_ignored_on_breakdown_update()
     {
         Sanctum::actingAs($this->adminUser);
 
@@ -292,30 +279,25 @@ class BreakdownManagementTest extends TestCase
             'reported_by'         => $this->adminUser->id,
             'breakdown_type_id'   => 1,
             'severity'            => 'MEDIUM',
-            'description'         => 'Testing update with only downtime_end',
+            'description'         => 'Testing stripped downtime input',
             'status'              => 'open',
-            'downtime_start'      => '2026-06-26 10:00:00',
         ]);
 
-        $payload = [
+        // A client still sending the old downtime fields must not close the ticket.
+        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", [
+            'downtime_start'   => '2026-06-26 10:00:00',
             'downtime_end'     => '2026-06-26 12:30:00',
-            'resolution_notes' => 'Fixed the leak with only downtime_end.',
-        ];
+            'resolution_notes' => 'Fixed the leak.',
+        ]);
 
-        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
-
-        $response->assertStatus(200)
-            ->assertJsonFragment([
-                'status'           => 'closed',
-                'downtime_minutes' => 150,
-                'resolution_notes' => 'Fixed the leak with only downtime_end.',
-            ]);
+        $response->assertStatus(200);
 
         $this->assertDatabaseHas('breakdown_tickets', [
             'id'               => $ticket->id,
-            'status'           => 'closed',
-            'downtime_minutes' => 150,
-            'resolved_by'      => $this->adminUser->id,
+            'status'           => 'open',
+            'downtime_start'   => null,
+            'downtime_end'     => null,
+            'downtime_minutes' => null,
         ]);
     }
 
@@ -350,36 +332,6 @@ class BreakdownManagementTest extends TestCase
                 'status'  => 403,
                 'message' => 'Closed incidents cannot be edited.',
             ]);
-    }
-
-    public function test_validation_downtime_end_after_downtime_start()
-    {
-        Sanctum::actingAs($this->adminUser);
-
-        $ticket = BreakdownTicket::create([
-            'ticket_number'       => 'BRK-2026-00003',
-            'shift_id'            => $this->shift->id,
-            'equipment_id'        => $this->equipment->id,
-            'equipment_name_id'   => $this->equipmentName->id,
-            'breakdown_date_time' => '2026-06-26 12:00:00',
-            'reported_by'         => $this->adminUser->id,
-            'breakdown_type_id'   => 1,
-            'severity'            => 'MEDIUM',
-            'description'         => 'Testing end validation',
-            'status'              => 'open',
-            'downtime_start'      => '2026-06-26 10:00:00',
-        ]);
-
-        $payload = [
-            'status'           => 'closed',
-            'downtime_end'     => '2026-06-26 09:30:00', // before start
-            'resolution_notes' => 'Invalid timing.',
-        ];
-
-        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
-
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors('downtime_end');
     }
 
     public function test_can_list_and_filter_breakdowns_with_dashboard_kpis()
@@ -466,10 +418,12 @@ class BreakdownManagementTest extends TestCase
             ]);
     }
 
-    public function test_can_create_already_resolved_breakdown_ticket()
+    public function test_breakdown_ticket_is_always_created_open()
     {
         Sanctum::actingAs($this->adminUser);
 
+        // Downtime sent at creation time is ignored: a ticket is raised open and
+        // is closed only by completing its service record.
         $payload = [
             'shift_id'            => $this->shift->id,
             'breakdown_date_time' => '2026-06-26 12:00:00',
@@ -480,23 +434,21 @@ class BreakdownManagementTest extends TestCase
             'severity'            => 'CRITICAL',
             'description'         => 'Hydraulic hose leak.',
             'downtime_start'      => '2026-06-26 10:00:00',
-            'downtime_end'        => '2026-06-26 11:30:00', // 90 minutes
-            'resolution_notes'    => 'Replaced the hose.',
+            'downtime_end'        => '2026-06-26 11:30:00',
         ];
 
         $response = $this->postJson('/api/v1/admin/maintenance/breakdowns', $payload);
 
         $response->assertStatus(201)
-            ->assertJsonFragment([
-                'status'           => 'closed',
-                'downtime_minutes' => 90,
-                'resolution_notes' => 'Replaced the hose.',
-            ]);
+            ->assertJsonPath('data.status', 'open');
 
         $this->assertDatabaseHas('breakdown_tickets', [
-            'status'           => 'closed',
-            'downtime_minutes' => 90,
-            'resolved_by'      => $this->adminUser->id,
+            'ticket_number'    => $response->json('data.ticket_number'),
+            'status'           => 'open',
+            'downtime_start'   => null,
+            'downtime_end'     => null,
+            'downtime_minutes' => null,
+            'resolved_by'      => null,
         ]);
     }
 
@@ -511,8 +463,7 @@ class BreakdownManagementTest extends TestCase
     {
         Sanctum::actingAs($this->adminUser);
         $payload = [
-            'status'           => 'closed',
-            'downtime_end'     => '2026-06-26 12:30:00',
+            'status'           => 'in_progress',
             'resolution_notes' => 'Fixed the leak.',
         ];
         $response = $this->putJson('/api/v1/admin/maintenance/breakdowns/undefined', $payload);
@@ -546,37 +497,7 @@ class BreakdownManagementTest extends TestCase
         ]);
     }
 
-    public function test_cannot_close_ticket_without_downtime_start_if_not_provided()
-    {
-        Sanctum::actingAs($this->adminUser);
-
-        $ticket = BreakdownTicket::create([
-            'ticket_number'       => 'BRK-2026-00021',
-            'shift_id'            => $this->shift->id,
-            'equipment_id'        => $this->equipment->id,
-            'equipment_name_id'   => $this->equipmentName->id,
-            'breakdown_date_time' => '2026-06-26 12:00:00',
-            'reported_by'         => $this->adminUser->id,
-            'breakdown_type_id'   => 1,
-            'severity'            => 'MEDIUM',
-            'description'         => 'Open ticket without downtime start',
-            'status'              => 'open',
-            'downtime_start'      => null,
-        ]);
-
-        $payload = [
-            'status'           => 'closed',
-            'downtime_end'     => '2026-06-26 12:30:00',
-            'resolution_notes' => 'Fixed the leak.',
-        ];
-
-        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
-
-        $response->assertStatus(422)
-            ->assertJsonValidationErrors(['downtime_start']);
-    }
-
-    public function test_can_close_ticket_without_downtime_start_by_providing_it_during_update()
+    public function test_ticket_is_closed_by_completing_its_service_record()
     {
         Sanctum::actingAs($this->adminUser);
 
@@ -589,32 +510,31 @@ class BreakdownManagementTest extends TestCase
             'reported_by'         => $this->adminUser->id,
             'breakdown_type_id'   => 1,
             'severity'            => 'MEDIUM',
-            'description'         => 'Open ticket without downtime start',
+            'description'         => 'Open ticket awaiting service',
             'status'              => 'open',
-            'downtime_start'      => null,
         ]);
 
-        $payload = [
-            'status'           => 'closed',
-            'downtime_start'   => '2026-06-26 10:00:00',
-            'downtime_end'     => '2026-06-26 12:30:00',
-            'resolution_notes' => 'Fixed the leak.',
-        ];
+        $service = $this->postJson('/api/v1/admin/service-records', [
+            'is_breakdown_service' => true,
+            'breakdown_id'         => $ticket->id,
+            'service_date'         => '2026-06-26',
+            'downtime_start'       => '10:00',
+            'downtime_end'         => '12:30',
+        ]);
 
-        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", $payload);
+        $service->assertStatus(201)
+            ->assertJsonPath('data.status', 'completed')
+            ->assertJsonPath('data.downtime_minutes', 150);
 
-        $response->assertStatus(200)
-            ->assertJsonFragment([
-                'status'           => 'closed',
-                'downtime_minutes' => 150,
-                'resolution_notes' => 'Fixed the leak.',
-            ]);
-
+        // The ticket closes and inherits the service record's downtime window,
+        // which is what keeps the MTTR and downtime dashboards working.
         $this->assertDatabaseHas('breakdown_tickets', [
             'id'               => $ticket->id,
             'status'           => 'closed',
             'downtime_start'   => '2026-06-26 10:00:00',
+            'downtime_end'     => '2026-06-26 12:30:00',
             'downtime_minutes' => 150,
+            'resolved_by'      => $this->adminUser->id,
         ]);
     }
 
@@ -919,7 +839,8 @@ class BreakdownManagementTest extends TestCase
         $this->assertEquals(2, $import->getSuccessCount());
         $this->assertCount(0, $import->getErrors());
 
-        // Verify Closed Ticket
+        // Repair times in the sheet are ignored: the ticket imports open with no
+        // downtime, and closes later via its service record.
         $this->assertDatabaseHas('breakdown_tickets', [
             'shift_id'                => $this->shift->id,
             'reported_by'             => $this->adminUser->id, // EMP_ADM resolves to adminUser->id
@@ -929,8 +850,10 @@ class BreakdownManagementTest extends TestCase
             'breakdown_type_id'       => 1, // Mechanical
             'severity'                => 'HIGH',
             'description'             => 'Hose leak resolved.',
-            'status'                  => 'closed',
-            'downtime_minutes'        => 150,
+            'status'                  => 'open',
+            'downtime_start'          => null,
+            'downtime_end'            => null,
+            'downtime_minutes'        => null,
             'resolution_notes'        => 'Hose replaced.',
         ]);
 
@@ -1001,8 +924,59 @@ class BreakdownManagementTest extends TestCase
         $this->assertStringContainsString("Machine 'EX99-Excavator-CAT-UNASSIGNED' is not assigned in that shift plan.", $import->getErrors()[0]);
     }
 
-    public function test_breakdown_import_logic_zero_time_validation_errors()
+    public function test_breakdown_import_defaults_missing_time_to_midnight()
     {
+        // A date with no time used to inherit the clock at import time, so the
+        // same file produced a different breakdown_date_time on every run and
+        // slipped past the duplicate check.
+        $row = [
+            'breakdown_date_time' => '26/06/2026',
+            'shift_name'          => 'Day Shift',
+            'employee_code'       => 'EMP_ADM',
+            'equipment_name'      => 'EX01-Excavator-CAT',
+            'breakdown_type'      => 'Mechanical',
+            'severity'            => 'HIGH',
+            'description'         => 'Date only, no time.',
+        ];
+
+        $import = new \App\Imports\BreakdownImport();
+        $import->collection(collect([$row]));
+
+        $this->assertEquals(1, $import->getSuccessCount());
+        $this->assertCount(0, $import->getErrors());
+
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'description'         => 'Date only, no time.',
+            'breakdown_date_time' => '2026-06-26 00:00:00',
+        ]);
+
+        // Being stable makes the same row a detectable duplicate on re-upload.
+        $reimport = new \App\Imports\BreakdownImport();
+        $reimport->collection(collect([$row]));
+
+        $this->assertEquals(0, $reimport->getSuccessCount());
+        $this->assertCount(1, $reimport->getErrors());
+        $this->assertStringContainsString('already exists in database', $reimport->getErrors()[0]);
+
+        // A supplied time is still respected.
+        $withTime = new \App\Imports\BreakdownImport();
+        $withTime->collection(collect([
+            array_merge($row, [
+                'breakdown_date_time' => '26/06/2026 14:30:00',
+                'description'         => 'Date with time.',
+            ])
+        ]));
+
+        $this->assertEquals(1, $withTime->getSuccessCount());
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'description'         => 'Date with time.',
+            'breakdown_date_time' => '2026-06-26 14:30:00',
+        ]);
+    }
+
+    public function test_breakdown_import_accepts_zero_repair_times()
+    {
+        // 00:00 repair times used to fail the row. They are ignored now.
         $rows = collect([
             [
                 'breakdown_date_time' => '2026-06-26 12:00:00',
@@ -1020,14 +994,14 @@ class BreakdownManagementTest extends TestCase
         $import = new \App\Imports\BreakdownImport();
         $import->collection($rows);
 
-        $this->assertEquals(0, $import->getSuccessCount());
-        $this->assertCount(3, $import->getErrors());
-        $this->assertStringContainsString("Repair Start Time cannot be 00:00:00 or 00:00.", $import->getErrors()[0]);
-        $this->assertStringContainsString("Repair End Time cannot be 00:00:00 or 00:00.", $import->getErrors()[1]);
+        $this->assertEquals(1, $import->getSuccessCount());
+        $this->assertCount(0, $import->getErrors());
     }
 
-    public function test_breakdown_import_logic_pm_time_format()
+    public function test_breakdown_import_ignores_repair_times_without_validating_them()
     {
+        // Values that were previously rejected outright must now import cleanly,
+        // because the repair time columns are ignored entirely.
         $rows = collect([
             [
                 'breakdown_date_time' => '2026-06-26 12:00:00',
@@ -1036,24 +1010,44 @@ class BreakdownManagementTest extends TestCase
                 'equipment_name'      => 'EX01-Excavator-CAT',
                 'breakdown_type'      => 'Mechanical',
                 'severity'            => 'HIGH',
-                'description'         => 'Hose leak resolved.',
-                'repair_start_time'   => '05:00:00 PM',
+                'description'         => 'End before start.',
+                'repair_start_time'   => '06:00:00 PM',
+                'repair_end_time'     => '05:00:00 PM',
+            ],
+            [
+                'breakdown_date_time' => '2026-06-26 16:00:00',
+                'shift_name'          => 'Day Shift',
+                'employee_code'       => 'EMP_ADM',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'breakdown_type'      => 'Mechanical',
+                'severity'            => 'LOW',
+                'description'         => 'End without a start.',
                 'repair_end_time'     => '06:00:00 PM',
-            ]
+            ],
+            [
+                'breakdown_date_time' => '2026-06-26 18:00:00',
+                'shift_name'          => 'Day Shift',
+                'employee_code'       => 'EMP_ADM',
+                'equipment_name'      => 'EX01-Excavator-CAT',
+                'breakdown_type'      => 'Electrical',
+                'severity'            => 'LOW',
+                'description'         => 'Unparseable repair time.',
+                'repair_start_time'   => 'not a time at all',
+            ],
         ]);
 
         $import = new \App\Imports\BreakdownImport();
         $import->collection($rows);
 
-        $this->assertEquals(1, $import->getSuccessCount());
+        $this->assertEquals(3, $import->getSuccessCount());
         $this->assertCount(0, $import->getErrors());
 
-        $this->assertDatabaseHas('breakdown_tickets', [
-            'breakdown_date_time' => '2026-06-26 12:00:00',
-            'downtime_start'      => '2026-06-26 17:00:00',
-            'downtime_end'        => '2026-06-26 18:00:00',
-            'downtime_minutes'    => 60,
-        ]);
+        // Every row lands open with no downtime recorded.
+        $this->assertEquals(3, \App\Models\BreakdownTicket::where('status', 'open')
+            ->whereNull('downtime_start')
+            ->whereNull('downtime_end')
+            ->whereNull('downtime_minutes')
+            ->count());
     }
 
     public function test_breakdown_import_prevents_duplicate_entries()

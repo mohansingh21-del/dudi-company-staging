@@ -370,17 +370,17 @@ class BreakdownService
 
             $data['ticket_number'] = $ticketNumber;
 
-            if (!empty($data['downtime_end'])) {
-                $downtimeStart = \Carbon\Carbon::parse($data['downtime_start']);
-                $downtimeEnd = \Carbon\Carbon::parse($data['downtime_end']);
-                $data['downtime_minutes'] = $downtimeEnd->diffInMinutes($downtimeStart);
-                $data['status'] = 'closed';
-                $data['resolved_by'] = auth()->id() ?? $data['reported_by'];
-                $data['resolved_at'] = now();
-            } else {
-                $data['status'] = 'open';
-                unset($data['downtime_end'], $data['downtime_minutes'], $data['resolved_by'], $data['resolved_at']);
-            }
+            // Downtime lives on the service record now. A ticket is always raised
+            // open and is closed by completing its service record, which is what
+            // writes the downtime window back onto this row.
+            $data['status'] = 'open';
+            unset(
+                $data['downtime_start'],
+                $data['downtime_end'],
+                $data['downtime_minutes'],
+                $data['resolved_by'],
+                $data['resolved_at']
+            );
 
             return BreakdownTicket::create($data);
         });
@@ -417,17 +417,26 @@ class BreakdownService
             );
         }
 
-        // Never accept downtime_minutes or resolution metrics directly from client input
-        unset($data['downtime_minutes'], $data['resolved_by'], $data['resolved_at']);
+        // Downtime and closure are owned by the service record, never by client
+        // input on this endpoint.
+        unset(
+            $data['downtime_start'],
+            $data['downtime_end'],
+            $data['downtime_minutes'],
+            $data['resolved_by'],
+            $data['resolved_at']
+        );
 
-        if (!empty($data['downtime_end']) || (isset($data['status']) && $data['status'] === 'closed')) {
-            $data['status'] = 'closed';
-            $downtimeEnd = \Carbon\Carbon::parse($data['downtime_end'] ?? $ticket->downtime_end);
-            $downtimeStart = isset($data['downtime_start']) ? \Carbon\Carbon::parse($data['downtime_start']) : $ticket->downtime_start;
-
-            $data['downtime_minutes'] = $downtimeEnd->diffInMinutes($downtimeStart);
-            $data['resolved_by'] = auth()->id();
-            $data['resolved_at'] = now();
+        if (isset($data['status']) && strtolower($data['status']) === 'closed') {
+            throw new HttpResponseException(
+                response()->json([
+                    'status' => 422,
+                    'message' => 'Validation failed',
+                    'errors' => [
+                        'status' => ['A breakdown ticket is closed by completing its service record with a downtime window, not directly.']
+                    ]
+                ], 422)
+            );
         }
 
         $ticket->update($data);

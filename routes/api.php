@@ -54,6 +54,7 @@ use App\Http\Controllers\Api\Admin\SitePointController;
 use App\Http\Controllers\Api\Admin\DispatchTripController;
 use App\Http\Controllers\Api\Admin\ShiftClosureController;
 use App\Http\Controllers\Api\Admin\DashboardController;
+use App\Http\Controllers\Api\Admin\ServiceRecordController;
 
 /*
 |--------------------------------------------------------------------------
@@ -166,6 +167,9 @@ Route::prefix('v1')->group(function () {
         Route::get('categories', [CategoryController::class, 'getPublicCategories']);
         Route::get('subcategories', [SubCategoryController::class, 'getPublicSubCategories']);
         Route::get('machine-categories', [EquipmentController::class, 'listCategories']);
+        Route::get('active-machines', [EquipmentNameController::class, 'getActiveMachines']);
+        Route::get('available-products', [InventoryController::class, 'getAvailableProducts']);
+        Route::get('open-breakdowns', [BreakdownController::class, 'getOpenBreakdowns']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
         Route::get('shift-plans/{shift_id}/machines', [EquipmentAllocationController::class, 'getPublicMachines']);
         Route::get('search-employee/search={search}', [EmployeeController::class, 'searchEmployeeByName']);
@@ -480,6 +484,15 @@ Route::prefix('v1')->group(function () {
                 Route::get('{id}', [FuelEntryController::class, 'show']);
                 Route::put('{id}', [FuelEntryController::class, 'update']);
             });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Service Management
+            |--------------------------------------------------------------------------
+            */
+            Route::get('service-records/machine/{machine}/history', [ServiceRecordController::class, 'history']);
+            Route::get('service-records/{serviceRecord}/audit-trail', [ServiceRecordController::class, 'auditTrail']);
+            Route::apiResource('service-records', ServiceRecordController::class);
 
         });
     /*

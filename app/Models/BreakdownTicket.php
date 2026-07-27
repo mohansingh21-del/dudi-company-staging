@@ -104,4 +104,9 @@ class BreakdownTicket extends Model
     {
         return $this->belongsTo(BreakdownType::class, 'breakdown_type_id');
     }
+
+    public function serviceRecords()
+    {
+        return $this->hasMany(ServiceRecord::class, 'breakdown_id');
+    }
 }

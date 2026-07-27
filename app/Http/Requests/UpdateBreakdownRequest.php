@@ -29,45 +29,21 @@ class UpdateBreakdownRequest extends FormRequest
     public function rules()
     {
         return [
-            'status'           => 'nullable|in:open,in_progress,on_hold,closed',
+            // 'closed' is deliberately absent: a ticket closes only when a linked
+            // service record records its downtime window, which guarantees every
+            // closed ticket carries real downtime for the MTTR dashboards.
+            'status'           => 'nullable|in:open,in_progress,on_hold',
             'severity'         => 'nullable|string|in:LOW,MEDIUM,HIGH,CRITICAL',
             'description'      => 'nullable|string|max:1000',
-            'downtime_start'   => 'nullable|date_format:Y-m-d H:i:s|before_or_equal:now',
-            'downtime_end'     => 'required_if:status,closed|nullable|date_format:Y-m-d H:i:s',
-            'resolution_notes' => 'required_if:status,closed|required_with:downtime_end|nullable|string|max:1000',
+            'resolution_notes' => 'nullable|string|max:1000',
         ];
     }
 
-    public function withValidator($validator)
+    public function messages()
     {
-        $validator->after(function ($validator) {
-            $downtimeEnd = $this->input('downtime_end');
-            $downtimeStart = $this->input('downtime_start');
-
-            if ($downtimeEnd || $this->input('status') === 'closed') {
-                $ticketId = $this->route('id');
-                $ticket = \App\Models\BreakdownTicket::find($ticketId);
-
-                if (!$ticket) {
-                    return;
-                }
-
-                $startVal = $downtimeStart ?? $ticket->downtime_start;
-
-                if (!$startVal) {
-                    $validator->errors()->add('downtime_start', 'The downtime start field is required to close the ticket.');
-                    return;
-                }
-
-                if ($downtimeEnd) {
-                    $end = \Carbon\Carbon::parse($downtimeEnd);
-                    $start = \Carbon\Carbon::parse($startVal);
-                    if ($end->lte($start)) {
-                        $validator->errors()->add('downtime_end', 'The downtime end must be a date after downtime start.');
-                    }
-                }
-            }
-        });
+        return [
+            'status.in' => 'A breakdown ticket is closed by completing its service record with a downtime window, not directly.',
+        ];
     }
 
     protected function failedValidation(Validator $validator)

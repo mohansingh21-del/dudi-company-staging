@@ -7,12 +7,21 @@ use App\Models\EquipmentName;
 use App\Models\ShiftEquipmentAllocation;
 use App\Models\ShiftPlan;
 use App\Models\BreakdownTicket;
+use App\Models\ServiceRecord;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
 
 class EquipmentAllocationService
 {
+    /**
+     * Service record statuses that keep a machine off the shop floor.
+     * Completed and cancelled records release it again.
+     *
+     * @var array
+     */
+    protected $blockingServiceStatuses = ['pending', 'in_progress'];
+
     /**
      * 1) GET /machine-categories
      * Returns all rows from the `equipments` table.
@@ -121,12 +130,19 @@ class EquipmentAllocationService
             ->pluck('equipment_name_id')
             ->toArray();
 
-        // Active machines of requested category, not already allocated, and not in breakdown/maintenance
+        // IDs of machines held by a service record that is still open
+        $underServiceMachineIds = ServiceRecord::whereIn('status', $this->blockingServiceStatuses)
+            ->pluck('machine_id')
+            ->toArray();
+
+        // Active machines of requested category, not already allocated, and not in
+        // breakdown/maintenance or currently being serviced
         $machines = EquipmentName::with('equipment')
             ->where('equipment_id', $categoryId)
             ->where('is_active', 1)
             ->whereNotIn('id', $allocatedMachineIds)
             ->whereNotIn('id', $breakdownMachineIds)
+            ->whereNotIn('id', $underServiceMachineIds)
             ->get();
 
         $data = $machines->map(function ($machine) {
@@ -213,6 +229,23 @@ class EquipmentAllocationService
                 'message' => 'Machine cannot be allocated as it is currently in breakdown or maintenance.',
                 'data' => [
                     'machine_id' => ['Machine cannot be allocated as it is currently in breakdown or maintenance.']
+                ],
+            ];
+        }
+
+        // Check if machine is held by an open service record (pending / in progress)
+        $openService = ServiceRecord::where('machine_id', $machineId)
+            ->whereIn('status', $this->blockingServiceStatuses)
+            ->first();
+
+        if ($openService) {
+            $message = "Machine cannot be allocated as it is currently under service (Ticket: {$openService->ticket_number}).";
+
+            return [
+                'status' => 422,
+                'message' => $message,
+                'data' => [
+                    'machine_id' => [$message]
                 ],
             ];
         }

@@ -403,4 +403,71 @@ class EquipmentNameController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Get all active machines across every category.
+     * Lightweight listing meant for dropdowns (no availability lookups).
+     */
+    public function getActiveMachines(Request $request)
+    {
+        try {
+            $query = EquipmentName::where('is_active', 1)->with('equipment');
+
+            // Optional Category Filter
+            if ($request->filled('equipment_id')) {
+                $query->where('equipment_id', $request->equipment_id);
+            }
+
+            // Optional Search
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('equipment_name', 'LIKE', "%{$search}%");
+                });
+            }
+
+            $query->orderBy('equipment_name', 'asc');
+
+            $format = function ($machine) {
+                return [
+                    'id' => $machine->id,
+                    'equipment_name' => $machine->equipment_name,
+                    'equipment_id' => $machine->equipment_id,
+                    'equipment_category_name' => $machine->equipment ? $machine->equipment->name : null,
+                    'is_active' => $machine->is_active,
+                ];
+            };
+
+            if ($request->filled('limit')) {
+                $machines = $query->paginate($request->limit);
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Active machines fetched successfully',
+                    'data' => collect($machines->items())->map($format)->values()->toArray(),
+                    'pagination' => [
+                        'current_page' => $machines->currentPage(),
+                        'last_page' => $machines->lastPage(),
+                        'per_page' => $machines->perPage(),
+                        'total' => $machines->total(),
+                        'from' => $machines->firstItem(),
+                        'to' => $machines->lastItem(),
+                    ]
+                ]);
+            }
+
+            $machines = $query->get();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Active machines fetched successfully',
+                'data' => $machines->map($format)->values()->toArray()
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
 }

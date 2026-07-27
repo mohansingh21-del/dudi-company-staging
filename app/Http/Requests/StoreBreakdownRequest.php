@@ -25,9 +25,9 @@ class StoreBreakdownRequest extends FormRequest
             'breakdown_type_id' => 'required|integer|exists:breakdown_types,id',
             'severity' => 'required|string|in:LOW,MEDIUM,HIGH,CRITICAL',
             'description' => 'required|string|max:1000',
-            'downtime_start' => 'required_with:downtime_end|nullable|date_format:Y-m-d H:i:s|before_or_equal:now',
-            'downtime_end' => 'nullable|date_format:Y-m-d H:i:s|after:downtime_start',
-            'resolution_notes' => 'nullable|string|max:1000',
+            // Downtime is captured on the service record now, not here. A ticket is
+            // always raised open and closes only when a service record records its
+            // downtime window.
         ];
     }
 

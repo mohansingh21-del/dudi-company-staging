@@ -7,6 +7,7 @@ use App\Http\Requests\StoreBreakdownRequest;
 use App\Http\Requests\UpdateBreakdownRequest;
 use App\Http\Resources\BreakdownDetailResource;
 use App\Http\Resources\BreakdownListResource;
+use App\Models\BreakdownTicket;
 use App\Services\BreakdownService;
 use Illuminate\Http\Request;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -183,6 +184,114 @@ class BreakdownController extends Controller
                 'status'  => 500,
                 'message' => 'Failed to update breakdown ticket',
                 'error'   => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Get breakdown tickets that can still be linked to a service record.
+     *
+     * Defaults to every ticket that is not closed, which mirrors the check
+     * ServiceRecordService applies before accepting a breakdown_id. Pass
+     * ?status=open to narrow the dropdown to freshly reported tickets only.
+     */
+    public function getOpenBreakdowns(Request $request)
+    {
+        try {
+            $linkableStatuses = ['open', 'in_progress', 'on_hold'];
+
+            $query = BreakdownTicket::with(['equipment', 'equipmentName', 'breakdownType', 'shift'])
+                ->whereIn('status', $linkableStatuses)
+                // A ticket already claimed by a live service record is not selectable.
+                // Cancelled records release it again; soft deleted ones are excluded
+                // by the ServiceRecord model's own scope.
+                ->whereDoesntHave('serviceRecords', function ($q) {
+                    $q->where('status', '!=', 'cancelled');
+                });
+
+            // Optional narrowing to a single linkable status
+            if ($request->filled('status')) {
+                $status = strtolower($request->status);
+
+                if (!in_array($status, $linkableStatuses)) {
+                    return response()->json([
+                        'status'  => 422,
+                        'message' => 'Validation failed',
+                        'errors'  => [
+                            'status' => ['Status must be one of: ' . implode(', ', $linkableStatuses) . '.']
+                        ]
+                    ], 422);
+                }
+
+                $query->where('status', $status);
+            }
+
+            // Optional Machine Filter
+            if ($request->filled('equipment_name_id')) {
+                $query->where('equipment_name_id', $request->equipment_name_id);
+            }
+
+            // Optional Search on ticket number / machine name
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('ticket_number', 'LIKE', "%{$search}%")
+                        ->orWhereHas('equipmentName', function ($q2) use ($search) {
+                            $q2->where('equipment_name', 'LIKE', "%{$search}%");
+                        });
+                });
+            }
+
+            $query->orderBy('breakdown_date_time', 'desc');
+
+            $format = function ($ticket) {
+                return [
+                    'id'                  => $ticket->id,
+                    'ticket_number'       => $ticket->ticket_number,
+                    'equipment_name_id'   => $ticket->equipment_name_id,
+                    'equipment_name'      => optional($ticket->equipmentName)->equipment_name,
+                    'equipment_category'  => optional($ticket->equipment)->name,
+                    'breakdown_type'      => optional($ticket->breakdownType)->breakdown_type,
+                    'severity'            => $ticket->severity,
+                    'status'              => $ticket->status,
+                    'mine_site_id'        => $ticket->mine_site_id,
+                    'shift_name'          => optional($ticket->shift)->shift_name,
+                    'breakdown_date_time' => $ticket->breakdown_date_time
+                        ? $ticket->breakdown_date_time->toDateTimeString()
+                        : null,
+                    'description'         => $ticket->description,
+                ];
+            };
+
+            if ($request->filled('limit')) {
+                $tickets = $query->paginate($request->limit);
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Open breakdowns fetched successfully',
+                    'data' => collect($tickets->items())->map($format)->values()->toArray(),
+                    'pagination' => [
+                        'current_page' => $tickets->currentPage(),
+                        'last_page' => $tickets->lastPage(),
+                        'per_page' => $tickets->perPage(),
+                        'total' => $tickets->total(),
+                        'from' => $tickets->firstItem(),
+                        'to' => $tickets->lastItem(),
+                    ]
+                ]);
+            }
+
+            $tickets = $query->get();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Open breakdowns fetched successfully',
+                'data' => $tickets->map($format)->values()->toArray()
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status'  => 500,
+                'message' => $th->getMessage(),
             ], 500);
         }
     }

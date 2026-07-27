@@ -471,15 +471,16 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
         $response->assertStatus(201);
         $ticket1Id = $response->json('data.id');
 
-        // Close ticket 1
-        $this->matchJson('PUT', "/api/v1/admin/maintenance/breakdowns/{$ticket1Id}", [
-            'status' => 'closed',
-            'downtime_end' => $planningDate . ' 11:30:00',
-            'downtime_minutes' => 120,
-            'resolution_notes' => 'Coolant refilled',
-            'resolved_by' => $this->adminUser->id,
-            'resolved_at' => $planningDate . ' 11:30:00',
-        ])->assertStatus(200);
+        // Close ticket 1 by recording its service record downtime window
+        $this->postJson('/api/v1/admin/service-records', [
+            'is_breakdown_service' => true,
+            'breakdown_id' => $ticket1Id,
+            'service_date' => $planningDate,
+            'downtime_start' => '09:30',
+            'downtime_end' => '11:30',
+            'remarks' => 'Coolant refilled',
+        ])->assertStatus(201)
+            ->assertJsonPath('data.downtime_minutes', 120);
 
         // Ticket 2: 180 minutes downtime (Closed)
         $response = $this->postJson('/api/v1/admin/maintenance/breakdowns', [
@@ -497,15 +498,16 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
         ]);
         $ticket2Id = $response->json('data.id');
 
-        // Close ticket 2
-        $this->matchJson('PUT', "/api/v1/admin/maintenance/breakdowns/{$ticket2Id}", [
-            'status' => 'closed',
-            'downtime_end' => $planningDate . ' 15:00:00',
-            'downtime_minutes' => 180,
-            'resolution_notes' => 'Seal replaced',
-            'resolved_by' => $this->adminUser->id,
-            'resolved_at' => $planningDate . ' 15:00:00',
-        ])->assertStatus(200);
+        // Close ticket 2 by recording its service record downtime window
+        $this->postJson('/api/v1/admin/service-records', [
+            'is_breakdown_service' => true,
+            'breakdown_id' => $ticket2Id,
+            'service_date' => $planningDate,
+            'downtime_start' => '12:00',
+            'downtime_end' => '15:00',
+            'remarks' => 'Seal replaced',
+        ])->assertStatus(201)
+            ->assertJsonPath('data.downtime_minutes', 180);
 
         // ── 8. Create Operational Delay Linked to Breakdown ───────────
         $this->postJson('/api/v1/admin/delays', [
