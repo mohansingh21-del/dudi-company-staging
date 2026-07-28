@@ -9,6 +9,7 @@ use App\Models\ServiceAttachment;
 use App\Models\ServiceStatusHistory;
 use App\Models\ServiceAuditLog;
 use App\Models\Breakdown;
+use App\Models\InventoryProduct;
 use App\Models\Machine;
 use App\Http\Resources\ServiceRecordHistoryResource;
 use Illuminate\Support\Facades\DB;
@@ -415,6 +416,30 @@ class ServiceRecordService
                 $checklistTotal = $oilChangeAmt + $hydraulicOilAmt + $gearOilAmt + $fuelFilterAmt + $oilFilterAmt;
             }
 
+            // Spare parts are replaced wholesale when the key is present: the edit
+            // form posts the list it wants to end up with, not a delta. Absent key
+            // means "leave the parts alone", so partial updates stay safe.
+            $sparePartsDiff = null;
+            if (array_key_exists('spare_parts', $data) || array_key_exists('spare_parts_changed', $data)) {
+                // Sending a list without the flag still means parts were used —
+                // deriving it from the list keeps a caller that omits the flag
+                // from silently wiping the parts it just posted.
+                $partsChanged = array_key_exists('spare_parts_changed', $data)
+                    ? filter_var($data['spare_parts_changed'], FILTER_VALIDATE_BOOLEAN)
+                    : !empty($data['spare_parts']);
+
+                // Clearing the flag is how the UI says "no parts were used after
+                // all", so it empties the list and returns the stock either way.
+                $incomingParts = $partsChanged && isset($data['spare_parts']) && is_array($data['spare_parts'])
+                    ? $data['spare_parts']
+                    : [];
+
+                $sparePartsDiff = $this->syncSpareParts($record, $incomingParts, $userId);
+
+                $record->spare_parts_changed = $partsChanged;
+                $record->save();
+            }
+
             // Recalculate totals server-side
             $sparePartsTotal = (float) ServiceSparePart::where('service_record_id', $record->id)->sum('amount');
             $baseAmount = (float) $record->base_service_amount;
@@ -472,6 +497,13 @@ class ServiceRecordService
                 }
             }
 
+            // Parts live in their own table, so the column diff above would only
+            // ever show the totals moving. Spell the swap out instead — which part
+            // went back to stock and which came out is the point of the trail.
+            if ($sparePartsDiff) {
+                $diff['spare_parts'] = $sparePartsDiff;
+            }
+
             if (!empty($diff)) {
                 ServiceAuditLog::create([
                     'service_record_id' => $record->id,
@@ -495,6 +527,168 @@ class ServiceRecordService
                 'updater',
             ]);
         });
+    }
+
+    /**
+     * Replace a record's spare parts, reconciling inventory stock as it goes.
+     *
+     * Stock moves on the net change per product rather than on each row, so
+     * re-saving a form without touching the parts writes nothing to the ledger,
+     * and lowering a quantity from 5 to 3 returns 2 units instead of returning 5
+     * and re-issuing 3. Returns run before deductions so stock freed by a removed
+     * part is available to the parts replacing it, including for the min_stock
+     * check — swapping one part for another can't fail on stock the swap itself
+     * releases.
+     *
+     * @param  ServiceRecord  $record
+     * @param  array  $parts  The full list the record should end up with.
+     * @param  int  $userId
+     * @return array|null  Old/new summary for the audit log, null when nothing moved.
+     */
+    protected function syncSpareParts(ServiceRecord $record, array $parts, $userId)
+    {
+        $existing = ServiceSparePart::where('service_record_id', $record->id)->get();
+
+        if ($existing->isEmpty() && empty($parts)) {
+            return null;
+        }
+
+        $oldQuantities = [];
+        foreach ($existing as $row) {
+            if ($row->source === 'inventory' && $row->inventory_product_id) {
+                $productId = (int) $row->inventory_product_id;
+                $oldQuantities[$productId] = (isset($oldQuantities[$productId]) ? $oldQuantities[$productId] : 0.00)
+                    + (float) $row->quantity;
+            }
+        }
+
+        $newQuantities = [];
+        foreach ($parts as $part) {
+            $source = isset($part['source']) ? $part['source'] : 'inventory';
+
+            if ($source !== 'inventory' || empty($part['inventory_product_id'])) {
+                continue;
+            }
+
+            $productId = (int) $part['inventory_product_id'];
+            $newQuantities[$productId] = (isset($newQuantities[$productId]) ? $newQuantities[$productId] : 0.00)
+                + (float) (isset($part['quantity']) ? $part['quantity'] : 1.00);
+        }
+
+        $returns = [];
+        $deductions = [];
+        $productIds = array_unique(array_merge(array_keys($oldQuantities), array_keys($newQuantities)));
+
+        foreach ($productIds as $productId) {
+            $old = isset($oldQuantities[$productId]) ? $oldQuantities[$productId] : 0.00;
+            $new = isset($newQuantities[$productId]) ? $newQuantities[$productId] : 0.00;
+            $delta = $new - $old;
+
+            if ($delta < 0) {
+                $returns[$productId] = abs($delta);
+            } elseif ($delta > 0) {
+                $deductions[$productId] = $delta;
+            }
+        }
+
+        foreach ($returns as $productId => $quantity) {
+            $this->inventoryStockService->restockStock(
+                $productId,
+                $quantity,
+                $userId,
+                "Ticket: {$record->ticket_number}"
+            );
+        }
+
+        $partNames = [];
+        foreach ($deductions as $productId => $quantity) {
+            $result = $this->inventoryStockService->deductStock(
+                $productId,
+                $quantity,
+                $userId,
+                "Ticket: {$record->ticket_number}"
+            );
+
+            $partNames[$productId] = $result['part_name'];
+        }
+
+        $before = $this->sparePartsSummary($existing);
+
+        ServiceSparePart::where('service_record_id', $record->id)->delete();
+
+        foreach ($parts as $part) {
+            $source = isset($part['source']) ? $part['source'] : 'inventory';
+            $quantity = (float) (isset($part['quantity']) ? $part['quantity'] : 1.00);
+
+            if ($source === 'inventory') {
+                $productId = (int) $part['inventory_product_id'];
+
+                // A product whose quantity was unchanged or reduced never went
+                // through deductStock above, so its name is still unresolved.
+                if (!isset($partNames[$productId])) {
+                    $product = InventoryProduct::find($productId);
+                    $partNames[$productId] = $product ? $product->name : 'Unknown Product';
+                }
+
+                // Inventory-issued parts carry no price: products are tracked by
+                // quantity only, and their cost sits in the inventory module.
+                ServiceSparePart::create([
+                    'service_record_id'    => $record->id,
+                    'source'               => 'inventory',
+                    'inventory_product_id' => $productId,
+                    'part_name'            => $partNames[$productId],
+                    'vendor_name'          => null,
+                    'quantity'             => $quantity,
+                    'unit_price'           => 0.00,
+                    'amount'               => 0.00,
+                ]);
+
+                continue;
+            }
+
+            $partAmount = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
+
+            ServiceSparePart::create([
+                'service_record_id'    => $record->id,
+                'source'               => 'vendor',
+                'inventory_product_id' => null,
+                'part_name'            => $part['part_name'],
+                'vendor_name'          => isset($part['vendor_name']) ? $part['vendor_name'] : null,
+                'quantity'             => $quantity,
+                'unit_price'           => $quantity > 0 ? $partAmount / $quantity : 0.00,
+                'amount'               => $partAmount,
+            ]);
+        }
+
+        $after = $this->sparePartsSummary(
+            ServiceSparePart::where('service_record_id', $record->id)->get()
+        );
+
+        if ($before == $after) {
+            return null;
+        }
+
+        return ['old' => $before, 'new' => $after];
+    }
+
+    /**
+     * Flatten spare part rows into the shape stored in the audit log.
+     *
+     * @param  \Illuminate\Support\Collection  $parts
+     * @return array
+     */
+    protected function sparePartsSummary($parts)
+    {
+        return $parts->map(function ($part) {
+            return [
+                'source'               => $part->source,
+                'inventory_product_id' => $part->inventory_product_id ? (int) $part->inventory_product_id : null,
+                'part_name'            => $part->part_name,
+                'vendor_name'          => $part->vendor_name,
+                'quantity'             => (float) $part->quantity,
+                'amount'               => (float) $part->amount,
+            ];
+        })->values()->all();
     }
 
     /**

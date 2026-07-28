@@ -55,7 +55,7 @@ class UpdateServiceRecordRequest extends FormRequest
             'checklist.oil_filter_change_amount' => 'nullable|numeric|min:0',
 
             'spare_parts_changed'                  => 'nullable|boolean',
-            'spare_parts'                          => 'nullable|array',
+            'spare_parts'                          => 'required_if:spare_parts_changed,true,1|nullable|array',
             'spare_parts.*.source'                 => 'required_with:spare_parts|string|in:inventory,vendor',
             'spare_parts.*.inventory_product_id'   => 'required_if:spare_parts.*.source,inventory|nullable|integer|exists:' . $productTable . ',id',
             'spare_parts.*.part_name'              => 'required_if:spare_parts.*.source,vendor|nullable|string|max:255',

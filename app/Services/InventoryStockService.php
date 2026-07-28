@@ -89,6 +89,63 @@ class InventoryStockService
         ];
     }
 
+    /**
+     * Return previously deducted stock for a product.
+     *
+     * The exact inverse of deductStock: only left_quantity moves, because the
+     * total quantity on hand was never reduced in the first place. Used when a
+     * spare part is taken off a service record, or its quantity is lowered.
+     *
+     * @param int $productId
+     * @param float $quantity
+     * @param int $userId
+     * @param string|null $remarks
+     * @return array
+     */
+    public function restockStock($productId, $quantity, $userId, $remarks = null)
+    {
+        $product = Product::find($productId);
+        if (!$product) {
+            throw new HttpResponseException(response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => [
+                    'spare_parts' => ["Inventory product with ID {$productId} not found."]
+                ]
+            ], 422));
+        }
+
+        $inventory = Inventory::where('product_id', $productId)->first();
+        if (!$inventory) {
+            throw new HttpResponseException(response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => [
+                    'spare_parts' => ["No inventory stock record found for product '{$product->name}', so the previously issued stock cannot be returned."]
+                ]
+            ], 422));
+        }
+
+        $qtyToReturn = (float) $quantity;
+
+        $inventory->left_quantity += $qtyToReturn;
+        $inventory->save();
+
+        InventoryLog::create([
+            'product_id' => $productId,
+            'user_id'    => $userId,
+            'type'       => 'in',
+            'action'     => 'service_spare_part_return',
+            'quantity'   => $qtyToReturn,
+            'remarks'    => "Returned {$qtyToReturn} units from service record" . ($remarks ? " - {$remarks}" : "")
+        ]);
+
+        return [
+            'part_name'  => $product->name,
+            'unit_price' => 0.00,
+        ];
+    }
+
     private function sendLowStockAlert($productName, $currentStock)
     {
         try {
