@@ -104,10 +104,11 @@ class ServiceRecordController extends Controller
             $records = $query->orderBy('service_date', 'desc')->paginate($limit);
 
             return response()->json([
-                'status'     => 200,
-                'message'    => 'Service records fetched successfully.',
-                'data'       => ServiceRecordListResource::collection($records->items()),
-                'pagination' => [
+                'status'      => 200,
+                'message'     => 'Service records fetched successfully.',
+                'data'        => ServiceRecordListResource::collection($records->items()),
+                'kpi_summary' => $this->service->getDashboardKpis(),
+                'pagination'  => [
                     'current_page' => $records->currentPage(),
                     'last_page'    => $records->lastPage(),
                     'per_page'     => $records->perPage(),

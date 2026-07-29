@@ -788,6 +788,55 @@ class ServiceRecordService
     }
 
     /**
+     * KPI cards for the Service Management page header.
+     *
+     * Vehicles-in-breakdown reads breakdown_tickets directly since a machine
+     * counts as "in breakdown" the moment a ticket opens, before any service
+     * record exists for it. Everything else reads service_records, whose
+     * downtime_start/downtime_end window is what actually completes a service
+     * (see the 2026_07_27_120000 migration note on that table).
+     *
+     * @return array
+     */
+    public function getDashboardKpis()
+    {
+        $vehiclesInBreakdown = (int) Breakdown::where('status', '!=', 'closed')
+            ->distinct()
+            ->count('equipment_name_id');
+
+        $vehiclesInActiveService = (int) ServiceRecord::where('status', 'in_progress')
+            ->distinct()
+            ->count('machine_id');
+
+        $totalServicesDone = ServiceRecord::where('service_type', 'general')
+            ->where('status', 'completed')
+            ->count();
+
+        $totalRepairsDone = ServiceRecord::where('service_type', 'repair')
+            ->where('status', 'completed')
+            ->count();
+
+        $avgRepairMinutes = ServiceRecord::where('service_type', 'repair')
+            ->where('status', 'completed')
+            ->whereNotNull('downtime_minutes')
+            ->avg('downtime_minutes');
+
+        $avgServiceMinutes = ServiceRecord::where('service_type', 'general')
+            ->where('status', 'completed')
+            ->whereNotNull('downtime_minutes')
+            ->avg('downtime_minutes');
+
+        return [
+            'vehicles_in_breakdown'      => ['value' => $vehiclesInBreakdown, 'unit' => 'Vehicles'],
+            'vehicles_in_active_service' => ['value' => $vehiclesInActiveService, 'unit' => 'Vehicles'],
+            'total_services_done'        => ['value' => $totalServicesDone, 'unit' => 'Services'],
+            'total_repairs_done'         => ['value' => $totalRepairsDone, 'unit' => 'Repairs'],
+            'avg_repair_time'            => ['value' => $avgRepairMinutes ? round($avgRepairMinutes / 60 / 24, 2) : 0.00, 'unit' => 'Days'],
+            'avg_service_time'           => ['value' => $avgServiceMinutes ? round($avgServiceMinutes / 60, 2) : 0.00, 'unit' => 'Hours'],
+        ];
+    }
+
+    /**
      * Service history for one machine: the summary cards plus the timeline.
      *
      * Cancelled records are excluded throughout — work that never happened is
