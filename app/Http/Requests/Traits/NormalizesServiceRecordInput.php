@@ -60,6 +60,16 @@ trait NormalizesServiceRecordInput
         if (!empty($merge)) {
             $this->merge($merge);
         }
+
+        // spare_parts only matters when spare_parts_changed is true. Clients
+        // (multipart form-data especially) can leave a stray empty
+        // spare_parts[] field behind even when nothing changed, which would
+        // otherwise trip required_with:spare_parts on spare_parts.*.source
+        // and spare_parts.*.quantity. Drop it so it's ignored everywhere.
+        if (!$this->boolean('spare_parts_changed')) {
+            $this->request->remove('spare_parts');
+            $this->query->remove('spare_parts');
+        }
     }
 
     /**

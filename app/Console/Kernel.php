@@ -11,6 +11,7 @@ class Kernel extends ConsoleKernel
         \App\Console\Commands\RotateShiftsCommand::class,
         \App\Console\Commands\RemoveExpiredBorrowedEmployeesCommand::class,
         \App\Console\Commands\ResetShiftTestData::class,
+        \App\Console\Commands\SyncVecvFuelCommand::class,
     ];
     /**
      * Define the application's command schedule.
@@ -23,6 +24,13 @@ class Kernel extends ConsoleKernel
         // $schedule->command('inspire')->hourly();
         $schedule->command('roster:rotate')->sundays()->at('00:00');
         $schedule->command('borrowed:cleanup')->everyMinute();
+
+        // Interval is config-driven: shift-boundary precision is capped by it,
+        // so it can be relaxed to hourly for reporting or tightened for control.
+        $schedule->command('vecv:sync-fuel')
+            ->cron(config('vecv.fuel_sync_cron'))
+            ->withoutOverlapping()
+            ->runInBackground();
     }
 
     /**
