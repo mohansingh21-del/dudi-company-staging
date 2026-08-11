@@ -33,6 +33,7 @@ class AttendanceProcessed extends Model
     protected $fillable = [
         'employee_id',
         'shift_id',
+        'place_of_work',
         'date',
         'check_in',
         'check_out',
@@ -49,6 +50,19 @@ class AttendanceProcessed extends Model
         'check_out' => 'datetime',
         'working_hours' => 'decimal:2',
     ];
+    /**
+     * Place of work as it reads in the Attendance Register (Form D),
+     * e.g. opencast => "Opencast".
+     */
+    public function getPlaceOfWorkLabelAttribute()
+    {
+        if (!$this->place_of_work) {
+            return null;
+        }
+
+        return ucfirst($this->place_of_work);
+    }
+
     public function employee()
     {
         return $this->belongsTo(Employee::class);

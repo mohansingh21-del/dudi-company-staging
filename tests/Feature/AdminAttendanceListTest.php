@@ -187,8 +187,17 @@ class AdminAttendanceListTest extends TestCase
 
     public function test_can_get_monthly_attendance_list_and_stats()
     {
-        $this->employee1->update(['rest_days' => 4]);
-        $this->employee2->update(['rest_days' => 5]);
+        // rest_days is a pay setting and lives on the salary record
+        \App\Models\EmployeePayroll::create([
+            'employee_id' => $this->employee1->id,
+            'rest_days' => 4,
+            'is_active' => true,
+        ]);
+        \App\Models\EmployeePayroll::create([
+            'employee_id' => $this->employee2->id,
+            'rest_days' => 5,
+            'is_active' => true,
+        ]);
 
         // Setup processed attendance records for multiple days in June 2026
         AttendanceProcessed::create([

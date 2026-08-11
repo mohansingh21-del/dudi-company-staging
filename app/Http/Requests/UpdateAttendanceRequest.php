@@ -21,6 +21,7 @@ class UpdateAttendanceRequest extends FormRequest
                'check_out' => 'nullable|date_format:H:i',
                'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day,exception',
                'site_id' => 'nullable|exists:sites,id',
+               'place_of_work' => 'nullable|in:underground,opencast,surface',
                'remarks' => 'nullable|string'
           ];
      }

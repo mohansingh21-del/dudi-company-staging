@@ -129,27 +129,7 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
 
             '*.joining_date' => 'required',
 
-            '*.basic_salary' => 'nullable|numeric|min:0',
-
-            '*.daily_wage' => 'nullable|numeric|min:0',
-
-            '*.pf_applicable' => 'nullable|boolean',
-
-            '*.pf_number' => 'nullable|string|max:255',
-
-            '*.bank_name' => 'nullable|string|max:255',
-
-            '*.bank_account_number' => 'nullable|max:50',
-
-            '*.ifsc_code' => 'nullable|string|max:20',
-
-            '*.mess_deduction_applicable' => 'nullable|boolean',
-
             '*.status' => 'nullable|in:0,1',
-
-            '*.other_deduction_appliacble' => 'nullable|boolean',
-
-            '*.other_deduction' => 'nullable|numeric|min:0',
         ];
     }
 

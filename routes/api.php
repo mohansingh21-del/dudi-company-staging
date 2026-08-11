@@ -227,6 +227,7 @@ Route::prefix('v1')->group(function () {
             Route::post('attendance/bulk-upload', [AttendanceController::class, 'bulkUpload']);
             Route::patch('attendance/bulk-status', [AttendanceController::class, 'bulkUpdateStatus']);
             Route::get('attendance/employee/{employee_id}', [AttendanceController::class, 'getEmployeeAttendanceDetails']);
+            Route::get('attendance/register', [AttendanceController::class, 'attendanceRegister']);
             Route::post('attendance/correction', [AttendanceController::class, 'update']);
 
             Route::apiResource('attendance', AttendanceController::class);

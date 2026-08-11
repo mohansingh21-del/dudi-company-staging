@@ -275,10 +275,14 @@ class AttendanceController extends Controller
                 $remarks = trim('[Exception] ' . ($remarks ?? ''));
             }
 
+            // Only overwrite when supplied, so a correction that omits it does not
+            // wipe the place of work already recorded for the day.
+            $placeOfWork = $request->filled('place_of_work') ? $request->input('place_of_work') : null;
+
             $resultAttendance = null;
-            DB::transaction(function () use (&$attendance, $employee, $shiftId, $attendanceDate, $checkIn, $checkOut, $workingHours, $lateMinutes, $earlyExitMinutes, $dbStatus, $remarks, &$resultAttendance) {
+            DB::transaction(function () use (&$attendance, $employee, $shiftId, $attendanceDate, $checkIn, $checkOut, $workingHours, $lateMinutes, $earlyExitMinutes, $dbStatus, $remarks, $placeOfWork, &$resultAttendance) {
                 if ($attendance) {
-                    $attendance->update([
+                    $payload = [
                         'check_in' => $checkIn,
                         'check_out' => $checkOut,
                         'working_hours' => $workingHours,
@@ -286,13 +290,20 @@ class AttendanceController extends Controller
                         'early_exit_minutes' => $earlyExitMinutes,
                         'attendance_status' => $dbStatus,
                         'remarks' => $remarks,
-                    ]);
+                    ];
+
+                    if ($placeOfWork) {
+                        $payload['place_of_work'] = $placeOfWork;
+                    }
+
+                    $attendance->update($payload);
                     $attendance->refresh();
                     $resultAttendance = $attendance;
                 } else {
                     $resultAttendance = AttendanceProcessed::create([
                         'employee_id' => $employee->id,
                         'shift_id' => $shiftId,
+                        'place_of_work' => $placeOfWork,
                         'date' => $attendanceDate,
                         'check_in' => $checkIn,
                         'check_out' => $checkOut,
@@ -316,6 +327,7 @@ class AttendanceController extends Controller
                     'check_out' => $resultAttendance->check_out ? Carbon::parse($resultAttendance->check_out)->toDateTimeString() : null,
                     'working_hours' => (float) $resultAttendance->working_hours,
                     'attendance_status' => $resultAttendance->attendance_status,
+                    'place_of_work' => $resultAttendance->place_of_work,
                     'remarks' => $resultAttendance->remarks,
                 ]
             ]);
@@ -776,6 +788,201 @@ class AttendanceController extends Controller
         }
     }
 
+
+    /**
+     * Attendance Register (Form D).
+     *
+     * One row per employee for a calendar month, with an IN and an OUT value for
+     * each day 1..31 — the layout the printed register uses.
+     *
+     * Columns 9 (OT hours), the establishment header (name / owner / LIN) and
+     * column 11 (signature of register keeper) are not emitted: overtime is not
+     * tracked yet, and there is no company settings record to read the header from.
+     */
+    public function attendanceRegister(Request $request)
+    {
+        try {
+            $month = (int) $request->input('month', now()->month);
+            $year = (int) $request->input('year', now()->year);
+
+            if ($request->filled('date')) {
+                try {
+                    $parsed = Carbon::parse($request->date);
+                    $month = $parsed->month;
+                    $year = $parsed->year;
+                } catch (\Exception $e) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Invalid date format.'
+                    ], 422);
+                }
+            }
+
+            if ($month < 1 || $month > 12) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Invalid month.'
+                ], 422);
+            }
+
+            $startDate = Carbon::create($year, $month, 1)->startOfDay();
+            $endDate = $startDate->copy()->endOfMonth()->endOfDay();
+            $daysInMonth = $startDate->daysInMonth;
+
+            $employeeQuery = \App\Models\Employee::with(['relay', 'site', 'department', 'designation'])
+                ->orderBy('employee_code')
+                ->orderBy('id');
+
+            // Register rows are the establishment's own workers, so the same roles
+            // the attendance listing hides are hidden here.
+            $excludedRoles = ['Super Admin', 'CEO'];
+            $employeeQuery->whereDoesntHave('roleUser.user.roles', function ($q) use ($excludedRoles) {
+                $q->whereIn('name', $excludedRoles);
+            });
+
+            if ($request->filled('site_id')) {
+                $employeeQuery->where('site_id', $request->site_id);
+            }
+
+            if ($request->filled('department_id')) {
+                $employeeQuery->where('department_id', $request->department_id);
+            }
+
+            if ($request->filled('relay_id')) {
+                $employeeQuery->where('relay_id', $request->relay_id);
+            }
+
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $employeeQuery->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                        ->orWhere('surname', 'like', "%{$search}%")
+                        ->orWhere('employee_code', 'like', "%{$search}%");
+                });
+            }
+
+            // Default to the people on the register during that month: anyone who
+            // had not yet joined, or who had already left, does not get a row.
+            $employeeStatus = strtolower((string) $request->input('employee_status', 'active'));
+            if ($employeeStatus !== 'all') {
+                $employeeQuery->whereDate('joining_date', '<=', $endDate->format('Y-m-d'))
+                    ->where(function ($q) use ($startDate) {
+                        $q->whereNull('date_of_exit')
+                            ->orWhereDate('date_of_exit', '>=', $startDate->format('Y-m-d'));
+                    });
+            }
+
+            $limit = (int) $request->input('limit', 25);
+            $employees = $limit > 0
+                ? $employeeQuery->paginate($limit)
+                : $employeeQuery->get();
+
+            $employeeIds = collect($limit > 0 ? $employees->items() : $employees)->pluck('id');
+
+            $records = AttendanceProcessed::whereIn('employee_id', $employeeIds)
+                ->whereBetween('date', [$startDate->format('Y-m-d'), $endDate->format('Y-m-d')])
+                ->get()
+                ->groupBy('employee_id');
+
+            // Column 1 continues across pages so the printed register numbers run 1..n.
+            $serial = $limit > 0
+                ? (($employees->currentPage() - 1) * $employees->perPage()) + 1
+                : 1;
+
+            $rows = [];
+            foreach ($limit > 0 ? $employees->items() : $employees as $employee) {
+                $empRecords = ($records->get($employee->id) ?? collect())
+                    ->keyBy(function ($item) {
+                        return (int) Carbon::parse($item->date)->day;
+                    });
+
+                $days = [];
+                $totalDays = 0.0;
+                $placesWorked = [];
+                $rowRemarks = [];
+
+                for ($day = 1; $day <= $daysInMonth; $day++) {
+                    $record = $empRecords->get($day);
+
+                    if (!$record) {
+                        $days[$day] = [
+                            'in' => null,
+                            'out' => null,
+                            'status' => null,
+                            'place_of_work' => null,
+                        ];
+                        continue;
+                    }
+
+                    if ($record->attendance_status === 'present') {
+                        $totalDays += 1;
+                    } else if ($record->attendance_status === 'half_day') {
+                        $totalDays += 0.5;
+                    }
+
+                    if ($record->place_of_work) {
+                        $placesWorked[$record->place_of_work] = true;
+                    }
+
+                    if ($record->remarks) {
+                        $rowRemarks[] = $day . ': ' . $record->remarks;
+                    }
+
+                    $days[$day] = [
+                        'in' => $record->check_in ? Carbon::parse($record->check_in)->format('H:i') : null,
+                        'out' => $record->check_out ? Carbon::parse($record->check_out)->format('H:i') : null,
+                        'status' => $record->attendance_status,
+                        'place_of_work' => $record->place_of_work,
+                    ];
+                }
+
+                // Column 4 is a single cell, so a worker moved between locations
+                // during the month shows every location they were recorded at.
+                $places = array_keys($placesWorked);
+
+                $rows[] = [
+                    'serial_no' => $serial++,
+                    'employee_id' => $employee->id,
+                    'employee_code' => $employee->employee_code,
+                    'name' => $employee->full_name,
+                    'relay' => optional($employee->relay)->name,
+                    'place_of_work' => count($places) === 1 ? $places[0] : null,
+                    'place_of_work_label' => implode(', ', array_map('ucfirst', $places)) ?: null,
+                    'days' => $days,
+                    'total_days' => $totalDays,
+                    'remarks' => $rowRemarks ? implode('; ', $rowRemarks) : null,
+                ];
+            }
+
+            $response = [
+                'status' => 200,
+                'message' => 'Attendance register fetched successfully',
+                'data' => [
+                    'month' => $startDate->format('F Y'),
+                    'month_num' => $month,
+                    'year' => $year,
+                    'days_in_month' => $daysInMonth,
+                    'rows' => $rows,
+                ]
+            ];
+
+            if ($limit > 0) {
+                $response['data']['pagination'] = [
+                    'current_page' => $employees->currentPage(),
+                    'per_page' => $employees->perPage(),
+                    'total' => $employees->total(),
+                    'last_page' => $employees->lastPage(),
+                ];
+            }
+
+            return response()->json($response);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
 
     public function bulkUpload(Request $request)
     {

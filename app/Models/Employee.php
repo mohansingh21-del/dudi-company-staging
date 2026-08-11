@@ -10,11 +10,13 @@ class Employee extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['role_user_id', 'employee_code', 'name', 'father_name', 'dob', 'gender', 'mobile', 'address', 'emergency_contact', 'joining_date', 'employee_type', 'department_id', 'designation_id', 'site_id', 'supervisor_id', 'salary_type', 'basic_salary', 'pf_applicable', 'pf_number', 'bank_name', 'bank_account_number', 'ifsc_code', 'mess_deduction_applicable', 'other_deduction_appliacble', 'other_deduction', 'is_active', 'relay_id', 'pf_amount', 'mess_deduction_amount', 'rest_days'];
+    protected $fillable = ['role_user_id', 'employee_code', 'name', 'surname', 'father_name', 'dob', 'nationality', 'education_level', 'identification_mark', 'gender', 'mobile', 'address', 'permanent_address', 'emergency_contact', 'joining_date', 'service_book_no', 'employee_type', 'department_id', 'designation_id', 'skill_category', 'site_id', 'supervisor_id', 'is_active', 'date_of_exit', 'reason_for_exit', 'photo_path', 'signature_path', 'remarks', 'relay_id'];
 
     protected $casts = [
         'dob' => 'date:Y-m-d',
         'joining_date' => 'date:Y-m-d',
+        'date_of_exit' => 'date:Y-m-d',
+        'is_active' => 'boolean',
     ];
 
     public function relay()
@@ -205,9 +207,33 @@ class Employee extends Model
         return $this->hasMany(AttendanceProcessed::class);
     }
 
-    public function getRestDaysAttribute($value)
+    /**
+     * Rest days are a pay setting and live only on the salary record.
+     * Employees without an active payroll record have none.
+     */
+    public function getRestDaysAttribute()
     {
-        $activePayroll = $this->activePayroll;
-        return ($activePayroll && $activePayroll->rest_days !== null) ? (int)$activePayroll->rest_days : (int)$value;
+        return (int) optional($this->activePayroll)->rest_days;
+    }
+
+    /**
+     * Full name as it appears in the Employee Register.
+     */
+    public function getFullNameAttribute()
+    {
+        return trim($this->name . ' ' . $this->surname);
+    }
+
+    /**
+     * Skill classification as it reads in the Employee Register,
+     * e.g. semi_skilled => "Semi-Skilled".
+     */
+    public function getSkillCategoryLabelAttribute()
+    {
+        if (!$this->skill_category) {
+            return null;
+        }
+
+        return ucwords(str_replace('_', '-', $this->skill_category), '-');
     }
 }

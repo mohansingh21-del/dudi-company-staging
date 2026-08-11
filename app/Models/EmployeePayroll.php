@@ -22,6 +22,16 @@ class EmployeePayroll extends Model
 
         'pf_number',
 
+        'uan',
+
+        'esic_ip_number',
+
+        'lwf_number',
+
+        'pan',
+
+        'aadhaar_number',
+
         'bank_name',
 
         'bank_account_number',
@@ -53,8 +63,36 @@ class EmployeePayroll extends Model
 
         'rest_days' => 'integer',
 
-        'effective_from' => 'date'
+        'effective_from' => 'date',
+
+        'aadhaar_number' => 'encrypted'
     ];
+
+    protected $hidden = ['aadhaar_number', 'aadhaar_hash'];
+
+    /**
+     * Aadhaar is encrypted non-deterministically, so it cannot be searched or
+     * checked for duplicates. Writing it also maintains a SHA-256 hash (unique,
+     * for duplicate detection) and the last four digits (for display).
+     */
+    public function setAadhaarNumberAttribute($value)
+    {
+        $digits = $value === null ? null : preg_replace('/\D/', '', $value);
+
+        if ($digits === null || $digits === '') {
+            $this->attributes['aadhaar_number'] = null;
+            $this->attributes['aadhaar_last4']  = null;
+            $this->attributes['aadhaar_hash']   = null;
+
+            return;
+        }
+
+        // encrypt() serializes by default; the `encrypted` cast decrypts without
+        // unserializing, so the second argument has to be false to match it.
+        $this->attributes['aadhaar_number'] = encrypt($digits, false);
+        $this->attributes['aadhaar_last4']  = substr($digits, -4);
+        $this->attributes['aadhaar_hash']   = hash('sha256', $digits);
+    }
 
     public function employee()
     {

@@ -10,6 +10,7 @@ use App\Http\Requests\StoreEmployeeRequest;
 use App\Http\Requests\UpdateEmployeeRequest;
 use App\Http\Resources\EmployeeResource;
 use App\Imports\EmployeeImport;
+use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 
 class EmployeeController extends Controller
@@ -208,24 +209,70 @@ class EmployeeController extends Controller
     }
     public function store(StoreEmployeeRequest $request)
     {
-        ///////dd($request->all());
-        // dd([
-        //     'content_type' => $request->header('Content-Type'),
-        //     'accept' => $request->header('Accept'),
-        //     'raw' => $request->getContent(),
-        //     'all' => $request->all(),
-        //     'input' => $request->input(),
-        // ]);
-        $data = $request->validated();
-
-        $data['dob'] = \Carbon\Carbon::createFromFormat('d/m/Y', $data['dob'])->format('Y-m-d');
-        $data['joining_date'] = \Carbon\Carbon::createFromFormat('d/m/Y', $data['joining_date'])->format('Y-m-d');
         try {
-            //  dd($request->all());
+            $data = $this->prepareEmployeeData($request->validated());
+
             $employee = Employee::create($data);
-            return response()->json(['status' => 200, 'message' => 'Employee created successfully']);
+
+            $this->storeDocuments($request, $employee);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Employee created successfully',
+                'data' => new EmployeeResource($employee->fresh()),
+            ]);
         } catch (\Throwable $th) {
             return response()->json(['status' => 500, 'message' => $th->getMessage()]);
+        }
+    }
+
+    /**
+     * Convert the d/m/Y date inputs, and map the `status` input onto the
+     * `is_active` column. An employee with a date of exit is never active.
+     */
+    private function prepareEmployeeData(array $data): array
+    {
+        foreach (['dob', 'joining_date', 'date_of_exit'] as $field) {
+            if (!empty($data[$field])) {
+                $data[$field] = \Carbon\Carbon::createFromFormat('d/m/Y', $data[$field])->format('Y-m-d');
+            }
+        }
+
+        if (array_key_exists('status', $data)) {
+            $data['is_active'] = (bool) $data['status'];
+            unset($data['status']);
+        }
+
+        if (!empty($data['date_of_exit'])) {
+            $data['is_active'] = false;
+        }
+
+        return $data;
+    }
+
+    /**
+     * Photo and specimen signature for the Employee Register. Replacing either
+     * removes the file it supersedes.
+     */
+    private function storeDocuments(Request $request, Employee $employee): void
+    {
+        $documents = ['photo' => 'photo_path', 'signature' => 'signature_path'];
+
+        foreach ($documents as $input => $column) {
+            if (!$request->hasFile($input)) {
+                continue;
+            }
+
+            if ($employee->{$column} && Storage::disk('public')->exists($employee->{$column})) {
+                Storage::disk('public')->delete($employee->{$column});
+            }
+
+            $employee->{$column} = $request->file($input)
+                ->store("employees/{$employee->id}", 'public');
+        }
+
+        if ($employee->isDirty()) {
+            $employee->save();
         }
     } /* |-------------------------------------------------------------------------- | Show Employee |-------------------------------------------------------------------------- */
     public function bulkUpload(Request $request)
@@ -305,19 +352,21 @@ class EmployeeController extends Controller
     } /* |-------------------------------------------------------------------------- | Update Employee |-------------------------------------------------------------------------- */
     public function update(UpdateEmployeeRequest $request, int $id)
     {
-        //// dd($request->all());
         try {
             $employee = Employee::find($id);
             if (!$employee) {
                 return response()->json(['status' => 404, 'message' => 'Employee not found']);
             }
-            $data = $request->validated();
 
-            $data['dob'] = \Carbon\Carbon::createFromFormat('d/m/Y', $data['dob'])->format('Y-m-d');
-            $data['joining_date'] = \Carbon\Carbon::createFromFormat('d/m/Y', $data['joining_date'])->format('Y-m-d');
+            $employee->update($this->prepareEmployeeData($request->validated()));
 
-            $employee->update($data);
-            return response()->json(['status' => 200, 'message' => 'Employee updated successfully']);
+            $this->storeDocuments($request, $employee);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Employee updated successfully',
+                'data' => new EmployeeResource($employee->fresh()),
+            ]);
         } catch (\Throwable $th) {
             return response()->json(['status' => 500, 'message' => $th->getMessage()]);
         }

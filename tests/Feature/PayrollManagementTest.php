@@ -64,12 +64,19 @@ class PayrollManagementTest extends TestCase
             'name' => 'Amit Sharma',
             'joining_date' => '2026-01-01',
             'is_active' => 1,
-            'basic_salary' => 25000.00,
             'designation_id' => $this->role->id,
+        ]);
+
+        // Pay details live on the salary record, not the employee row.
+        \App\Models\EmployeePayroll::create([
+            'employee_id' => $this->employee->id,
+            'salary_type' => 'monthly',
+            'basic_salary' => 25000.00,
             'pf_applicable' => 1,
             'pf_amount' => 1200.00,
             'mess_deduction_applicable' => 1,
-            'mess_deduction_amount' => 500.00
+            'mess_deduction_amount' => 500.00,
+            'is_active' => 1,
         ]);
     }
 
@@ -316,7 +323,7 @@ class PayrollManagementTest extends TestCase
         ]);
 
         // Disable PF and Mess deductions for clean net salary verification, set rest_days setting
-        $this->employee->update([
+        $this->employee->activePayroll->update([
             'pf_applicable' => 0,
             'mess_deduction_applicable' => 0,
             'rest_days' => 5,
@@ -423,7 +430,9 @@ class PayrollManagementTest extends TestCase
             ]);
         }
 
-        // Create an active employee payroll record (different configuration)
+        // Supersede the salary record from setUp with a revised one
+        $this->employee->activePayroll->update(['is_active' => false]);
+
         \App\Models\EmployeePayroll::create([
             'employee_id' => $this->employee->id,
             'salary_type' => 'monthly',

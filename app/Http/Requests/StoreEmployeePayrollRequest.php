@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Models\EmployeePayroll;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StoreEmployeePayrollRequest extends FormRequest
@@ -17,6 +18,18 @@ class StoreEmployeePayrollRequest extends FormRequest
     }
 
     /**
+     * Normalise the identifiers before validation so the format rules below
+     * do not fail on casing or separators the user cannot see.
+     */
+    protected function prepareForValidation()
+    {
+        $this->merge(array_filter([
+            'pan' => $this->pan ? strtoupper(trim($this->pan)) : null,
+            'aadhaar_number' => $this->aadhaar_number ? preg_replace('/\D/', '', $this->aadhaar_number) : null,
+        ], fn($value) => $value !== null));
+    }
+
+    /**
      * Get the validation rules that apply to the request.
      *
      * @return array
@@ -27,7 +40,7 @@ class StoreEmployeePayrollRequest extends FormRequest
 
     'employee_id' => 'required|exists:employees,id|unique:employee_payrolls,employee_id',
 
-    'salary_type' => 'required|in:monthly,daily_wage',
+    'salary_type' => 'required|in:monthly,daily_wage,piece_rate',
 
     'basic_salary' => 'nullable|numeric|min:0',
 
@@ -36,6 +49,16 @@ class StoreEmployeePayrollRequest extends FormRequest
     'pf_applicable' => 'nullable|boolean',
 
     'pf_number' => 'nullable|string|max:255',
+
+    'uan' => 'nullable|digits:12|unique:employee_payrolls,uan',
+
+    'esic_ip_number' => 'nullable|string|max:20',
+
+    'lwf_number' => 'nullable|string|max:255',
+
+    'pan' => 'nullable|string|size:10|regex:/^[A-Z]{5}[0-9]{4}[A-Z]$/|unique:employee_payrolls,pan',
+
+    'aadhaar_number' => ['nullable', 'digits:12', $this->uniqueAadhaarRule()],
 
     'bank_name' => 'nullable|string|max:255',
 
@@ -53,5 +76,29 @@ class StoreEmployeePayrollRequest extends FormRequest
     'rest_days' => 'nullable|integer|min:0|max:31',
 
 ];
+    }
+
+    /**
+     * Aadhaar is encrypted non-deterministically, so uniqueness has to be
+     * checked against the SHA-256 hash rather than the stored value.
+     */
+    protected function uniqueAadhaarRule(): \Closure
+    {
+        return function ($attribute, $value, $fail) {
+            $exists = EmployeePayroll::where('aadhaar_hash', hash('sha256', $value))->exists();
+
+            if ($exists) {
+                $fail('This Aadhaar number is already registered against another employee.');
+            }
+        };
+    }
+
+    public function messages(): array
+    {
+        return [
+            'pan.regex' => 'PAN must be in the format ABCDE1234F.',
+            'aadhaar_number.digits' => 'Aadhaar number must be 12 digits.',
+            'uan.digits' => 'UAN must be 12 digits.',
+        ];
     }
 }

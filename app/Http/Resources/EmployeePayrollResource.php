@@ -31,6 +31,17 @@ class EmployeePayrollResource extends JsonResource
 
             'pf_number' => $this->pf_number,
 
+            'uan' => $this->uan,
+
+            'esic_ip_number' => $this->esic_ip_number,
+
+            'lwf_number' => $this->lwf_number,
+
+            'pan' => $this->pan,
+
+            // The full Aadhaar number is never exposed.
+            'aadhaar_last4' => $this->aadhaar_last4,
+
             'bank_name' => $this->bank_name,
 
             'bank_account_number' => $this->bank_account_number,
