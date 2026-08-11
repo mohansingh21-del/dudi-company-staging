@@ -21,6 +21,11 @@ use Maatwebsite\Excel\Validators\ValidationException as ExcelValidationExceptio;
 
 class AttendanceController extends Controller
 {
+    /**
+     * A full working day for the Attendance Register's overtime column. Hours
+     * beyond this on a single day are overtime.
+     */
+    private const STANDARD_WORKING_HOURS = 8.0;
 
     /**
      * List all correction requests
@@ -795,9 +800,15 @@ class AttendanceController extends Controller
      * One row per employee for a calendar month, with an IN and an OUT value for
      * each day 1..31 — the layout the printed register uses.
      *
-     * Columns 9 (OT hours), the establishment header (name / owner / LIN) and
-     * column 11 (signature of register keeper) are not emitted: overtime is not
-     * tracked yet, and there is no company settings record to read the header from.
+     * Column 9 (OT hours) is derived, not stored — there is no overtime column on
+     * attendance_processeds. Overtime is the hours worked beyond the length of the
+     * shift the employee was rostered on that day, so a 09:00-11:00 shift worked
+     * until 12:00 yields one hour. STANDARD_WORKING_HOURS is only the fallback for
+     * days where no shift can be resolved at all.
+     *
+     * The establishment header (name / owner / LIN) and column 11 (signature of
+     * register keeper) are still not emitted: there is no company settings record
+     * to read the header from.
      */
     public function attendanceRegister(Request $request)
     {
@@ -877,12 +888,26 @@ class AttendanceController extends Controller
                 ? $employeeQuery->paginate($limit)
                 : $employeeQuery->get();
 
-            $employeeIds = collect($limit > 0 ? $employees->items() : $employees)->pluck('id');
+            $employeeList = collect($limit > 0 ? $employees->items() : $employees);
+            $employeeIds = $employeeList->pluck('id');
 
             $records = AttendanceProcessed::whereIn('employee_id', $employeeIds)
                 ->whereBetween('date', [$startDate->format('Y-m-d'), $endDate->format('Y-m-d')])
                 ->get()
                 ->groupBy('employee_id');
+
+            // Overtime is measured against the day's own rostered shift, so the
+            // shift has to be resolved even though it is not part of the response.
+            // attendance_processeds.shift_id is mostly NULL, so the roster is the
+            // real source: the same override -> relay mapping -> legacy assignment
+            // precedence Employee::getShiftIdForDate() applies, preloaded here so a
+            // 31-day grid does not run those lookups once per employee per day.
+            $shiftHours = \App\Models\Shift::all()
+                ->mapWithKeys(function ($shift) {
+                    return [$shift->id => $this->shiftScheduledHours($shift)];
+                })
+                ->filter();
+            $rosterContext = $this->buildShiftRosterContext($employeeList, $startDate, $endDate);
 
             // Column 1 continues across pages so the printed register numbers run 1..n.
             $serial = $limit > 0
@@ -898,11 +923,12 @@ class AttendanceController extends Controller
 
                 $days = [];
                 $totalDays = 0.0;
+                $totalOtHours = 0.0;
                 $placesWorked = [];
-                $rowRemarks = [];
 
                 for ($day = 1; $day <= $daysInMonth; $day++) {
                     $record = $empRecords->get($day);
+                    $dateStr = $startDate->copy()->day($day)->format('Y-m-d');
 
                     if (!$record) {
                         $days[$day] = [
@@ -910,6 +936,7 @@ class AttendanceController extends Controller
                             'out' => null,
                             'status' => null,
                             'place_of_work' => null,
+                            'ot_hours' => null,
                         ];
                         continue;
                     }
@@ -924,15 +951,28 @@ class AttendanceController extends Controller
                         $placesWorked[$record->place_of_work] = true;
                     }
 
-                    if ($record->remarks) {
-                        $rowRemarks[] = $day . ': ' . $record->remarks;
-                    }
+                    // Overtime is whatever was worked beyond the shift the employee
+                    // was rostered on that day — a 09:00-11:00 shift worked until
+                    // 12:00 is one hour of OT. What the row recorded wins over the
+                    // roster; the constant is only reached when no shift resolves.
+                    $shiftId = $record->shift_id
+                        ?: $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
+                    $scheduledHours = $shiftId && isset($shiftHours[$shiftId])
+                        ? $shiftHours[$shiftId]
+                        : self::STANDARD_WORKING_HOURS;
+
+                    // Status-agnostic on purpose: overtime follows the hours logged,
+                    // so a day worked beyond a full shift counts even if it was a
+                    // rest day. Absent and leave days carry 0 hours and so score 0.
+                    $otHours = round(max(0, (float) $record->working_hours - $scheduledHours), 2);
+                    $totalOtHours += $otHours;
 
                     $days[$day] = [
                         'in' => $record->check_in ? Carbon::parse($record->check_in)->format('H:i') : null,
                         'out' => $record->check_out ? Carbon::parse($record->check_out)->format('H:i') : null,
                         'status' => $record->attendance_status,
                         'place_of_work' => $record->place_of_work,
+                        'ot_hours' => $otHours,
                     ];
                 }
 
@@ -950,7 +990,9 @@ class AttendanceController extends Controller
                     'place_of_work_label' => implode(', ', array_map('ucfirst', $places)) ?: null,
                     'days' => $days,
                     'total_days' => $totalDays,
-                    'remarks' => $rowRemarks ? implode('; ', $rowRemarks) : null,
+                    'total_ot_hours' => round($totalOtHours, 2),
+                    // Column 10 is left for the register keeper to fill in by hand.
+                    'remarks' => null,
                 ];
             }
 
@@ -982,6 +1024,166 @@ class AttendanceController extends Controller
                 'message' => $th->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * How many hours a shift is scheduled for, from its own clock times. A shift
+     * whose end is at or before its start runs past midnight and lands next day.
+     * minimum_working_hours is deliberately not used: it is a payroll threshold,
+     * not the length of the shift.
+     */
+    private function shiftScheduledHours($shift): ?float
+    {
+        if (!$shift || !$shift->start_time || !$shift->end_time) {
+            return null;
+        }
+
+        $start = Carbon::parse($shift->start_time);
+        $end = Carbon::parse($shift->end_time);
+
+        if ($end->lessThanOrEqualTo($start)) {
+            $end->addDay();
+        }
+
+        return round($start->diffInMinutes($end) / 60, 2);
+    }
+
+    /**
+     * Preload every table Employee::getShiftIdForDate() consults, for one page of
+     * the register, so the per-day resolution below stays in memory.
+     */
+    private function buildShiftRosterContext($employees, Carbon $startDate, Carbon $endDate): array
+    {
+        $employeeIds = $employees->pluck('id');
+        $relayIds = $employees->pluck('relay_id')->filter()->unique()->values();
+
+        $from = $startDate->format('Y-m-d');
+        $to = $endDate->format('Y-m-d');
+
+        $overrides = \App\Models\EmployeeShiftOverride::whereIn('employee_id', $employeeIds)
+            ->whereDate('effective_from', '<=', $to)
+            ->where(function ($q) use ($from) {
+                $q->whereNull('effective_until')
+                    ->orWhereDate('effective_until', '>=', $from);
+            })
+            ->orderBy('effective_from', 'desc')
+            ->orderBy('id', 'desc')
+            ->get()
+            ->groupBy('employee_id');
+
+        $relayMappings = \App\Models\RelayShiftMapping::whereIn('relay_id', $relayIds)
+            ->whereDate('week_start_date', '<=', $to)
+            ->whereDate('week_end_date', '>=', $from)
+            ->get()
+            ->groupBy('relay_id');
+
+        // Only consulted for today, mirroring the model's own fallback.
+        $latestRelayMappings = \App\Models\RelayShiftMapping::whereIn('relay_id', $relayIds)
+            ->orderBy('week_start_date', 'desc')
+            ->get()
+            ->groupBy('relay_id')
+            ->map(function ($group) {
+                return $group->first();
+            });
+
+        $assignments = \App\Models\EmployeeShiftAssignment::whereIn('employee_id', $employeeIds)
+            ->get()
+            ->groupBy('employee_id');
+
+        $histories = \App\Models\EmployeeShiftHistory::whereIn('employee_id', $employeeIds)
+            ->get()
+            ->groupBy('employee_id');
+
+        return compact('overrides', 'relayMappings', 'latestRelayMappings', 'assignments', 'histories');
+    }
+
+    /**
+     * In-memory twin of Employee::getShiftIdForDate(). Kept in step with that
+     * method — if the precedence there changes, change it here too.
+     */
+    private function resolveRosterShiftId($employee, string $dateStr, array $ctx)
+    {
+        $asDate = function ($value) {
+            if (!$value) {
+                return null;
+            }
+            return $value instanceof \DateTimeInterface
+                ? Carbon::instance($value)->format('Y-m-d')
+                : (string) $value;
+        };
+
+        // 1. An individual override outranks everything.
+        $override = ($ctx['overrides'][$employee->id] ?? collect())
+            ->first(function ($o) use ($dateStr, $asDate) {
+                $start = $asDate($o->effective_from);
+                $end = $asDate($o->effective_until);
+                return $start && $start <= $dateStr && (is_null($end) || $end >= $dateStr);
+            });
+        if ($override) {
+            return $override->shift_id;
+        }
+
+        // 2. Rotating relays get their shift from the week's mapping.
+        if ($employee->relay_id && $employee->relay && $employee->relay->is_rotating) {
+            $mapping = ($ctx['relayMappings'][$employee->relay_id] ?? collect())
+                ->first(function ($m) use ($dateStr, $asDate) {
+                    return $asDate($m->week_start_date) <= $dateStr
+                        && $asDate($m->week_end_date) >= $dateStr;
+                });
+            if ($mapping) {
+                return $mapping->shift_id;
+            }
+
+            if ($dateStr === now()->toDateString()) {
+                $latest = $ctx['latestRelayMappings'][$employee->relay_id] ?? null;
+                if ($latest) {
+                    return $latest->shift_id;
+                }
+            }
+        }
+
+        // 3. Legacy assignments, for months predating the relay mappings.
+        $assignments = $ctx['assignments'][$employee->id] ?? collect();
+
+        $assignment = $assignments->first(function ($assign) use ($dateStr, $asDate) {
+            $start = $asDate($assign->from_date) ?: $asDate($assign->created_at) ?: now()->toDateString();
+            $end = $asDate($assign->to_date);
+            return $start && $dateStr >= $start && (is_null($end) || $dateStr <= $end);
+        });
+        if ($assignment) {
+            return $assignment->shift_id;
+        }
+
+        $history = ($ctx['histories'][$employee->id] ?? collect())
+            ->sortBy(function ($h) use ($asDate) {
+                return $asDate($h->change_date) . '|' . str_pad((string) $h->id, 12, '0', STR_PAD_LEFT);
+            })
+            ->values();
+
+        $nextChange = $history->first(function ($h) use ($dateStr, $asDate) {
+            return $asDate($h->change_date) > $dateStr;
+        });
+        if ($nextChange) {
+            return $nextChange->old_shift_id ?: null;
+        }
+
+        $latestChange = $history->last(function ($h) use ($dateStr, $asDate) {
+            return $asDate($h->change_date) <= $dateStr;
+        });
+        if ($latestChange) {
+            return $latestChange->new_shift_id;
+        }
+
+        $firstAssignment = $assignments->sortBy('id')->first();
+        if ($firstAssignment) {
+            $start = $asDate($firstAssignment->from_date) ?: $asDate($firstAssignment->created_at) ?: now()->toDateString();
+            if ($dateStr < $start) {
+                return null;
+            }
+        }
+
+        $latestAssignment = $assignments->sortByDesc('id')->first();
+        return $latestAssignment ? $latestAssignment->shift_id : null;
     }
 
     public function bulkUpload(Request $request)
