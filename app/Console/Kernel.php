@@ -12,6 +12,8 @@ class Kernel extends ConsoleKernel
         \App\Console\Commands\RemoveExpiredBorrowedEmployeesCommand::class,
         \App\Console\Commands\ResetShiftTestData::class,
         \App\Console\Commands\SyncVecvFuelCommand::class,
+        \App\Console\Commands\SyncVecvLocationCommand::class,
+        \App\Console\Commands\SyncVecvServiceHistoryCommand::class,
     ];
     /**
      * Define the application's command schedule.
@@ -29,6 +31,20 @@ class Kernel extends ConsoleKernel
         // so it can be relaxed to hourly for reporting or tightened for control.
         $schedule->command('vecv:sync-fuel')
             ->cron(config('vecv.fuel_sync_cron'))
+            ->withoutOverlapping()
+            ->runInBackground();
+
+        // Separate rate-limit budget from the fuel endpoint, so this is its own
+        // schedule rather than a second call inside the fuel run.
+        $schedule->command('vecv:sync-location')
+            ->cron(config('vecv.location_sync_cron'))
+            ->withoutOverlapping()
+            ->runInBackground();
+
+        // Workshop job cards, not telemetry: they change over days, so this
+        // runs nightly rather than on the 15 minute telemetry cadence.
+        $schedule->command('vecv:sync-service-history')
+            ->cron(config('vecv.service_history_sync_cron'))
             ->withoutOverlapping()
             ->runInBackground();
     }

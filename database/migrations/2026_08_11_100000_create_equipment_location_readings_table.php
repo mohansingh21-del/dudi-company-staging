@@ -4,16 +4,21 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-class CreateEquipmentFuelReadingsTable extends Migration
+class CreateEquipmentLocationReadingsTable extends Migration
 {
     /**
      * Run the migrations.
+     *
+     * Columns mirror the observed VECV location payload exactly - that
+     * endpoint returns a strictly smaller set of fields than the fuel one
+     * (no engine hours, no altitude, no address), so nothing is carried over
+     * from equipment_fuel_readings on the assumption it will show up later.
      *
      * @return void
      */
     public function up()
     {
-        Schema::create('equipment_fuel_readings', function (Blueprint $table) {
+        Schema::create('equipment_location_readings', function (Blueprint $table) {
             $table->id();
 
             // As returned by VECV. Matched against equipment_names.equipment_name,
@@ -27,30 +32,28 @@ class CreateEquipmentFuelReadingsTable extends Migration
             // Arrives as "" on every vehicle observed so far; normalised to null.
             $table->string('reg_no', 32)->nullable();
 
-            $table->string('fuel_type', 16)->nullable();
+            // Observed values: MOVING, IDLING, STOPPED.
             $table->string('vehicle_status', 16)->nullable();
 
-            // Matches the precision used by site_points.
+            // Matches the precision used by site_points. The feed delivers 5-6
+            // decimals, which is already finer than the fleet needs.
             $table->decimal('latitude', 10, 7)->nullable();
             $table->decimal('longitude', 10, 7)->nullable();
 
             $table->decimal('vehicle_speed', 6, 2)->nullable();
+
+            // The reason this endpoint is worth polling alongside fuel. Whole
+            // kilometres in the observed feed, but stored with decimals since
+            // the vendor sends it as a float.
             $table->decimal('odometer', 12, 2)->nullable();
-            $table->decimal('engine_operating_hours', 12, 2)->nullable();
 
-            $table->decimal('fuel_level_pct', 5, 2)->nullable();
-            $table->decimal('fuel_level_ltr', 10, 2)->nullable();
-            $table->decimal('def_level_ltr', 10, 2)->nullable();
+            // vehicleDirection: degrees clockwise from north, 0-359.9.
+            $table->decimal('vehicle_direction', 5, 2)->nullable();
 
-            // Cumulative litres burned. Delivered as a string by the API and
-            // cast on ingest. This is the authoritative consumption source -
-            // unlike tank level it survives refuelling and sloshing.
-            $table->decimal('lifetime_fuel_consumed', 14, 2)->nullable();
-
-            // EV only. Absent from diesel payloads.
-            $table->decimal('soc_level', 5, 2)->nullable();
-            $table->decimal('battery_temperature', 6, 2)->nullable();
-            $table->decimal('co2_saving', 12, 2)->nullable();
+            // Telematics unit IMEI. Not the vehicle identity - a box can be
+            // swapped between machines, so this is for hardware tracing only
+            // and must never be used to key a reading.
+            $table->string('device_id', 32)->nullable();
 
             // Derived from epochTime and converted to the app timezone, so it
             // is directly comparable to created_at and to shift times. The
@@ -68,7 +71,7 @@ class CreateEquipmentFuelReadingsTable extends Migration
 
             // Dedupe key. The API returns the last known reading every poll, so
             // a vehicle that has stopped reporting simply adds no new rows.
-            $table->unique(['chassis_number', 'reported_at'], 'efr_chassis_reported_unique');
+            $table->unique(['chassis_number', 'reported_at'], 'elr_chassis_reported_unique');
 
             $table->index(['chassis_number', 'reported_at']);
             $table->index(['equipment_name_id', 'reported_at']);
@@ -82,6 +85,6 @@ class CreateEquipmentFuelReadingsTable extends Migration
      */
     public function down()
     {
-        Schema::dropIfExists('equipment_fuel_readings');
+        Schema::dropIfExists('equipment_location_readings');
     }
 }

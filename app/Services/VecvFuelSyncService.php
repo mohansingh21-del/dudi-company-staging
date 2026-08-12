@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Exceptions\VecvApiException;
 use App\Models\EquipmentFuelReading;
-use App\Models\EquipmentName;
 use Carbon\Carbon;
 use Illuminate\Support\Arr;
 
@@ -14,16 +13,8 @@ use Illuminate\Support\Arr;
  * One clientId request returns the whole provisioned fleet, which keeps the
  * endpoint's 1-request-per-minute limit comfortably out of the way.
  */
-class VecvFuelSyncService
+class VecvFuelSyncService extends VecvSyncService
 {
-    /** @var \App\Services\VecvClient */
-    protected $client;
-
-    public function __construct(VecvClient $client)
-    {
-        $this->client = $client;
-    }
-
     /**
      * Fetch and store the current fleet snapshot.
      *
@@ -120,124 +111,5 @@ class VecvFuelSyncService
         }
 
         return $summary;
-    }
-
-    /**
-     * Build the request body.
-     *
-     * clientId returns every vehicle provisioned against the key in a single
-     * call, so it is preferred over enumerating chassis numbers.
-     *
-     * @param  array  $chassisNumbers
-     * @return array
-     *
-     * @throws \App\Exceptions\VecvApiException
-     */
-    protected function payload(array $chassisNumbers)
-    {
-        if (! empty($chassisNumbers)) {
-            $trimmed = array_values(array_filter(array_map('trim', $chassisNumbers), function ($value) {
-                return $value !== '';
-            }));
-
-            if (! empty($trimmed)) {
-                return ['chassisNo' => $trimmed];
-            }
-        }
-
-        $clientId = config('vecv.client_id');
-
-        if (empty($clientId)) {
-            throw new VecvApiException(
-                'VECV_CLIENT_ID is not configured and no chassis numbers were supplied. '
-                . 'The fuel endpoint requires at least one of clientId, regNo or chassisNo.'
-            );
-        }
-
-        return ['clientId' => $clientId];
-    }
-
-    /**
-     * Map chassis number to machine id.
-     *
-     * This project stores the chassis number in equipment_names.equipment_name.
-     *
-     * @return array
-     */
-    protected function machineMap()
-    {
-        $map = [];
-
-        EquipmentName::query()
-            ->select('id', 'equipment_name')
-            ->get()
-            ->each(function ($machine) use (&$map) {
-                $name = strtoupper(trim((string) $machine->equipment_name));
-                if ($name !== '') {
-                    $map[$name] = $machine->id;
-                }
-            });
-
-        return $map;
-    }
-
-    /**
-     * Resolve the instant a reading was taken.
-     *
-     * epochTime is true UTC and is preferred. lastUpdated carries the same
-     * instant rendered in IST, so it is only a fallback.
-     *
-     * @param  array  $row
-     * @return \Carbon\Carbon|null
-     */
-    protected function reportedAt(array $row)
-    {
-        $epoch = Arr::get($row, 'epochTime');
-
-        if (! empty($epoch) && is_numeric($epoch)) {
-            return Carbon::createFromTimestampUTC((int) $epoch);
-        }
-
-        $lastUpdated = Arr::get($row, 'lastUpdated');
-
-        if (! empty($lastUpdated) && preg_match('/^\d{14}$/', (string) $lastUpdated)) {
-            try {
-                return Carbon::createFromFormat('YmdHis', (string) $lastUpdated, 'Asia/Kolkata')->setTimezone('UTC');
-            } catch (\Throwable $e) {
-                return null;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Cast a value that may arrive as a string, or be absent entirely.
-     *
-     * @param  mixed  $value
-     * @return float|null
-     */
-    protected function toFloat($value)
-    {
-        if ($value === null || $value === '' || ! is_numeric($value)) {
-            return null;
-        }
-
-        return (float) $value;
-    }
-
-    /**
-     * @param  mixed  $value
-     * @return string|null
-     */
-    protected function nullIfBlank($value)
-    {
-        if ($value === null) {
-            return null;
-        }
-
-        $value = trim((string) $value);
-
-        return $value === '' ? null : $value;
     }
 }
