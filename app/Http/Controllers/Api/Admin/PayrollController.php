@@ -154,7 +154,7 @@ class PayrollController extends Controller
 
                 $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
                 $activePayroll = $employee->activePayroll;
-                $restDaysSetting = (int) optional($activePayroll)->rest_days;
+                $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
 
                 $presentDays = $att ? (int) $att->present_days : 0;
                 $absentDays = $att ? (int) $att->absent_days : 0;
@@ -371,7 +371,7 @@ class PayrollController extends Controller
                     $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
                     // rest day is counted as paid leave
-                    $restDaysSetting = (int) optional($activePayroll)->rest_days;
+                    $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
                     $paidRestDays = min($restDays, $restDaysSetting);
                     $paidLeaveDays += $paidRestDays;
 
@@ -548,7 +548,7 @@ class PayrollController extends Controller
             $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
 
             // rest day is counted as paid leave
-            $restDaysSetting = (int) optional($activePayroll)->rest_days;
+            $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
             $paidRestDays = min($restDays, $restDaysSetting);
             $approvedPaidLeaves = $paidLeaveDays;
             $paidLeaveDays += $paidRestDays;

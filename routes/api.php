@@ -20,6 +20,7 @@ use App\Http\Controllers\Api\Admin\ShiftController;
 use App\Http\Controllers\Api\Admin\RelayController;
 use App\Http\Controllers\Api\Admin\EmployeeShiftAssignmentController;
 use App\Http\Controllers\Api\Admin\LeaveTypeController;
+use App\Http\Controllers\Api\Admin\LeaveBalanceController;
 use App\Http\Controllers\Api\Admin\HolidayController;
 
 use App\Http\Controllers\Api\Admin\TrainingTypeController;
@@ -103,6 +104,11 @@ Route::prefix('v1')->group(function () {
     Route::get('/states/{id}/cities', [CityController::class, 'getCities']);
 
     Route::get('/shifts/by-datetime', [ShiftController::class, 'findShiftByDateTime']);
+
+    // Active leave blocks for leave-apply dropdowns. Throttled because it is
+    // unauthenticated and hits the database on every call.
+    Route::get('/leave-types', [LeaveTypeController::class, 'publicList'])
+        ->middleware('throttle:60,1');
 
     /*
     |--------------------------------------------------------------------------
@@ -215,9 +221,23 @@ Route::prefix('v1')->group(function () {
 
             Route::apiResource('relays', RelayController::class);
             Route::patch('relays/{id}/status', [RelayController::class, 'toggleStatus']);
-            Route::apiResource('leavetype', LeaveTypeController::class);
+            // Form E master: four fixed statutory blocks, seeded by migration.
+            // No store/destroy — the register always prints the same four.
+            Route::apiResource('leavetype', LeaveTypeController::class)
+                ->only(['index', 'show', 'update']);
 
             Route::patch('leavetype/{id}/status', [LeaveTypeController::class, 'toggleStatus']);
+
+            // Form E balances — live preview, computed on read.
+            Route::get('leave-balance', [LeaveBalanceController::class, 'index']);
+            Route::get('leave-balance/employee/{employee_id}', [LeaveBalanceController::class, 'employee']);
+
+            // Generated Form E registers — frozen snapshots, never recomputed.
+            // Declared before the {id} route so "reports" is not read as an id.
+            Route::post('leave-register/generate', [LeaveBalanceController::class, 'generate']);
+            Route::get('leave-register/reports', [LeaveBalanceController::class, 'reports']);
+            Route::get('leave-register/reports/{id}', [LeaveBalanceController::class, 'reportShow']);
+            Route::delete('leave-register/reports/{id}', [LeaveBalanceController::class, 'reportDestroy']);
             Route::apiResource('holiday', HolidayController::class);
 
             Route::patch('holiday/{id}/status', [HolidayController::class, 'toggleStatus']);

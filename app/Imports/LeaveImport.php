@@ -34,20 +34,27 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
-            $leaveType = null;
-            if (!empty($row['leave_type'])) {
-                $leaveType = LeaveType::where(
-                    'name',
-                    trim((string) $row['leave_type'])
-                )->first();
+            // Required: a leave with no type contributes to nothing on the Form E
+            // register, so it would import cleanly and then silently disappear.
+            if (empty($row['leave_type'])) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Leave Type is required for Employee {$employee->employee_code}. Allowed: " . $this->allowedLeaveTypes()
+                ];
+                continue;
+            }
 
-                if (!$leaveType) {
-                    $this->errors[] = [
-                        'row' => $index + 2,
-                        'message' => 'Leave Type not found: ' . $row['leave_type']
-                    ];
-                    continue;
-                }
+            // Case-insensitive so "earned leave" matches "Earned Leave".
+            $leaveType = LeaveType::whereRaw('LOWER(name) = ?', [
+                strtolower(trim((string) $row['leave_type']))
+            ])->first();
+
+            if (!$leaveType) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => 'Leave Type not found: ' . $row['leave_type'] . '. Allowed: ' . $this->allowedLeaveTypes()
+                ];
+                continue;
             }
 
             $fromDate = $this->parseDate($row['from_date'] ?? null);
@@ -137,6 +144,18 @@ class LeaveImport implements ToCollection, WithHeadingRow
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    /**
+     * The four Form E blocks, listed in error messages so whoever fixes the
+     * sheet can see the accepted spellings without opening the master.
+     */
+    private function allowedLeaveTypes(): string
+    {
+        return LeaveType::whereNotNull('register_group')
+            ->orderBy('id')
+            ->pluck('name')
+            ->implode(', ');
     }
 
     public function getErrors()

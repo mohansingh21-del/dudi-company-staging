@@ -208,15 +208,6 @@ class Employee extends Model
     }
 
     /**
-     * Rest days are a pay setting and live only on the salary record.
-     * Employees without an active payroll record have none.
-     */
-    public function getRestDaysAttribute()
-    {
-        return (int) optional($this->activePayroll)->rest_days;
-    }
-
-    /**
      * Full name as it appears in the Employee Register.
      */
     public function getFullNameAttribute()

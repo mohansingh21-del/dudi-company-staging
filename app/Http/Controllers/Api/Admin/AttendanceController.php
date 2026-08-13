@@ -1670,7 +1670,7 @@ class AttendanceController extends Controller
                     $absent = $att ? (int) $att->absent_days : 0;
                     $halfDay = $att ? (int) $att->half_days : 0;
                     $restDay = $att ? (int) $att->rest_days : 0;
-                    $restDaysSetting = (int) $employee->rest_days; // Uses accessor which automatically gets from activePayroll
+                    $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
                     $paidRestDays = min($restDay, $restDaysSetting);
                     $leave = $empLeave['paid'] + $empLeave['unpaid'];
 
@@ -2162,7 +2162,7 @@ class AttendanceController extends Controller
                     $absent = $att ? (int) $att->absent_days : 0;
                     $halfDay = $att ? (int) $att->half_days : 0;
                     $restDay = $att ? (int) $att->rest_days : 0;
-                    $restDaysSetting = (int) $employee->rest_days; // Uses accessor which automatically gets from activePayroll
+                    $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
                     $paidRestDays = min($restDay, $restDaysSetting);
                     //$leave = $att ? (int) $att->leave_days : 0;
                     $leave = $empLeave['paid'] + $empLeave['unpaid'];
@@ -2670,7 +2670,7 @@ class AttendanceController extends Controller
                     $absent = $att ? (int) $att->absent_days : 0;
                     $halfDay = $att ? (int) $att->half_days : 0;
                     $restDay = $att ? (int) $att->rest_days : 0;
-                    $restDaysSetting = (int) $employee->rest_days; // Uses accessor which automatically gets from
+                    $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
 
                     $paidRestDays = min($restDay, $restDaysSetting);
                     $leave = $empLeave['paid'] + $empLeave['unpaid'];

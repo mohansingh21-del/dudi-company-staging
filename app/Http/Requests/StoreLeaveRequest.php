@@ -17,7 +17,10 @@ class StoreLeaveRequest extends FormRequest
     {
         return [
             'employee_id' => 'required|exists:employees,id',
-            'leave_type_id' => 'nullable|exists:leave_types,id',
+
+            // Required: a leave with no type counts toward nothing on the Form E
+            // register, so it would save cleanly and then silently disappear.
+            'leave_type_id' => 'required|exists:leave_types,id',
 
             'from_date' => 'required|date',
             'to_date' => 'required|date|after_or_equal:from_date',
@@ -28,6 +31,15 @@ class StoreLeaveRequest extends FormRequest
             'approved_by' => 'nullable|exists:users,id',
         ];
     }
+
+    public function messages(): array
+    {
+        return [
+            'leave_type_id.required' => 'Leave type is required.',
+            'leave_type_id.exists' => 'Selected leave type does not exist.',
+        ];
+    }
+
 public function withValidator($validator)
 {
     $validator->after(function ($validator) {
