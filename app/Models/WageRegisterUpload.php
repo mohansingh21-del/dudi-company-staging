@@ -25,7 +25,6 @@ class WageRegisterUpload extends Model
         'valid_rows',
         'error_rows',
         'status',
-        'committed_at',
     ];
 
     protected $casts = [
@@ -34,7 +33,6 @@ class WageRegisterUpload extends Model
         'total_rows' => 'integer',
         'valid_rows' => 'integer',
         'error_rows' => 'integer',
-        'committed_at' => 'datetime',
     ];
 
     public function rows()
@@ -75,7 +73,6 @@ class WageRegisterUpload extends Model
         return [
             'pending' => 'Failed',
             'ready' => 'Ready',
-            'committed' => 'Committed',
         ][$this->status] ?? ucfirst($this->status);
     }
 }

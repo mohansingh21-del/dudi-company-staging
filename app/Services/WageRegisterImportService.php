@@ -101,6 +101,9 @@ class WageRegisterImportService
      * nothing is recalculated here. That is the point of the review step: what
      * was approved on screen is what gets filed.
      *
+     * The staged batch is then discarded: it was scratch space for the review,
+     * and the register is the record from here on.
+     *
      * Still writes to nothing else. employee_payrolls, payrolls, attendance and
      * the wage master are untouched by a submission.
      */
@@ -197,11 +200,14 @@ class WageRegisterImportService
                 WageRegisterReportRow::insert($chunk);
             }
 
-            // The batch is history now; correcting it would leave the staged
-            // figures and the filed register disagreeing.
-            $upload->status = 'committed';
-            $upload->committed_at = now();
-            $upload->save();
+            // Staging has done its job — the figures now live in the register,
+            // which is the record. Keeping a second copy would only invite the
+            // two to drift apart, and the report already carries who filed it
+            // and when. Rows go with it on the cascade.
+            //
+            // Inside the transaction, so a failure anywhere above leaves the
+            // staged sheet intact for the user to retry.
+            $upload->delete();
 
             return $report->fresh();
         });
@@ -441,10 +447,7 @@ class WageRegisterImportService
         $upload->valid_rows = $valid;
         $upload->error_rows = $total - $valid;
 
-        // A batch already used to generate a register keeps its committed state.
-        if ($upload->status !== 'committed') {
-            $upload->status = ($total > 0 && $valid === $total) ? 'ready' : 'pending';
-        }
+        $upload->status = ($total > 0 && $valid === $total) ? 'ready' : 'pending';
 
         $upload->save();
     }

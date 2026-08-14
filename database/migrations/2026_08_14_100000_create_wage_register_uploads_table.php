@@ -33,11 +33,13 @@ return new class extends Migration
             $table->unsignedInteger('valid_rows')->default(0);
             $table->unsignedInteger('error_rows')->default(0);
 
-            // pending  — rows failed validation, the user has to fix and resend
-            // ready    — every row is clean and the batch can be generated from
-            // committed— already used to generate a register
-            $table->enum('status', ['pending', 'ready', 'committed'])->default('pending');
-            $table->timestamp('committed_at')->nullable();
+            // pending — rows failed validation, the user has to fix and resend
+            // ready   — every row is clean and can be submitted
+            //
+            // There is no "submitted" state: a submitted batch is deleted, and
+            // the register it produced is the record from then on. Keeping a
+            // copy here would only invite the two to drift apart.
+            $table->enum('status', ['pending', 'ready'])->default('pending');
 
             $table->timestamps();
 

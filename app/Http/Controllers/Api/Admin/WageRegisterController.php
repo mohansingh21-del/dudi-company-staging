@@ -105,12 +105,20 @@ class WageRegisterController extends Controller
     }
 
     /**
-     * Whether a month has already been generated, and whether it is fit to be.
+     * The "Continue / Check Salary" step: pick a month and either be warned that
+     * it is already filed, or be handed the sheet to work on.
      *
-     * Backs the "Continue / Check Salary" step: the caller picks a month and
-     * this answers in one round trip — does a register already exist, can one be
-     * generated at all, and is the underlying data complete enough to be worth
-     * freezing. Reads only; nothing is created.
+     * Answers in two shapes, which the caller has to tell apart:
+     *
+     *   already generated — JSON describing the existing register, whether it
+     *                       can be replaced, and how complete the data is
+     *   not generated yet — the .xlsx working sheet, downloaded directly
+     *
+     * Both carry an `X-Wage-Register-Status` header (`generated` /
+     * `not_generated`), which is the reliable thing to branch on. It is exposed
+     * through CORS so a browser client can actually read it.
+     *
+     * Reads only; nothing is created either way.
      */
     public function check(Request $request)
     {
@@ -136,35 +144,57 @@ class WageRegisterController extends Controller
                 ->where('year', $year)
                 ->first();
 
+            // Nothing filed for this month yet, so there is nothing to warn
+            // about — hand back the working sheet instead of a report saying it
+            // does not exist. The caller gets a spreadsheet download here and
+            // JSON in every other case, so it has to branch on the response:
+            // either the content type, or the X-Wage-Register-Status header set
+            // below, which is present on both paths.
+            if (!$existing) {
+                $download = $this->export($request);
+
+                // export() answers with JSON when it cannot produce a file —
+                // no employees on the register, for instance — and that reply
+                // should reach the caller untouched.
+                if ($download instanceof \Symfony\Component\HttpFoundation\BinaryFileResponse
+                    || $download instanceof \Symfony\Component\HttpFoundation\StreamedResponse) {
+                    $download->headers->set('X-Wage-Register-Status', 'not_generated');
+                    $download->headers->set('Access-Control-Expose-Headers', 'X-Wage-Register-Status, Content-Disposition');
+                }
+
+                return $download;
+            }
+
             // A month still running would freeze an incomplete register, so it
             // is reported as blocked rather than merely "not generated".
             $monthIsOver = ! Carbon::create($year, $month, 1)->endOfMonth()->isFuture();
 
+            // Only reached when a register already exists, so the caller is
+            // being told about that rather than handed a sheet.
             return response()->json([
                 'status' => 200,
-                'message' => $existing
-                    ? "A wage register for {$label} already exists."
-                    : "No wage register has been generated for {$label} yet.",
+                'message' => "A wage register for {$label} already exists.",
                 'data' => [
                     'month' => $month,
                     'year' => $year,
                     'month_label' => $label,
 
-                    'exists' => (bool) $existing,
-                    'status' => $existing ? 'generated' : 'not_generated',
+                    'exists' => true,
+                    'status' => 'generated',
 
                     // Generating over an existing register replaces it, so the
                     // caller should confirm first — same rule generate() applies.
-                    'requires_confirmation' => (bool) $existing,
+                    'requires_confirmation' => true,
                     'can_generate' => $monthIsOver,
                     'blocked_reason' => $monthIsOver
                         ? null
                         : "{$label} has not finished yet.",
 
-                    'report' => $existing ? $this->reportHeader($existing) : null,
+                    'report' => $this->reportHeader($existing),
                     'readiness' => $this->readinessFor($month, $year),
                 ],
-            ]);
+            ])->header('X-Wage-Register-Status', 'generated')
+              ->header('Access-Control-Expose-Headers', 'X-Wage-Register-Status, Content-Disposition');
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -588,7 +618,7 @@ class WageRegisterController extends Controller
         $validator = Validator::make($request->all(), [
             'month' => 'nullable|integer|between:1,12',
             'year' => 'nullable|integer|between:2000,2100',
-            'status' => 'nullable|in:pending,ready,committed',
+            'status' => 'nullable|in:pending,ready',
             'search' => 'nullable|string|max:255',
             'limit' => 'nullable|integer|min:1|max:200',
         ]);
@@ -787,15 +817,6 @@ class WageRegisterController extends Controller
                 ], 404);
             }
 
-            // A batch already used to generate a register is history, not a
-            // draft — correcting it would leave the two disagreeing.
-            if ($upload->status === 'committed') {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'This sheet has already been used to generate a register and can no longer be edited.'
-                ], 422);
-            }
-
             $result = $importer->updateRow($row, (array) $request->input('values'));
 
             // Nothing was written — the value did not pass, and the cell still
@@ -855,13 +876,6 @@ class WageRegisterController extends Controller
                     'status' => 404,
                     'message' => 'Uploaded document not found.'
                 ], 404);
-            }
-
-            if ($upload->status === 'committed') {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'This sheet has already been submitted and can no longer be edited.'
-                ], 422);
             }
 
             $row = $upload->rows()->where('excel_row', (int) $excelRow)->first();
@@ -944,13 +958,6 @@ class WageRegisterController extends Controller
 
             $label = $upload->month_label;
 
-            if ($upload->status === 'committed') {
-                return response()->json([
-                    'status' => 422,
-                    'message' => "This sheet has already been submitted for {$label}."
-                ], 422);
-            }
-
             if ($upload->total_rows === 0) {
                 return response()->json([
                     'status' => 422,
@@ -986,6 +993,7 @@ class WageRegisterController extends Controller
                 ], 409);
             }
 
+            $rowCount = $upload->total_rows;
             $report = $importer->commit($upload, Auth::id(), $request->input('remarks'));
 
             return response()->json([
@@ -993,7 +1001,16 @@ class WageRegisterController extends Controller
                 'message' => $existing
                     ? "Wage register for {$label} replaced from the uploaded sheet."
                     : "Wage register for {$label} created from the uploaded sheet.",
-                'data' => $this->reportHeader($report->load('generatedBy.employee', 'generatedBy.roles')),
+                'data' => array_merge(
+                    $this->reportHeader($report->load('generatedBy.employee', 'generatedBy.roles')),
+                    [
+                        // The staged sheet is gone — the register is the record
+                        // now, so the preview screen should close rather than
+                        // try to reload it.
+                        'staging_cleared' => true,
+                        'staged_rows_removed' => $rowCount,
+                    ]
+                ),
             ]);
         } catch (\Throwable $th) {
             return response()->json([
