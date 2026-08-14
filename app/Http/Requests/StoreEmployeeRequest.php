@@ -55,6 +55,8 @@ class StoreEmployeeRequest extends FormRequest
 
             'site_id' => 'nullable|exists:sites,id',
 
+            'place_of_employment' => 'nullable|in:underground,opencast,surface',
+
             'supervisor_id' => 'nullable|exists:employees,id',
 
             'relay_id' => 'nullable|exists:relays,id',

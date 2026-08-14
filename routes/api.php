@@ -39,6 +39,8 @@ use App\Http\Controllers\Api\Admin\InventoryController;
 use App\Http\Controllers\Api\Admin\PenaltyController;
 use App\Http\Controllers\Api\Admin\PayrollController;
 use App\Http\Controllers\Api\Admin\EmployeePayrollController;
+use App\Http\Controllers\Api\Admin\EmployeeWageController;
+use App\Http\Controllers\Api\Admin\WageRegisterController;
 use App\Http\Controllers\Api\Admin\EquipmentController;
 use App\Http\Controllers\Api\Admin\EquipmentNameController;
 use App\Http\Controllers\Api\Admin\IncidentTypeController;
@@ -257,6 +259,43 @@ Route::prefix('v1')->group(function () {
             Route::post('leaves/bulk-upload', [LeaveController::class, 'bulkUpload']);
             Route::post('leaves/{id}/approve-reject', [LeaveController::class, 'approveReject']);
             Route::apiResource('leaves', LeaveController::class);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Form B wage rate master (minimum basic / DA / OT per skill category)
+            |--------------------------------------------------------------------------
+            | The named routes come first so "matrix" and "employee" are not read
+            | as an id by the resource routes below.
+            */
+            Route::get('employee-wages/matrix', [EmployeeWageController::class, 'matrix']);
+            Route::get('employee-wages/employee/{employee_id}', [EmployeeWageController::class, 'forEmployee']);
+            Route::patch('employee-wages/{id}/status', [EmployeeWageController::class, 'toggleStatus']);
+            Route::apiResource('employee-wages', EmployeeWageController::class);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Form B wage register — frozen monthly snapshots, never recomputed
+            |--------------------------------------------------------------------------
+            | "preview" and "generate" are declared before {id} so they are not
+            | read as a report id.
+            */
+            Route::get('wage-register/reports', [WageRegisterController::class, 'index']);
+            Route::get('wage-register/check', [WageRegisterController::class, 'check']);
+            Route::get('wage-register/preview', [WageRegisterController::class, 'preview']);
+            Route::post('wage-register/generate', [WageRegisterController::class, 'generate']);
+            Route::get('wage-register/export', [WageRegisterController::class, 'export']);
+
+            // Edited sheets are staged and validated only — nothing here writes
+            // back to employee_payrolls, payrolls or the wage master.
+            Route::post('wage-register/import', [WageRegisterController::class, 'import']);
+            Route::get('wage-register/import', [WageRegisterController::class, 'importIndex']);
+            Route::patch('wage-register/import/{uploadId}/rows/{excelRow}', [WageRegisterController::class, 'updateImportRow']);
+            Route::delete('wage-register/import/{uploadId}/rows/{excelRow}', [WageRegisterController::class, 'deleteImportRow']);
+            Route::post('wage-register/import/{uploadId}/submit', [WageRegisterController::class, 'submitImport']);
+            Route::get('wage-register/import/{id}', [WageRegisterController::class, 'stagedImport']);
+            Route::delete('wage-register/import/{id}', [WageRegisterController::class, 'discardImport']);
+            Route::get('wage-register/reports/{id}', [WageRegisterController::class, 'show']);
+            Route::delete('wage-register/reports/{id}', [WageRegisterController::class, 'destroy']);
 
             Route::apiResource('employee-payrolls', EmployeePayrollController::class);
             Route::apiResource('equipments', EquipmentController::class);

@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Models\Department;
+use App\Models\Employee;
 use App\Models\EmployeePayroll;
+use App\Models\EmployeeWage;
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreEmployeePayrollRequest;
@@ -122,10 +124,14 @@ class EmployeePayrollController extends Controller
                 ], 422);
             }
 
+            // Basic salary comes from the Form B wage master unless the caller
+            // sent one explicitly — an above-minimum figure still wins.
+            $basicSalary = $data['basic_salary'] ?? $this->basicSalaryFromWageMaster($data['employee_id']);
+
             EmployeePayroll::create([
                 'employee_id' => $data['employee_id'],
                 'salary_type' => $data['salary_type'],
-                'basic_salary' => $data['basic_salary'] ?? 0,
+                'basic_salary' => $basicSalary,
                 'daily_wage' => $data['daily_wage'] ?? 0,
                 'pf_applicable' => $data['pf_applicable'] ?? false,
                 'pf_number' => $data['pf_number'] ?? null,
@@ -161,6 +167,21 @@ class EmployeePayrollController extends Controller
             ]);
         }
     }
+    /**
+     * The wage master rate for an employee's skill category, as basic salary:
+     * minimum basic + dearness allowance. Falls back to 0 when the employee has
+     * no skill category or no rate has been set up for it yet, which is what
+     * this controller assigned before the master existed.
+     */
+    protected function basicSalaryFromWageMaster($employeeId)
+    {
+        $skillCategory = Employee::where('id', $employeeId)->value('skill_category');
+
+        $wage = EmployeeWage::effectiveFor($skillCategory);
+
+        return $wage ? $wage->basic_salary : 0;
+    }
+
     public function show($id)
     {
         try {

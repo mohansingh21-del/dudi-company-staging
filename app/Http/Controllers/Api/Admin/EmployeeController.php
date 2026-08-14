@@ -165,6 +165,10 @@ class EmployeeController extends Controller
                 $employees->where('site_id', $request->site_id);
             }
 
+            if ($request->filled('place_of_employment')) {
+                $employees->where('place_of_employment', $request->place_of_employment);
+            }
+
             if ($request->filled('status')) {
                 $employees->where('status', $request->status);
             }

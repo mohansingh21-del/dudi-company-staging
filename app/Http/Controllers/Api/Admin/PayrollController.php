@@ -146,8 +146,16 @@ class PayrollController extends Controller
                 ->get()
                 ->keyBy('employee_id');
 
+            // Overtime hours and the rate they are paid at. Shared with the wage
+            // register so both modules count the same hours.
+            $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
+                ->overtimeSummary($employeeIds->all(), $month, $year);
+            $overtimeRates = \App\Models\EmployeeWage::effectiveSet(
+                Carbon::create($year, $month, 1)->endOfMonth()->toDateString()
+            );
+
             // ── Build result collection ──
-            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $penaltyTotals, $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year) {
+            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $penaltyTotals, $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year, $overtimeHoursMap, $overtimeRates) {
                 $att = $attendanceCounts->get($employee->id);
                 $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
                 $penaltyTotal = $penaltyTotals[$employee->id] ?? 0;
@@ -170,9 +178,21 @@ class PayrollController extends Controller
                 $shiftAllowance = 0;
                 $incentives = 0;
 
-                // Gross = Basic + Shift Allowance + Incentives
-                $grossSalary = $basicSalary + $shiftAllowance + $incentives;
-                $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
+                // The monthly entitlement. A day of absence is priced against
+                // this and deliberately not against overtime: overtime pays for
+                // hours already worked, so charging absence to it would deduct
+                // the same day twice.
+                $monthlyEarnings = $basicSalary + $shiftAllowance + $incentives;
+                $perDaySalary = $daysInMonth > 0 ? $monthlyEarnings / $daysInMonth : 0;
+
+                // Gross = Basic + Shift Allowance + Incentives + Overtime
+                $overtimeHours = round($overtimeHoursMap[$employee->id] ?? 0, 2);
+                $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
+                    ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
+                    : 0.0;
+                $overtimePayment = round($overtimeHours * $overtimeRate, 2);
+
+                $grossSalary = $monthlyEarnings + $overtimePayment;
 
                 // Unmarked days count as absent: effective_absent = total - accounted days
                 $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
@@ -221,6 +241,8 @@ class PayrollController extends Controller
                     'basic_salary' => $basicSalary,
                     'shift_allowance' => $shiftAllowance,
                     'incentives' => $incentives,
+                    'overtime_hours' => $overtimeHours,
+                    'overtime_payment' => $overtimePayment,
                     'gross_salary' => $grossSalary,
                     'leave_deduction' => $leaveDeduction,
                     'pf_deduction' => $pfDeduction,
@@ -308,9 +330,15 @@ class PayrollController extends Controller
 
             $daysInMonth = Carbon::create($year, $month)->daysInMonth;
 
+            // Overtime hours and rates, shared with the wage register so both
+            // modules count the same hours.
+            $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
+                ->overtimeSummary($employees->pluck('id')->all(), $month, $year);
+            $overtimeRates = \App\Models\EmployeeWage::effectiveSet($monthEnd->toDateString());
+
             $generated = 0;
 
-            DB::transaction(function () use ($employees, $month, $year, $daysInMonth, $monthStart, $monthEnd, &$generated) {
+            DB::transaction(function () use ($employees, $month, $year, $daysInMonth, $monthStart, $monthEnd, &$generated, $overtimeHoursMap, $overtimeRates) {
                 foreach ($employees as $employee) {
 
                     // ── Attendance summary ──
@@ -367,8 +395,19 @@ class PayrollController extends Controller
                     $basicSalary = (float) optional($activePayroll)->basic_salary;
                     $shiftAllowance = 0;
                     $incentives = 0;
-                    $grossSalary = $basicSalary + $shiftAllowance + $incentives;
-                    $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
+                    // Absence is priced against the monthly entitlement only —
+                    // overtime pays for hours already worked, so charging
+                    // absence to it would deduct the same day twice.
+                    $monthlyEarnings = $basicSalary + $shiftAllowance + $incentives;
+                    $perDaySalary = $daysInMonth > 0 ? $monthlyEarnings / $daysInMonth : 0;
+
+                    $overtimeHours = round($overtimeHoursMap[$employee->id] ?? 0, 2);
+                    $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
+                        ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
+                        : 0.0;
+                    $overtimePayment = round($overtimeHours * $overtimeRate, 2);
+
+                    $grossSalary = $monthlyEarnings + $overtimePayment;
 
                     // rest day is counted as paid leave
                     $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
@@ -404,6 +443,8 @@ class PayrollController extends Controller
                             'basic_salary' => $basicSalary,
                             'shift_allowance' => $shiftAllowance,
                             'incentives' => $incentives,
+                            'overtime_hours' => $overtimeHours,
+                            'overtime_payment' => $overtimePayment,
                             'present_days' => $presentDays,
                             'half_days' => $halfDays,
                             'absent_days' => $absentDays,
@@ -544,8 +585,25 @@ class PayrollController extends Controller
             $basicSalary = (float) optional($activePayroll)->basic_salary;
             $shiftAllowance = 0;
             $incentives = 0;
-            $grossSalary = $basicSalary + $shiftAllowance + $incentives;
-            $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
+            // Absence is priced against the monthly entitlement only — overtime
+            // pays for hours already worked, so charging absence to it would
+            // deduct the same day twice.
+            $monthlyEarnings = $basicSalary + $shiftAllowance + $incentives;
+            $perDaySalary = $daysInMonth > 0 ? $monthlyEarnings / $daysInMonth : 0;
+
+            $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
+                ->overtimeSummary([$employee->id], $month, $year);
+            $overtimeRates = \App\Models\EmployeeWage::effectiveSet(
+                Carbon::create($year, $month, 1)->endOfMonth()->toDateString()
+            );
+
+            $overtimeHours = round($overtimeHoursMap[$employee->id] ?? 0, 2);
+            $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
+                ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
+                : 0.0;
+            $overtimePayment = round($overtimeHours * $overtimeRate, 2);
+
+            $grossSalary = $monthlyEarnings + $overtimePayment;
 
             // rest day is counted as paid leave
             $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
@@ -586,6 +644,8 @@ class PayrollController extends Controller
                     'basic_salary' => $basicSalary,
                     'shift_allowance' => $shiftAllowance,
                     'incentives' => $incentives,
+                    'overtime_hours' => $overtimeHours,
+                    'overtime_payment' => $overtimePayment,
                     'present_days' => $presentDays,
                     'half_days' => $halfDays,
                     'absent_days' => $absentDays,
@@ -640,6 +700,8 @@ class PayrollController extends Controller
                         'basic_salary' => $basicSalary,
                         'shift_allowance' => $shiftAllowance,
                         'incentives' => $incentives,
+                        'overtime_hours' => $overtimeHours,
+                        'overtime_payment' => $overtimePayment,
                         'gross_salary' => $grossSalary,
                         'per_day_salary' => (float) round($perDaySalary, 0),
                     ],

@@ -10,7 +10,7 @@ class Employee extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['role_user_id', 'employee_code', 'name', 'surname', 'father_name', 'dob', 'nationality', 'education_level', 'identification_mark', 'gender', 'mobile', 'address', 'permanent_address', 'emergency_contact', 'joining_date', 'service_book_no', 'employee_type', 'department_id', 'designation_id', 'skill_category', 'site_id', 'supervisor_id', 'is_active', 'date_of_exit', 'reason_for_exit', 'photo_path', 'signature_path', 'remarks', 'relay_id'];
+    protected $fillable = ['role_user_id', 'employee_code', 'name', 'surname', 'father_name', 'dob', 'nationality', 'education_level', 'identification_mark', 'gender', 'mobile', 'address', 'permanent_address', 'emergency_contact', 'joining_date', 'service_book_no', 'employee_type', 'department_id', 'designation_id', 'skill_category', 'site_id', 'place_of_employment', 'supervisor_id', 'is_active', 'date_of_exit', 'reason_for_exit', 'photo_path', 'signature_path', 'remarks', 'relay_id'];
 
     protected $casts = [
         'dob' => 'date:Y-m-d',
@@ -226,5 +226,17 @@ class Employee extends Model
         }
 
         return ucwords(str_replace('_', '-', $this->skill_category), '-');
+    }
+
+    /**
+     * Place of employment as it reads in the register, e.g. "Opencast".
+     */
+    public function getPlaceOfEmploymentLabelAttribute()
+    {
+        if (!$this->place_of_employment) {
+            return null;
+        }
+
+        return ucfirst($this->place_of_employment);
     }
 }

@@ -74,6 +74,8 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
                     ? $this->parseDate($row['joining_date'])
                     : null,
 
+                'place_of_employment' => $this->parsePlaceOfEmployment($row['place_of_employment'] ?? null),
+
                 'department_id' => $department ? $department->id : null,
                 'designation_id' => $designation ? $designation->id : null,
 
@@ -131,6 +133,30 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
 
             '*.status' => 'nullable|in:0,1',
         ];
+    }
+
+    /**
+     * Spreadsheets spell this column loosely — "Under Ground", "Open Cast",
+     * "OC". Anything unrecognised is left null rather than guessed at.
+     */
+    private function parsePlaceOfEmployment($value): ?string
+    {
+        if (empty($value)) {
+            return null;
+        }
+
+        $normalised = preg_replace('/[^a-z]/', '', strtolower((string) $value));
+
+        $places = [
+            'underground' => 'underground',
+            'ug' => 'underground',
+            'opencast' => 'opencast',
+            'cast' => 'opencast',
+            'oc' => 'opencast',
+            'surface' => 'surface',
+        ];
+
+        return $places[$normalised] ?? null;
     }
 
     private function parseDate($value): ?Carbon

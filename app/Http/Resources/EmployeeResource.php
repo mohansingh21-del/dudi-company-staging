@@ -48,6 +48,8 @@ class EmployeeResource extends JsonResource
             'skill_category' => $this->skill_category,
             'skill_category_label' => $this->skill_category_label,
             'site' => optional($this->site)->site_name,
+            'place_of_employment' => $this->place_of_employment,
+            'place_of_employment_label' => $this->place_of_employment_label,
             'supervisor' => optional($this->supervisor)->name,
             'shift_id' => $this->shift_id,
             'shift' => $this->shift_id ? optional(\App\Models\Shift::find($this->shift_id))->shift_name : null,
