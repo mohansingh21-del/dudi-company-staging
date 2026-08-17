@@ -1,0 +1,63 @@
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class EmployeePayrollResource extends JsonResource
+{
+    public function toArray($request)
+    {
+        return [
+
+            'id' => $this->id,
+
+            'employee_id' => $this->employee_id,
+
+            'employee_name' => optional($this->employee)->name,
+            
+            'employee_code' => optional($this->employee)->employee_code,
+
+
+            'salary_type' => $this->salary_type,
+
+            'basic_salary' => $this->basic_salary,
+
+            'daily_wage' => $this->daily_wage,
+
+            'pf_applicable' => $this->pf_applicable,
+            
+            'department' => optional(optional($this->employee)->department)->name,
+
+            'pf_number' => $this->pf_number,
+
+            'uan' => $this->uan,
+
+            'esic_ip_number' => $this->esic_ip_number,
+
+            'lwf_number' => $this->lwf_number,
+
+            'pan' => $this->pan,
+
+            // The full Aadhaar number is never exposed.
+            'aadhaar_last4' => $this->aadhaar_last4,
+
+            'bank_name' => $this->bank_name,
+
+            'bank_account_number' => $this->bank_account_number,
+
+            'ifsc_code' => $this->ifsc_code,
+
+            'mess_deduction_applicable' => $this->mess_deduction_applicable,
+
+            'other_deduction_appliacble' => $this->other_deduction_appliacble,
+
+            'other_deduction' => $this->other_deduction,
+            'pf_amount' => $this->pf_amount,
+            'mess_deduction_amount' => $this->mess_deduction_amount,
+            'rest_days' => $this->rest_days,
+
+            'is_active' => $this->is_active
+        ];
+    }
+}

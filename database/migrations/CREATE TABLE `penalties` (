@@ -1,0 +1,1530 @@
+CREATE TABLE `penalties` (
+  `id` bigint UNSIGNED NOT NULL,
+  `employee_id` bigint UNSIGNED NOT NULL,
+  `penalty_date` date NOT NULL,
+  `month` int NOT NULL,
+  `year` int NOT NULL,
+  `reason` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
+  `amount` decimal(12,2) NOT NULL,
+  `created_at` timestamp NULL DEFAULT NULL,
+  `updated_at` timestamp NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+This is my Modal 
+
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Penalty extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'employee_id',
+        'penalty_date',
+        'month',
+        'year',
+        'reason',
+        'amount',
+    ];
+
+    protected $casts = [
+        'penalty_date' => 'date',
+        'amount' => 'decimal:2',
+        'month' => 'integer',
+        'year' => 'integer',
+    ];
+
+    /**
+     * Relationship: Penalty belongs to an Employee
+     */
+    public function employee()
+    {
+        return $this->belongsTo(Employee::class);
+    }
+}
+Now the update requirnment is with to the penalty is attached image where Now the Reocovery type filed will be option like Damage Loss Fine Advance Loans .  The further we will do the Loans Calculation too but before that as you can see some other fileds are also added which are the  
+S. No. In Employee 			Register
+	
+Name
+	
+Recovery Type
+(Damage/ 			loss/ fine/ advance/ loans)
+	
+Particulars
+	
+Date of damage/ Loss*
+	
+Amount
+	
+Whether show cause 			issued*
+	
+Explanation heard in 			presence of*
+	
+Number of Installments
+	
+First Month/ Year
+	
+Last Month/ Year
+	
+Date of Complete Recovery
+	
+Remarks
+ 
+
+  So i think i need to update the existing table migrations and the modals AN further screen like These all stored data will show to admin Like attache image Here if admin wants he can export and update the record entry by the waay he wanted to do then He can again bulk upload the updated data 
+
+Here is imp scnario if admin rather he updated the Record of an emplyee in sheet and upload suppose he updated the loan amount for an employee but the calculation will be work for the payroll based on the Previous data at the time of Add Panelty    I used that amount for the Calculations same as for all mentioned fields
+
+And the  these are the screen which frontend developer in Anglar will work i only need to do the Create the Apis in laravel As the exisitng Route and controller details are the 
+
+Here is the controller
+
+<?php
+
+namespace App\Http\Controllers\Api\Admin;
+
+use App\Http\Controllers\Controller;
+use App\Models\Penalty;
+use App\Models\Employee;
+use App\Http\Requests\StorePenaltyRequest;
+use App\Http\Requests\StoreBulkPenaltyRequest;
+use App\Http\Requests\UpdatePenaltyRequest;
+use App\Http\Resources\PenaltyResource;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
+
+class PenaltyController extends Controller
+{
+    /**
+     * Display a listing of penalties.
+     */
+    public function index(Request $request)
+    {
+        try {
+            $limit = $request->input('limit', 10);
+            $query = Penalty::with('employee');
+
+            // Filter by search (employee name, code, reason)
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('reason', 'LIKE', "%{$search}%")
+                      ->orWhereHas('employee', function ($empQuery) use ($search) {
+                          $empQuery->where('name', 'LIKE', "%{$search}%")
+                                   ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                      });
+                });
+            }
+
+            // Filter by employee_id
+            if ($request->filled('employee_id')) {
+                $query->where('employee_id', $request->employee_id);
+            }
+
+            // Filter by specific month and year
+            if ($request->filled('month')) {
+                $query->where('month', $request->month);
+            }
+            if ($request->filled('year')) {
+                $query->where('year', $request->year);
+            }
+
+            // Filter by penalty_date string
+            if ($request->filled('penalty_date')) {
+                try {
+                    $parsed = Carbon::parse($request->penalty_date);
+                    $query->whereDate('penalty_date', $parsed->toDateString());
+                } catch (\Exception $e) {
+                    // Ignore invalid format in filter
+                }
+            }
+
+            $penalties = $query->latest()->paginate($limit);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Penalties fetched successfully',
+                'data' => PenaltyResource::collection($penalties),
+                'pagination' => [
+                    'current_page' => $penalties->currentPage(),
+                    'last_page' => $penalties->lastPage(),
+                    'per_page' => $penalties->perPage(),
+                    'total' => $penalties->total(),
+                    'from' => $penalties->firstItem(),
+                    'to' => $penalties->lastItem(),
+                ]
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+                'line' => $th->getLine(),
+                'file' => $th->getFile(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Store a newly created penalty.
+     */
+    public function store(StorePenaltyRequest $request)
+    {
+        try {
+            $parsedDate = Carbon::parse($request->penalty_date);
+
+            $penalty = Penalty::create([
+                'employee_id' => $request->employee_id,
+                'penalty_date' => $parsedDate->toDateString(),
+                'month' => $parsedDate->month,
+                'year' => $parsedDate->year,
+                'reason' => $request->reason,
+                'amount' => $request->amount,
+            ]);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Penalty applied successfully',
+                'data' => new PenaltyResource($penalty->load('employee'))
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Store multiple penalties in bulk.
+     */
+    public function storeBulk(StoreBulkPenaltyRequest $request)
+    {
+        try {
+            $parsedDate = Carbon::parse($request->penalty_date);
+            $penaltiesData = [];
+
+            DB::transaction(function () use ($request, $parsedDate, &$penaltiesData) {
+                foreach ($request->employee_ids as $employeeId) {
+                    $penalty = Penalty::create([
+                        'employee_id' => $employeeId,
+                        'penalty_date' => $parsedDate->toDateString(),
+                        'month' => $parsedDate->month,
+                        'year' => $parsedDate->year,
+                        'reason' => $request->reason,
+                        'amount' => $request->amount,
+                    ]);
+                    $penaltiesData[] = $penalty;
+                }
+            });
+
+            return response()->json([
+                'status' => 200,
+                'message' => count($penaltiesData) . ' penalties applied successfully',
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Display the specified penalty.
+     */
+    public function show($id)
+    {
+        $penalty = Penalty::with('employee')->find($id);
+
+        if (!$penalty) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Penalty not found'
+            ], 404);
+        }
+
+        return response()->json([
+            'status' => 200,
+            'data' => new PenaltyResource($penalty)
+        ]);
+    }
+
+    /**
+     * Update the specified penalty.
+     */
+    public function update(UpdatePenaltyRequest $request, $id)
+    {
+        try {
+            $penalty = Penalty::find($id);
+
+            if (!$penalty) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Penalty not found'
+                ], 404);
+            }
+
+            $updateData = [];
+
+            if ($request->filled('employee_id')) {
+                $updateData['employee_id'] = $request->employee_id;
+            }
+
+            if ($request->filled('penalty_date')) {
+                $parsedDate = Carbon::parse($request->penalty_date);
+                $updateData['penalty_date'] = $parsedDate->toDateString();
+                $updateData['month'] = $parsedDate->month;
+                $updateData['year'] = $parsedDate->year;
+            }
+
+            if ($request->filled('reason')) {
+                $updateData['reason'] = $request->reason;
+            }
+
+            if ($request->filled('amount')) {
+                $updateData['amount'] = $request->amount;
+            }
+
+            $penalty->update($updateData);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Penalty updated successfully',
+                'data' => new PenaltyResource($penalty->load('employee'))
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Remove the specified penalty.
+     */
+    public function destroy($id)
+    {
+        $penalty = Penalty::find($id);
+
+        if (!$penalty) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Penalty not found'
+            ], 404);
+        }
+
+        $penalty->delete();
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Penalty deleted successfully'
+        ]);
+    }
+
+    /**
+     * Upload penalties in bulk via Excel/CSV.
+     */
+    public function bulkUpload(Request $request)
+    {
+        try {
+            $request->validate([
+                'file' => 'required|mimes:xlsx,xls,csv'
+            ]);
+
+            \Maatwebsite\Excel\Facades\Excel::import(
+                new \App\Imports\PenaltyImport,
+                $request->file('file')
+            );
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Penalties imported successfully'
+            ]);
+        } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
+            $failures = $e->failures();
+            $errors = [];
+            foreach ($failures as $failure) {
+                $errors[] = [
+                    'row' => $failure->row(),
+                    'attribute' => $failure->attribute(),
+                    'errors' => $failure->errors(),
+                ];
+            }
+
+            // Extract headers parsed from sheet
+            $parsedHeaders = [];
+            try {
+                $array = \Maatwebsite\Excel\Facades\Excel::toArray(
+                    new \App\Imports\PenaltyImport,
+                    $request->file('file')
+                );
+                if (!empty($array) && isset($array[0][0])) {
+                    $parsedHeaders = array_keys($array[0][0]);
+                }
+            } catch (\Exception $ex) {
+                // Ignore
+            }
+
+            return response()->json([
+                'status' => 422,
+                'message' => 'Excel validation failed',
+                'errors' => $errors,
+                'parsed_headers' => $parsedHeaders
+            ], 422);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+}
+  Route::post('penalties/bulk', [PenaltyController::class, 'storeBulk']);
+            Route::post('penalties/bulk-upload', [PenaltyController::class, 'bulkUpload']);
+            Route::apiResource('penalties', PenaltyController::class);
+And here are the existing routes
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Carbon\Carbon;
+
+class StorePenaltyRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'employee_id' => 'required|exists:employees,id',
+            'penalty_date' => 'required|date',
+            'reason' => 'required|string|min:1',
+            'amount' => 'required|numeric|min:0.01',
+        ];
+    }
+
+    public function failedValidation(Validator $validator)
+    {
+        throw new HttpResponseException(
+            response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422)
+        );
+    }
+}
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Carbon\Carbon;
+
+class UpdatePenaltyRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'employee_id' => 'sometimes|required|exists:employees,id',
+            'penalty_date' => 'sometimes|required|date',
+            'reason' => 'sometimes|required|string|min:1',
+            'amount' => 'sometimes|required|numeric|min:0.01',
+        ];
+    }
+
+    public function failedValidation(Validator $validator)
+    {
+        throw new HttpResponseException(
+            response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422)
+        );
+    }
+}
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Carbon\Carbon;
+
+class StoreBulkPenaltyRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'employee_ids' => 'required|array|min:1',
+            'employee_ids.*' => 'required|exists:employees,id',
+            'penalty_date' => 'required|date',
+            'reason' => 'required|string|min:1',
+            'amount' => 'required|numeric|min:0.01',
+        ];
+    }
+
+    public function failedValidation(Validator $validator)
+    {
+        throw new HttpResponseException(
+            response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422)
+        );
+    }
+}
+
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class PenaltyResource extends JsonResource
+{
+    public function toArray($request)
+    {
+        return [
+            'id' => $this->id,
+            'employee_id' => $this->employee_id,
+            'employee_name' => optional($this->employee)->name,
+            'employee_code' => optional($this->employee)->employee_code,
+            'penalty_date' => $this->penalty_date ? $this->penalty_date->format('Y-m-d') : null,
+            'penalty_month' => $this->penalty_date ? $this->penalty_date->format('F Y') : null,
+            'month' => $this->month,
+            'year' => $this->year,
+            'reason' => $this->reason,
+            'amount' => $this->amount,
+            'created_at' => $this->created_at ? $this->created_at->toDateTimeString() : null,
+        ];
+    }
+}
+These are the exisitng code As i also wanted to mentioned that the existing reason and amount already used in calculation of the payroll
+Now please provide me the step by step updated code with each command like migration modal etc
+
+                'between:1,12',
+            ],
+
+            'first_year' => [
+                'nullable',
+                'integer',
+                'between:1900,2200',
+            ],
+
+            'last_month' => [
+                'nullable',
+                'integer',
+                'between:1,12',
+            ],
+
+            'last_year' => [
+                'nullable',
+                'integer',
+                'between:1900,2200',
+            ],
+
+            'date_of_complete_recovery' => [
+                'nullable',
+                'date',
+            ],
+
+            'remarks' => [
+                'nullable',
+                'string',
+            ],
+        ];
+    }
+
+    public function failedValidation(Validator $validator)
+    {
+        throw new HttpResponseException(
+            response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors(),
+            ], 422)
+        );
+    }
+}
+
+16. Update storeBulk()
+Your bulk create should also create snapshots.
+
+public function storeBulk(StoreBulkPenaltyRequest $request)
+{
+    try {
+        $parsedDate = Carbon::parse($request->penalty_date);
+
+        $penaltiesData = [];
+
+        DB::transaction(function () use (
+            $request,
+            $parsedDate,
+            &$penaltiesData
+        ) {
+            foreach ($request->employee_ids as $employeeId) {
+
+                $penalty = Penalty::create([
+
+                    'employee_id' => $employeeId,
+
+                    // Current data
+                    'penalty_date' => $parsedDate->toDateString(),
+                    'month' => $parsedDate->month,
+                    'year' => $parsedDate->year,
+
+                    'recovery_type' => $request->recovery_type,
+                    'reason' => $request->reason,
+                    'particulars' => $request->particulars,
+                    'amount' => $request->amount,
+
+                    'show_cause_issued' =>
+                        $request->boolean('show_cause_issued'),
+
+                    'explanation_heard_in_presence' =>
+                        $request->explanation_heard_in_presence,
+
+                    'number_of_installments' =>
+                        $request->number_of_installments,
+
+                    'first_month' =>
+                        $request->first_month,
+
+                    'first_year' =>
+                        $request->first_year,
+
+                    'last_month' =>
+                        $request->last_month,
+
+                    'last_year' =>
+                        $request->last_year,
+
+                    'date_of_complete_recovery' =>
+                        $request->date_of_complete_recovery,
+
+                    'remarks' =>
+                        $request->remarks,
+
+                    // Snapshot
+                    'calculation_amount' =>
+                        $request->amount,
+
+                    'calculation_recovery_type' =>
+                        $request->recovery_type,
+
+                    'calculation_particulars' =>
+                        $request->particulars,
+
+                    'calculation_date' =>
+                        $parsedDate->toDateString(),
+
+                    'calculation_number_of_installments' =>
+                        $request->number_of_installments,
+
+                    'calculation_first_month' =>
+                        $request->first_month,
+
+                    'calculation_first_year' =>
+                        $request->first_year,
+
+                    'calculation_last_month' =>
+                        $request->last_month,
+
+                    'calculation_last_year' =>
+                        $request->last_year,
+                ]);
+
+                $penaltiesData[] = $penalty;
+            }
+        });
+
+        return response()->json([
+            'status' => 200,
+            'message' =>
+                count($penaltiesData) .
+                ' recoveries applied successfully',
+        ]);
+    } catch (\Throwable $th) {
+        return response()->json([
+            'status' => 500,
+            'message' => $th->getMessage(),
+        ], 500);
+    }
+}
+
+17. Now implement Excel export
+You said:
+
+Admin wants to export and update the record entry by the way he wanted to do then he can again bulk upload the updated data.
+
+So you need:
+
+GET penalties/export
+
+and:
+
+POST penalties/bulk-upload
+
+The exported Excel should contain a technical Penalty ID.
+
+Do not rely only on employee name because the same employee could have multiple recovery records.
+
+Laravel Excel's WithHeadings and WithMapping concerns are designed for exactly this sort of custom export. 
+L
+Laravel Excel
++1
+
+18. Create export
+Run:
+
+php artisan make:export PenaltiesExport
+
+Create:
+
+app/Exports/PenaltiesExport.php
+
+<?php
+
+namespace App\Exports;
+
+use App\Models\Penalty;
+use Maatwebsite\Excel\Concerns\FromQuery;
+use Maatwebsite\Excel\Concerns\WithHeadings;
+use Maatwebsite\Excel\Concerns\WithMapping;
+use Maatwebsite\Excel\Concerns\ShouldAutoSize;
+use Maatwebsite\Excel\Concerns\WithStrictNullComparison;
+
+class PenaltiesExport implements
+    FromQuery,
+    WithHeadings,
+    WithMapping,
+    ShouldAutoSize,
+    WithStrictNullComparison
+{
+    public function __construct(
+        protected array $filters = []
+    ) {
+    }
+
+    public function query()
+    {
+        $query = Penalty::query()
+            ->with('employee');
+
+        if (!empty($this->filters['employee_id'])) {
+            $query->where(
+                'employee_id',
+                $this->filters['employee_id']
+            );
+        }
+
+        if (!empty($this->filters['recovery_type'])) {
+            $query->where(
+                'recovery_type',
+                $this->filters['recovery_type']
+            );
+        }
+
+        if (!empty($this->filters['month'])) {
+            $query->where(
+                'month',
+                $this->filters['month']
+            );
+        }
+
+        if (!empty($this->filters['year'])) {
+            $query->where(
+                'year',
+                $this->filters['year']
+            );
+        }
+
+        if (!empty($this->filters['penalty_date'])) {
+            $query->whereDate(
+                'penalty_date',
+                $this->filters['penalty_date']
+            );
+        }
+
+        return $query->latest('id');
+    }
+
+    public function headings(): array
+    {
+        return [
+            'Penalty ID',
+            'Employee Code',
+            'Employee Name',
+            'Recovery Type',
+            'Particulars',
+            'Date of Damage/Loss',
+            'Amount',
+            'Show Cause Issued',
+            'Explanation Heard in Presence Of',
+            'Number of Installments',
+            'First Month',
+            'First Year',
+            'Last Month',
+            'Last Year',
+            'Date of Complete Recovery',
+            'Remarks',
+        ];
+    }
+
+    public function map($penalty): array
+    {
+        return [
+            $penalty->id,
+
+            optional($penalty->employee)->employee_code,
+
+            optional($penalty->employee)->name,
+
+            $penalty->recovery_type,
+
+            $penalty->particulars,
+
+            $penalty->penalty_date
+                ? $penalty->penalty_date->format('Y-m-d')
+                : null,
+
+            $penalty->amount,
+
+            $penalty->show_cause_issued
+                ? 'Yes'
+                : 'No',
+
+            $penalty->explanation_heard_in_presence,
+
+            $penalty->number_of_installments,
+
+            $penalty->first_month,
+
+            $penalty->first_year,
+
+            $penalty->last_month,
+
+            $penalty->last_year,
+
+            $penalty->date_of_complete_recovery
+                ? $penalty->date_of_complete_recovery->format('Y-m-d')
+                : null,
+
+            $penalty->remarks,
+        ];
+    }
+}
+
+19. Add export method to controller
+At the top:
+
+use App\Exports\PenaltiesExport;
+use Maatwebsite\Excel\Facades\Excel;
+
+Then:
+
+public function export(Request $request)
+{
+    try {
+        $filters = [
+            'employee_id' => $request->employee_id,
+            'recovery_type' => $request->recovery_type,
+            'month' => $request->month,
+            'year' => $request->year,
+            'penalty_date' => $request->penalty_date,
+        ];
+
+        return Excel::download(
+            new PenaltiesExport($filters),
+            'penalties-' . now()->format('Y-m-d-H-i-s') . '.xlsx'
+        );
+    } catch (\Throwable $th) {
+        return response()->json([
+            'status' => 500,
+            'message' => $th->getMessage(),
+        ], 500);
+    }
+}
+
+20. Excel file will look like this
+Your exported file will contain:
+
+Penalty ID	Employee Code	Employee Name	Recovery Type	Particulars	Date	Amount	Show Cause	Explanation	Installments	First Month	First Year	Last Month	Last Year	Complete Recovery	Remarks
+101	EMP001	Rahul	loans	Home loan	2026-04-01	100000	Yes	Manager	10	4	2026	1	2027		
+102	EMP002	Amit	fine	Damage	2026-05-04	5000	No								
+
+Admin can change:
+
+Recovery Type
+Particulars
+Date
+Amount
+Show Cause
+Explanation
+Installments
+First Month
+First Year
+Last Month
+Last Year
+Complete Recovery
+Remarks
+
+But:
+
+Penalty ID
+Employee Code
+Employee Name
+
+should ideally be treated as identifiers/read-only by your Angular UI.
+
+21. Very important Excel rule
+Do not allow the Excel import to update:
+
+calculation_amount
+calculation_recovery_type
+calculation_particulars
+calculation_date
+...
+
+The Excel only modifies the current/register fields.
+
+This means:
+
+Before Excel
+amount                  = 100000
+calculation_amount      = 100000
+
+Admin Excel changes amount
+amount                  = 120000
+calculation_amount      = 100000
+
+Payroll
+$penalty->calculation_amount
+
+Result:
+
+100000
+
+Exactly what you requested.
+
+22. Create the new Import
+Run:
+
+php artisan make:import PenaltyImport
+
+Then:
+
+app/Imports/PenaltyImport.php
+
+Use OnEachRow here rather than blindly creating models, because you specifically need to update existing records by Penalty ID. Laravel Excel supports OnEachRow for cases where you need control over persistence yourself. 
+L
+Laravel Excel
+
+<?php
+
+namespace App\Imports;
+
+use App\Models\Penalty;
+use App\Models\Employee;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
+use Maatwebsite\Excel\Concerns\OnEachRow;
+use Maatwebsite\Excel\Concerns\WithHeadingRow;
+use Maatwebsite\Excel\Concerns\WithValidation;
+use Maatwebsite\Excel\Row;
+use Maatwebsite\Excel\Concerns\SkipsEmptyRows;
+use App\Enums\RecoveryType;
+
+class PenaltyImport implements
+    OnEachRow,
+    WithHeadingRow,
+    WithValidation,
+    SkipsEmptyRows
+{
+    public function onRow(Row $row)
+    {
+        $data = $row->toArray();
+
+        DB::transaction(function () use ($data) {
+
+            $penalty = Penalty::find($data['penalty_id']);
+
+            if (!$penalty) {
+                throw new \Exception(
+                    'Penalty ID ' .
+                    $data['penalty_id'] .
+                    ' not found.'
+                );
+            }
+
+            $penaltyDate = Carbon::parse(
+                $data['date_of_damage_loss']
+            );
+
+            $penalty->update([
+                /*
+                 * Editable register data
+                 */
+                'employee_id' => $this->resolveEmployeeId(
+                    $data['employee_code']
+                ),
+
+                'penalty_date' =>
+                    $penaltyDate->toDateString(),
+
+                'month' =>
+                    $penaltyDate->month,
+
+                'year' =>
+                    $penaltyDate->year,
+
+                'recovery_type' =>
+                    strtolower(trim($data['recovery_type'])),
+
+                'particulars' =>
+                    $data['particulars'] ?? null,
+
+                'reason' =>
+                    $data['particulars'] ?? null,
+
+                'amount' =>
+                    $data['amount'],
+
+                'show_cause_issued' =>
+                    $this->parseBoolean(
+                        $data['show_cause_issued']
+                    ),
+
+                'explanation_heard_in_presence' =>
+                    $data['explanation_heard_in_presence'] ?? null,
+
+                'number_of_installments' =>
+                    $data['number_of_installments'] ?? null,
+
+                'first_month' =>
+                    $data['first_month'] ?? null,
+
+                'first_year' =>
+                    $data['first_year'] ?? null,
+
+                'last_month' =>
+                    $data['last_month'] ?? null,
+
+                'last_year' =>
+                    $data['last_year'] ?? null,
+
+                'date_of_complete_recovery' =>
+                    !empty($data['date_of_complete_recovery'])
+                        ? Carbon::parse(
+                            $data['date_of_complete_recovery']
+                        )->toDateString()
+                        : null,
+
+                'remarks' =>
+                    $data['remarks'] ?? null,
+            ]);
+
+            /*
+             * NOTICE:
+             *
+             * There is intentionally NO update here for:
+             *
+             * calculation_amount
+             * calculation_recovery_type
+             * calculation_particulars
+             * calculation_date
+             * calculation_number_of_installments
+             * calculation_first_month
+             * calculation_first_year
+             * calculation_last_month
+             * calculation_last_year
+             */
+        });
+    }
+
+    private function resolveEmployeeId($employeeCode): int
+    {
+        $employee = Employee::where(
+            'employee_code',
+            trim($employeeCode)
+        )->first();
+
+        if (!$employee) {
+            throw new \Exception(
+                'Employee with code ' .
+                $employeeCode .
+                ' not found.'
+            );
+        }
+
+        return $employee->id;
+    }
+
+    private function parseBoolean($value): bool
+    {
+        return in_array(
+            strtolower(trim((string) $value)),
+            ['yes', 'true', '1'],
+            true
+        );
+    }
+
+    public function rules(): array
+    {
+        return [
+            'penalty_id' => [
+                'required',
+                'integer',
+                'exists:penalties,id',
+            ],
+
+            'employee_code' => [
+                'required',
+                'string',
+                'exists:employees,employee_code',
+            ],
+
+            'employee_name' => [
+                'nullable',
+                'string',
+            ],
+
+            'recovery_type' => [
+                'required',
+                Rule::in(
+                    RecoveryType::values()
+                ),
+            ],
+
+            'particulars' => [
+                'required',
+                'string',
+            ],
+
+            'date_of_damage_loss' => [
+                'required',
+                'date',
+            ],
+
+            'amount' => [
+                'required',
+                'numeric',
+                'min:0.01',
+            ],
+
+            'show_cause_issued' => [
+                'required',
+            ],
+
+            'explanation_heard_in_presence' => [
+                'nullable',
+                'string',
+            ],
+
+            'number_of_installments' => [
+                'nullable',
+                'integer',
+                'min:1',
+            ],
+
+            'first_month' => [
+                'nullable',
+                'integer',
+                'between:1,12',
+            ],
+
+            'first_year' => [
+                'nullable',
+                'integer',
+                'between:1900,2200',
+            ],
+
+            'last_month' => [
+                'nullable',
+                'integer',
+                'between:1,12',
+            ],
+
+            'last_year' => [
+                'nullable',
+                'integer',
+                'between:1900,2200',
+            ],
+
+            'date_of_complete_recovery' => [
+                'nullable',
+                'date',
+            ],
+
+            'remarks' => [
+                'nullable',
+                'string',
+            ],
+        ];
+    }
+}
+
+23. One correction to the import
+Excel may contain:
+
+Loans
+Damage
+Loss
+Fine
+Advance
+
+while your database values are:
+
+loans
+damage
+loss
+fine
+advance
+
+So before validation you should normalize the recovery type.
+
+The easiest approach is to make your Excel developer export/use lowercase values.
+
+For example:
+
+damage
+loss
+fine
+advance
+loans
+
+Then Angular can display:
+
+Damage
+Loss
+Fine
+Advance
+Loans
+
+but API/database values remain lowercase.
+
+24. Update bulkUpload()
+Your existing method can remain mostly the same.
+
+I'd change it to:
+
+public function bulkUpload(Request $request)
+{
+    try {
+        $request->validate([
+            'file' => [
+                'required',
+                'file',
+                'mimes:xlsx,xls,csv',
+                'max:10240',
+            ],
+        ]);
+
+        Excel::import(
+            new \App\Imports\PenaltyImport,
+            $request->file('file')
+        );
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Penalties updated successfully from Excel.',
+        ]);
+    } catch (
+        \Maatwebsite\Excel\Validators\ValidationException $e
+    ) {
+        $failures = $e->failures();
+
+        $errors = [];
+
+        foreach ($failures as $failure) {
+            $errors[] = [
+                'row' => $failure->row(),
+                'attribute' => $failure->attribute(),
+                'errors' => $failure->errors(),
+                'values' => $failure->values(),
+            ];
+        }
+
+        return response()->json([
+            'status' => 422,
+            'message' => 'Excel validation failed',
+            'errors' => $errors,
+        ], 422);
+
+    } catch (\Illuminate\Validation\ValidationException $e) {
+
+        return response()->json([
+            'status' => 422,
+            'message' => 'Validation failed',
+            'errors' => $e->errors(),
+        ], 422);
+
+    } catch (\Throwable $th) {
+
+        return response()->json([
+            'status' => 500,
+            'message' => $th->getMessage(),
+        ], 500);
+    }
+}
+
+Laravel Excel's validation system can report row, attribute, and validation errors, which is useful for showing Angular an import-error report. 
+L
+Laravel Excel
+
+25. Add export route
+You currently have:
+
+Route::post('penalties/bulk', [PenaltyController::class, 'storeBulk']);
+Route::post('penalties/bulk-upload', [PenaltyController::class, 'bulkUpload']);
+Route::apiResource('penalties', PenaltyController::class);
+
+Change to:
+
+Route::post(
+    'penalties/bulk',
+    [PenaltyController::class, 'storeBulk']
+);
+
+Route::get(
+    'penalties/export',
+    [PenaltyController::class, 'export']
+);
+
+Route::post(
+    'penalties/bulk-upload',
+    [PenaltyController::class, 'bulkUpload']
+);
+
+Route::apiResource(
+    'penalties',
+    PenaltyController::class
+);
+
+The order is fine because penalties/export is explicitly defined before the resource route.
+
+26. API structure for Angular
+Your Angular developer can now work with:
+
+List
+GET /api/penalties
+
+Example:
+
+GET /api/penalties?page=1&limit=20
+
+Search
+GET /api/penalties?search=Rahul
+
+Recovery type
+GET /api/penalties?recovery_type=loans
+
+Employee
+GET /api/penalties?employee_id=15
+
+Month/year
+GET /api/penalties?month=8&year=2026
+
+Single record
+GET /api/penalties/101
+
+Create
+POST /api/penalties
+
+Body:
+
+{
+    "employee_id": 15,
+    "penalty_date": "2026-08-01",
+    "recovery_type": "loans",
+    "particulars": "Personal Loan",
+    "amount": 100000,
+    "show_cause_issued": false,
+    "explanation_heard_in_presence": null,
+    "number_of_installments": 10,
+    "first_month": 8,
+    "first_year": 2026,
+    "last_month": 5,
+    "last_year": 2027,
+    "date_of_complete_recovery": null,
+    "remarks": "Approved by HR"
+}
+
+27. Update API
+PUT /api/penalties/101
+
+Body:
+
+{
+    "amount": 120000,
+    "remarks": "Amount corrected by HR"
+}
+
+Database:
+
+amount = 120000
+
+but:
+
+calculation_amount = 100000
+
+So payroll remains:
+
+100000
+
+28. Export API
+GET /api/penalties/export
+
+With filters:
+
+GET /api/penalties/export?recovery_type=loans&year=2026
+
+The Excel export approach above follows Laravel Excel's standard Excel::download() flow. 
+L
+Laravel Excel
++1
+
+29. Bulk Excel upload
+POST /api/penalties/bulk-upload
+
+Multipart form-data:
+
+file = penalties.xlsx
+
+Angular sends:
+
+const formData = new FormData();
+formData.append('file', file);
+
+this.http.post(
+    '/api/penalties/bulk-upload',
+    formData
+);
+
+30. I would make one additional API
+For Angular, give the frontend the allowed recovery types.
+
+Create:
+
+GET /api/penalties/recovery-types
+
+In controller:
+
+public function recoveryTypes()
+{
+    return response()->json([
+        'status' => 200,
+        'data' => [
+            [
+                'value' => 'damage',
+                'label' => 'Damage',
+            ],
+            [
+                'value' => 'loss',
+                'label' => 'Loss',
+            ],
+            [
+                'value' => 'fine',
+                'label' => 'Fine',
+            ],
+            [
+                'value' => 'advance',
+                'label' => 'Advance',
+            ],
+            [
+                'value' => 'loans',
+                'label' => 'Loans',
+            ],
+        ],
+    ]);
+}
+
+Route:
+
+Route::get(
+    'penalties/recovery-types',
+    [PenaltyController::class, 'recoveryTypes']
+);
+
+Then Angular doesn't need to hard-code the list.
+
+31. Recommended final controller structure
+Your PenaltyController should now have these methods:
+
+index()
+show()
+store()
+update()
+destroy()
+
+storeBulk()
+
+export()
+
+bulkUpload()
+
+recoveryTypes()
+
+So the complete API responsibility becomes:
+
+                PENALTY / RECOVERY API
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+     Manual           Excel            Payroll
+      Entry           Register          Engine
+        │                │                │
+        ▼                ▼                ▼
+     Create           Export/Edit      calculation_*
+        │              /Import             │
+        │                │                 │
+        └───────────────►│                 │
+                         │                 │
+                  current fields           │
+                         │                 │
+                         ▼                 │
+                    amount = 120k          │
+                                           │
+                         calculation_amount=100k
+                                           │
+                                           ▼
+                                      Payroll uses
+                                      100k
+

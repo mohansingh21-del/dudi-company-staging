@@ -1,0 +1,435 @@
+openapi: "3.0.3"
+info:
+  title: Workforce Deployment API — Mining Shift Management
+  description: |
+    Manages workforce deployment for an already-planned shift.
+    Supervisors can auto-load relay workforce, borrow employees from
+    other relays, view the deployed workforce list, and get summary counts.
+
+    **Business Rules Implemented:**
+    - BR-SHFT-008 — Auto-load relay workforce
+    - BR-SHFT-010 — Borrowed employees retain home_relay_shift
+    - BR-SHFT-011 — Borrowed employees counted in totals
+    - BR-SHFT-012 — One active shift per employee per calendar date
+  version: "1.0.0"
+  contact:
+    name: Dudi Coal Mine API Team
+
+servers:
+  - url: /api/v1/admin
+    description: Admin API (auth:sanctum + role:super-admin,supervisor)
+
+# ──────────────────────────────────────────────────────────────────────
+# Security
+# ──────────────────────────────────────────────────────────────────────
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum
+
+  parameters:
+    shiftPlanId:
+      name: shiftPlanId
+      in: path
+      required: true
+      description: ID of the shift plan
+      schema:
+        type: integer
+
+  schemas:
+    # ── Envelope ──
+    SuccessResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+          example: 200
+        message:
+          type: string
+        data:
+          {}
+
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        data:
+          {}
+
+    Pagination:
+      type: object
+      properties:
+        current_page:
+          type: integer
+        last_page:
+          type: integer
+        per_page:
+          type: integer
+        total:
+          type: integer
+        from:
+          type: integer
+          nullable: true
+        to:
+          type: integer
+          nullable: true
+
+    # ── Domain objects ──
+    DeploymentItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 42
+        employee_id:
+          type: integer
+          example: 12
+        employee_name:
+          type: string
+          example: "Ramesh Kumar"
+        employee_code:
+          type: string
+          example: "EMP001"
+        designation:
+          type: string
+          nullable: true
+          example: "Operator"
+        relay_shift:
+          type: string
+          example: "relay_1"
+        shift_name:
+          type: string
+          nullable: true
+          example: "Relay 1 Shift"
+        home_shift_name:
+          type: string
+          nullable: true
+          example: "Relay 2 Shift"
+        assigned_machine:
+          type: string
+          nullable: true
+          example: "EX-200 #3"
+        is_borrowed:
+          type: boolean
+          example: false
+        home_relay_shift:
+          type: string
+          nullable: true
+          example: "relay_2"
+        borrowing_reason:
+          type: string
+          nullable: true
+          example: "Breakdown Support"
+        status:
+          type: string
+          enum: [active, removed]
+          example: "active"
+
+    AvailableEmployee:
+      type: object
+      properties:
+        employee_id:
+          type: integer
+          example: 15
+        employee_code:
+          type: string
+          example: "EMP015"
+        employee_name:
+          type: string
+          example: "Suresh Yadav"
+        home_relay_shift:
+          type: string
+          example: "relay_2"
+        shift_name:
+          type: string
+          nullable: true
+          example: "Relay 2 Shift"
+        designation:
+          type: string
+          nullable: true
+          example: "Helper"
+        availability_status:
+          type: string
+          example: "Available"
+
+    WorkforceSummary:
+      type: object
+      properties:
+        total_deployed:
+          type: integer
+          example: 25
+        regular_count:
+          type: integer
+          example: 22
+        borrowed_count:
+          type: integer
+          example: 3
+
+# ──────────────────────────────────────────────────────────────────────
+# Paths
+# ──────────────────────────────────────────────────────────────────────
+paths:
+  /shift-plans/{shiftPlanId}/workforce/load-relay:
+    post:
+      operationId: loadRelayWorkforce
+      summary: Auto-load relay workforce
+      description: |
+        BR-SHFT-008 — Fetches all active employees assigned to this shift plan's shift_id
+        on the planning_date via `EmployeeShiftAssignment` and creates deployment rows.
+        **Idempotent** — calling again skips already-deployed employees.
+      tags: [Workforce Deployment]
+      parameters:
+        - $ref: "#/components/parameters/shiftPlanId"
+      responses:
+        "200":
+          description: Workforce loaded (or already loaded)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/DeploymentItem"
+        "404":
+          description: Shift Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /shift-plans/{shiftPlanId}/workforce:
+    get:
+      operationId: listWorkforce
+      summary: List deployed workforce (paginated)
+      tags: [Workforce Deployment]
+      parameters:
+        - $ref: "#/components/parameters/shiftPlanId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 15
+      responses:
+        "200":
+          description: Paginated workforce list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/DeploymentItem"
+                      pagination:
+                        $ref: "#/components/schemas/Pagination"
+        "404":
+          description: Shift Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /shift-plans/{shiftPlanId}/workforce/available-employees:
+    get:
+      operationId: availableEmployees
+      summary: List employees available for borrowing
+      description: |
+        Returns active employees who are assigned to OTHER shifts on this date
+        and are NOT already deployed on any shift for the same planning_date.
+        Used to populate the "Borrow Employee" multiselect.
+      tags: [Workforce Deployment]
+      parameters:
+        - $ref: "#/components/parameters/shiftPlanId"
+        - name: search
+          in: query
+          description: Search by employee name or code
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of available employees
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/AvailableEmployee"
+        "404":
+          description: Shift Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /shift-plans/{shiftPlanId}/workforce/borrow:
+    post:
+      operationId: borrowEmployee
+      summary: Borrow an employee into this shift
+      description: |
+        Validates BR-SHFT-012 (one shift per date) and employee
+        availability before creating a borrowed deployment.
+
+        **Error Flows:**
+        - EF-01 → 422 "Employee Already Assigned To Another Shift."
+        - EF-02 → 422 "Selected Employee Is Not Available."
+      tags: [Workforce Deployment]
+      parameters:
+        - $ref: "#/components/parameters/shiftPlanId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [employee_id, borrowing_reason]
+              properties:
+                employee_id:
+                  type: integer
+                  example: 12
+                borrowing_reason:
+                  type: string
+                  example: "Breakdown Support"
+            examples:
+              leaveReplacement:
+                summary: Leave Replacement
+                value:
+                  employee_id: 12
+                  borrowing_reason: "Leave Replacement"
+              breakdownSupport:
+                summary: Breakdown Support
+                value:
+                  employee_id: 15
+                  borrowing_reason: "Breakdown Support"
+      responses:
+        "201":
+          description: Employee borrowed successfully
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/DeploymentItem"
+        "422":
+          description: Business rule violation (EF-01 or EF-02)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              examples:
+                alreadyAssigned:
+                  summary: EF-01 — Already assigned
+                  value:
+                    status: 422
+                    message: "Employee Already Assigned To Another Shift."
+                    data: null
+                notAvailable:
+                  summary: EF-02 — Not available
+                  value:
+                    status: 422
+                    message: "Selected Employee Is Not Available."
+                    data: null
+        "404":
+          description: Shift Plan or Employee not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /shift-plans/{shiftPlanId}/workforce/{deploymentId}:
+    delete:
+      operationId: removeDeployment
+      summary: Soft-remove a deployment
+      description: |
+        Sets `status` to `removed` — does NOT hard delete.
+        Preserves audit trail.
+      tags: [Workforce Deployment]
+      parameters:
+        - $ref: "#/components/parameters/shiftPlanId"
+        - name: deploymentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [removed_reason]
+              properties:
+                removed_reason:
+                  type: string
+                  example: "Employee requested transfer"
+      responses:
+        "200":
+          description: Deployment removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "404":
+          description: Deployment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Already removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /shift-plans/{shiftPlanId}/workforce/summary:
+    get:
+      operationId: workforceSummary
+      summary: Workforce deployment summary
+      description: |
+        Returns total deployed, regular (non-borrowed), and borrowed counts.
+        BR-SHFT-011 — borrowed employees ARE included in total.
+      tags: [Workforce Deployment]
+      parameters:
+        - $ref: "#/components/parameters/shiftPlanId"
+      responses:
+        "200":
+          description: Summary counts
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessResponse"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/WorkforceSummary"
+        "404":
+          description: Shift Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
