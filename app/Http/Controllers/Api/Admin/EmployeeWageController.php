@@ -3,12 +3,14 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreBulkEmployeeWageRequest;
 use App\Http\Requests\StoreEmployeeWageRequest;
 use App\Http\Requests\UpdateEmployeeWageRequest;
 use App\Http\Resources\EmployeeWageResource;
 use App\Models\Employee;
 use App\Models\EmployeeWage;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * The minimum wage rate master printed at the head of Form B, and the source
@@ -204,6 +206,60 @@ class EmployeeWageController extends Controller
                 'status' => 200,
                 'message' => 'Wage rate created successfully',
                 'data' => new EmployeeWageResource($wage)
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * The whole Form B header in one submit: every skill category for a single
+     * revision date. Re-submitting the same date overwrites that revision
+     * rather than failing, so the grid can be loaded, edited and saved again.
+     */
+    public function bulkStore(StoreBulkEmployeeWageRequest $request)
+    {
+        try {
+            $data = $request->validated();
+
+            $effectiveFrom = $data['effective_from'];
+            $isActive = $data['is_active'] ?? true;
+
+            $saved = DB::transaction(function () use ($data, $effectiveFrom, $isActive) {
+                $rows = [];
+
+                foreach ($data['rates'] as $rate) {
+                    $rows[] = EmployeeWage::updateOrCreate(
+                        [
+                            'skill_category' => $rate['skill_category'],
+                            'effective_from' => $effectiveFrom,
+                        ],
+                        [
+                            'minimum_basic' => $rate['minimum_basic'],
+                            'dearness_allowance' => $rate['dearness_allowance'],
+                            'overtime_rate' => $rate['overtime_rate'] ?? 0,
+                            'is_active' => $isActive,
+                        ]
+                    );
+                }
+
+                return $rows;
+            });
+
+            $created = collect($saved)->filter(fn ($wage) => $wage->wasRecentlyCreated);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Wage rates saved successfully',
+                'data' => [
+                    'effective_from' => $effectiveFrom,
+                    'created' => $created->count(),
+                    'updated' => count($saved) - $created->count(),
+                    'rates' => EmployeeWageResource::collection(collect($saved)),
+                ]
             ]);
         } catch (\Throwable $th) {
             return response()->json([

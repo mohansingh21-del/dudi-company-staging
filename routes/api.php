@@ -269,6 +269,8 @@ Route::prefix('v1')->group(function () {
             */
             Route::get('employee-wages/matrix', [EmployeeWageController::class, 'matrix']);
             Route::get('employee-wages/employee/{employee_id}', [EmployeeWageController::class, 'forEmployee']);
+            // All four categories for one revision date, in one transaction.
+            Route::post('employee-wages/bulk', [EmployeeWageController::class, 'bulkStore']);
             Route::patch('employee-wages/{id}/status', [EmployeeWageController::class, 'toggleStatus']);
             Route::apiResource('employee-wages', EmployeeWageController::class);
 
