@@ -18,38 +18,28 @@ class RecoveryImport implements
         protected int $uploadId
     ) {}
 
-
     public function collection(Collection $rows)
     {
         foreach ($rows as $row) {
 
-            /*
-             * Convert Laravel Excel row to normal array.
-             */
             $row = $row->toArray();
 
             $errors = [];
 
             /*
-             * Employee Code
+             * EMPLOYEE CODE
              */
             $employeeCode = trim(
                 (string) ($row['emp_code'] ?? '')
             );
 
-            /*
-             * Name
-             */
-            $name = trim(
-                (string) ($row['name'] ?? '')
-            );
+            if ($employeeCode === '') {
 
-            /*
-             * Find employee.
-             */
-            $employee = null;
+                $errors['employee_code'][] =
+                    'Employee code is required.';
 
-            if ($employeeCode !== '') {
+                $employee = null;
+            } else {
 
                 $employee = Employee::where(
                     'employee_code',
@@ -61,21 +51,24 @@ class RecoveryImport implements
                     $errors['employee_code'][] =
                         'Employee does not exist.';
                 }
-            } else {
-
-                $errors['employee_code'][] =
-                    'Employee code is required.';
             }
 
-
             /*
-             * Employee name validation.
+             * NAME
              */
+            $name = trim(
+                (string) ($row['name'] ?? '')
+            );
+
             if ($name === '') {
 
                 $errors['name'][] =
                     'Employee name is required.';
-            } elseif ($employee) {
+            } elseif (!$employee) {
+
+                $errors['name'][] =
+                    'Employee name cannot be verified because the employee code does not exist.';
+            } else {
 
                 $employeeName = strtolower(
                     trim($employee->full_name)
@@ -92,9 +85,8 @@ class RecoveryImport implements
                 }
             }
 
-
             /*
-             * Recovery Type.
+             * RECOVERY TYPE
              */
             $allowedTypes = [
                 'damage',
@@ -112,41 +104,33 @@ class RecoveryImport implements
                 )
             );
 
-            if (
-                !in_array(
-                    $type,
-                    $allowedTypes,
-                    true
-                )
-            ) {
+            if (!in_array(
+                $type,
+                $allowedTypes,
+                true
+            )) {
 
                 $errors['recovery_type'][] =
                     'Invalid recovery type. Allowed values: damage, loss, fine, advance, loans.';
             }
 
-
             /*
-             * Particulars.
+             * PARTICULARS
              */
             $particulars =
                 isset($row['particulars'])
-                ? trim(
-                    (string) $row['particulars']
-                )
+                ? trim((string) $row['particulars'])
                 : null;
 
-
             /*
-             * Damage/Loss Date.
+             * DAMAGE / LOSS DATE
              */
             $rawDamageDate =
-                $row['date_of_damage_loss']
-                ?? null;
+                $row['date_of_damage_loss'] ?? null;
 
-            $damageDate =
-                $this->parseDate(
-                    $rawDamageDate
-                );
+            $damageDate = $this->parseDate(
+                $rawDamageDate
+            );
 
             if (
                 $rawDamageDate !== null &&
@@ -158,9 +142,8 @@ class RecoveryImport implements
                     'Invalid damage/loss date.';
             }
 
-
             /*
-             * Amount.
+             * AMOUNT
              */
             $rawAmount =
                 $row['amount'] ?? null;
@@ -189,48 +172,36 @@ class RecoveryImport implements
                 }
             }
 
-
             /*
-             * Show Cause.
+             * SHOW CAUSE
              */
-            $showCause =
-                $this->normalizeYesNo(
-                    $row['show_cause_issued']
-                        ?? null
-                );
+            $showCause = $this->normalizeYesNo(
+                $row['show_cause_issued'] ?? null
+            );
 
-            if (
-                !in_array(
-                    $showCause,
-                    ['yes', 'no'],
-                    true
-                )
-            ) {
+            if (!in_array(
+                $showCause,
+                ['yes', 'no'],
+                true
+            )) {
 
                 $errors['show_cause_issued'][] =
                     'Show cause issued must be Yes or No.';
             }
 
-
             /*
-             * Explanation witness.
+             * WITNESS
              */
             $witness =
-                isset(
-                    $row['explanation_witness']
-                )
-                ? trim(
-                    (string) $row['explanation_witness']
-                )
+                isset($row['explanation_witness'])
+                ? trim((string) $row['explanation_witness'])
                 : null;
 
-
             /*
-             * Number of installments.
+             * INSTALLMENTS
              */
             $rawInstallments =
-                $row['number_installments']
-                ?? null;
+                $row['number_installments'] ?? null;
 
             $installments = null;
 
@@ -239,9 +210,7 @@ class RecoveryImport implements
                 $rawInstallments !== ''
             ) {
 
-                if (
-                    !is_numeric($rawInstallments)
-                ) {
+                if (!is_numeric($rawInstallments)) {
 
                     $errors['number_of_installments'][] =
                         'Number of installments must be numeric.';
@@ -258,14 +227,12 @@ class RecoveryImport implements
                 }
             }
 
-
             /*
-             * First Month/Year.
+             * FIRST MONTH
              */
             $firstMonth =
                 $this->normalizeMonthYear(
-                    $row['first_month_year']
-                        ?? null
+                    $row['first_month_year'] ?? null
                 );
 
             if (
@@ -277,14 +244,12 @@ class RecoveryImport implements
                     'First Month/Year must be in YYYY-MM format.';
             }
 
-
             /*
-             * Last Month/Year.
+             * LAST MONTH
              */
             $lastMonth =
                 $this->normalizeMonthYear(
-                    $row['last_month_year']
-                        ?? null
+                    $row['last_month_year'] ?? null
                 );
 
             if (
@@ -296,9 +261,8 @@ class RecoveryImport implements
                     'Last Month/Year must be in YYYY-MM format.';
             }
 
-
             /*
-             * First month cannot be after last month.
+             * MONTH RANGE
              */
             if (
                 $firstMonth &&
@@ -310,9 +274,8 @@ class RecoveryImport implements
                     'Last Month/Year cannot be before First Month/Year.';
             }
 
-
             /*
-             * Complete recovery date.
+             * COMPLETE RECOVERY DATE
              */
             $rawCompleteDate =
                 $row['complete_recovery_date'] ?? null;
@@ -332,20 +295,16 @@ class RecoveryImport implements
                     'Invalid complete recovery date.';
             }
 
-
             /*
-             * Remarks.
+             * REMARKS
              */
             $remarks =
                 isset($row['remarks'])
-                ? trim(
-                    (string) $row['remarks']
-                )
+                ? trim((string) $row['remarks'])
                 : null;
 
-
             /*
-             * Save staging row.
+             * SAVE STAGING ROW
              */
             RecoveryUploadRow::create([
 
@@ -402,10 +361,6 @@ class RecoveryImport implements
         }
     }
 
-
-    /**
-     * Parse Excel date or normal date.
-     */
     private function parseDate(mixed $value): ?string
     {
         if (
@@ -435,12 +390,10 @@ class RecoveryImport implements
         }
     }
 
+    private function normalizeYesNo(
+        mixed $value
+    ): ?string {
 
-    /**
-     * Normalize Yes / No.
-     */
-    private function normalizeYesNo(mixed $value): ?string
-    {
         if ($value === null) {
             return null;
         }
@@ -449,70 +402,29 @@ class RecoveryImport implements
             trim((string) $value)
         );
 
-        if (
-            in_array(
-                $value,
-                ['yes', 'y', '1', 'true'],
-                true
-            )
-        ) {
+        if (in_array(
+            $value,
+            ['yes', 'y', '1', 'true'],
+            true
+        )) {
             return 'yes';
         }
 
-        if (
-            in_array(
-                $value,
-                ['no', 'n', '0', 'false'],
-                true
-            )
-        ) {
+        if (in_array(
+            $value,
+            ['no', 'n', '0', 'false'],
+            true
+        )) {
             return 'no';
         }
 
         return $value;
     }
 
+    private function normalizeMonthYear(
+        mixed $value
+    ): ?string {
 
-    /**
-     * Normalize YYYY-MM.
-     */
-    private function normalizeMonthYearOld(mixed $value): ?string
-    {
-        if (
-            $value === null ||
-            $value === ''
-        ) {
-            return null;
-        }
-
-        $value = trim((string) $value);
-
-        /*
-         * Already YYYY-MM.
-         */
-        if (
-            preg_match(
-                '/^\d{4}-(0[1-9]|1[0-2])$/',
-                $value
-            )
-        ) {
-            return $value;
-        }
-
-        /*
-         * Try common month/year formats.
-         */
-        try {
-
-            return Carbon::parse($value)
-                ->format('Y-m');
-        } catch (\Throwable $e) {
-
-            return null;
-        }
-    }
-    private function normalizeMonthYear(mixed $value): ?string
-    {
         if (
             $value === null ||
             $value === ''
@@ -521,51 +433,59 @@ class RecoveryImport implements
         }
 
         /*
-     * Excel serial date.
-     */
+         * Excel serial date
+         */
         if (
             is_numeric($value) &&
             (float) $value > 0
         ) {
+
             try {
+
                 return ExcelDate
                     ::excelToDateTimeObject($value)
                     ->format('Y-m');
             } catch (\Throwable $e) {
+
                 return null;
             }
         }
 
-        $value = trim((string) $value);
+        $value = trim(
+            (string) $value
+        );
 
         /*
-     * Already YYYY-MM.
-     */
-        if (
-            preg_match(
-                '/^\d{4}-(0[1-9]|1[0-2])$/',
-                $value
-            )
-        ) {
+         * YYYY-MM
+         */
+        if (preg_match(
+            '/^\d{4}-(0[1-9]|1[0-2])$/',
+            $value
+        )) {
             return $value;
         }
 
         /*
-     * YYYY-MM-DD.
-     */
-        if (
-            preg_match(
-                '/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/',
-                $value
-            )
-        ) {
-            return substr($value, 0, 7);
+         * YYYY-MM-DD
+         */
+        if (preg_match(
+            '/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/',
+            $value
+        )) {
+
+            return substr(
+                $value,
+                0,
+                7
+            );
         }
 
         try {
+
             return Carbon::parse($value)
                 ->format('Y-m');
         } catch (\Throwable $e) {
+
             return null;
         }
     }

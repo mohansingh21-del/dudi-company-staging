@@ -320,7 +320,7 @@ Route::prefix('v1')->group(function () {
 
                 Route::delete('{id}', [DepartmentsController::class, 'destroy']);
             });
-            Route::prefix('recoveries')->group(function () {
+            Route::prefix('recoveries1')->group(function () {
 
                 // Upload Excel
                 Route::post(
@@ -370,6 +370,102 @@ Route::prefix('v1')->group(function () {
                     [RecoveryController::class, 'details']
                 );
             });
+            Route::prefix('recoveries')->group(function () {
+
+                /*
+     * =====================================================
+     * UPLOAD / STAGING
+     * =====================================================
+     */
+
+                // Upload Excel
+                Route::post(
+                    '/bulk-upload',
+                    [RecoveryUploadController::class, 'upload']
+                );
+
+                // Upload history
+
+
+                // Preview staging upload
+                Route::get(
+                    '/uploads/{upload}/preview',
+                    [RecoveryUploadController::class, 'preview']
+                );
+
+                // Edit staging row
+                Route::put(
+                    '/uploads/rows/{row}',
+                    [RecoveryUploadController::class, 'updateRow']
+                );
+
+                // Delete staging row
+                Route::delete(
+                    '/uploads/rows/{row}',
+                    [RecoveryUploadController::class, 'deleteRow']
+                );
+
+                // FINAL SUBMIT
+                Route::post(
+                    '/uploads/{upload}/submit',
+                    [RecoveryUploadController::class, 'submit']
+                );
+
+
+                /*
+     * =====================================================
+     * FINAL RECOVERIES
+     * =====================================================
+     */
+
+                // Final recovery register
+                /*
+     * =====================================================
+     * LEVEL 1
+     * Successful recovery documents
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries
+     */
+                Route::get(
+                    '/',
+                    [RecoveryController::class, 'index']
+                );
+
+
+                /*
+     * =====================================================
+     * LEVEL 2
+     * Recovery rows belonging to one document
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries/uploads/1/rows
+     */
+                Route::get(
+                    '/uploads/{upload}/rows',
+                    [RecoveryController::class, 'uploadRows']
+                );
+
+
+                /*
+     * =====================================================
+     * LEVEL 3
+     * Individual recovery details
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries/15/details
+     */
+                Route::get(
+                    '/{recovery}/details',
+                    [RecoveryController::class, 'details']
+                );
+                Route::get(
+                    '/recovery-uploads',
+                    [RecoveryUploadController::class, 'uploads']
+                );
+            });
+
+
 
             /*
             |--------------------------------------------------------------------------

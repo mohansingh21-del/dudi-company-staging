@@ -1,69 +1,52 @@
 <?php
 
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
+namespace App\Models;
 
-class CreateRecoveriesTable extends Migration
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Recovery extends Model
 {
-    /**
-     * Run the migrations.
-     *
-     * @return void
-     */
-    public function up()
+    use HasFactory;
+
+    protected $fillable = [
+        'recovery_upload_id',
+        'employee_id',
+        'employee_code',
+        'employee_name',
+        'recovery_type',
+        'particulars',
+        'damage_loss_date',
+        'amount',
+        'show_cause_issued',
+        'explanation_witness',
+        'number_of_installments',
+        'first_month_year',
+        'last_month_year',
+        'complete_recovery_date',
+        'remarks',
+    ];
+
+    protected $casts = [
+        'damage_loss_date' => 'date:Y-m-d',
+        'complete_recovery_date' => 'date:Y-m-d',
+        'amount' => 'decimal:2',
+        'show_cause_issued' => 'boolean',
+        'number_of_installments' => 'integer',
+    ];
+
+    public function employee()
     {
-        Schema::create('recoveries', function (Blueprint $table) {
-            $table->id();
-
-            $table->foreignId('recovery_upload_id')
-                ->constrained()
-                ->restrictOnDelete();
-
-            $table->foreignId('employee_id')
-                ->constrained('employees');
-
-            $table->string('employee_code');
-            $table->string('employee_name');
-
-            $table->enum('recovery_type', [
-                'damage',
-                'loss',
-                'fine',
-                'advance',
-                'loans'
-            ]);
-
-            $table->text('particulars')->nullable();
-
-            $table->date('damage_loss_date')->nullable();
-
-            $table->decimal('amount', 12, 2);
-
-            $table->boolean('show_cause_issued')->default(false);
-
-            $table->string('explanation_witness')->nullable();
-
-            $table->unsignedInteger('number_of_installments')->nullable();
-
-            $table->string('first_month_year')->nullable();
-            $table->string('last_month_year')->nullable();
-
-            $table->date('complete_recovery_date')->nullable();
-
-            $table->text('remarks')->nullable();
-
-            $table->timestamps();
-        });
+        return $this->belongsTo(
+            Employee::class
+        );
     }
 
-    /**
-     * Reverse the migrations.
-     *
-     * @return void
-     */
-    public function down()
+    public function upload()
     {
-        Schema::dropIfExists('recoveries');
+        return $this->belongsTo(
+            RecoveryUpload::class,
+            'recovery_upload_id'
+        );
     }
 }

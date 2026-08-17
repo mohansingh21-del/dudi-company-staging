@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class RecoveryUpload extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
         'document_id',
         'file_name',
@@ -24,8 +26,22 @@ class RecoveryUpload extends Model
         );
     }
 
+    /*
+     * Main recovery records created after Submit.
+     */
+    public function recoveries()
+    {
+        return $this->hasMany(
+            Recovery::class,
+            'recovery_upload_id'
+        );
+    }
+
     public function user()
     {
-        return $this->belongsTo(User::class, 'uploaded_by');
+        return $this->belongsTo(
+            User::class,
+            'uploaded_by'
+        );
     }
 }

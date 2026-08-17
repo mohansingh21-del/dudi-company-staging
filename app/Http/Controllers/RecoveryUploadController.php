@@ -17,9 +17,16 @@ use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
 class RecoveryUploadController extends Controller
 {
     /**
-     * Upload Excel file.
+     * =========================================================
+     * BULK UPLOAD
+     * =========================================================
      *
      * POST /api/recoveries/bulk-upload
+     *
+     * IMPORTANT:
+     * This ONLY creates recovery_uploads and recovery_upload_rows.
+     *
+     * It does NOT insert anything into recoveries.
      */
     public function upload(Request $request)
     {
@@ -32,30 +39,82 @@ class RecoveryUploadController extends Controller
             ],
         ]);
 
+        $file = $request->file('file');
+
+        /*
+         * Generate SHA-256 hash of uploaded file.
+         */
+        $fileHash = hash_file(
+            'sha256',
+            $file->getRealPath()
+        );
+
+        /*
+         * Prevent exact same file from being uploaded twice.
+         */
+        $existingUpload = RecoveryUpload::where(
+            'file_hash',
+            $fileHash
+        )->first();
+
+        if ($existingUpload) {
+
+            return response()->json([
+                'status' => 422,
+                'message' =>
+                'This file has already been uploaded.',
+                'data' => [
+                    'upload_id' =>
+                    $existingUpload->id,
+
+                    'document_id' =>
+                    $existingUpload->document_id,
+
+                    'status' =>
+                    $existingUpload->status,
+                ],
+            ], 422);
+        }
+
         DB::beginTransaction();
 
         try {
 
-            $file = $request->file('file');
-
             /*
-             * Temporary document ID prevents duplicate document IDs.
-             * We replace it after the upload record gets its ID.
+             * Create upload header.
+             *
+             * "failed" is the initial state.
+             * It will become "ready" if all rows pass validation.
              */
             $upload = RecoveryUpload::create([
-                'document_id' => 'TEMP-' . uniqid(),
-                'file_name' => $file->getClientOriginalName(),
-                'uploaded_by' => auth()->id(),
-                'status' => 'failed',
-                'total_rows' => 0,
-                'error_rows' => 0,
+                'document_id' =>
+                'TEMP-' . uniqid(),
+
+                'file_name' =>
+                $file->getClientOriginalName(),
+
+                'file_hash' =>
+                $fileHash,
+
+                'uploaded_by' =>
+                auth()->id(),
+
+                'status' =>
+                'failed',
+
+                'total_rows' =>
+                0,
+
+                'error_rows' =>
+                0,
             ]);
 
             /*
-             * Now generate DOC-0001 style ID using actual DB ID.
+             * Generate document ID.
              */
             $upload->update([
-                'document_id' => 'DOC-' . str_pad(
+                'document_id' =>
+                'DOC-' . str_pad(
                     $upload->id,
                     4,
                     '0',
@@ -64,136 +123,41 @@ class RecoveryUploadController extends Controller
             ]);
 
             /*
-             * Read Excel and insert into staging table.
+             * Import ONLY into staging table.
              */
             Excel::import(
-                new RecoveryImport($upload->id),
+                new RecoveryImport(
+                    $upload->id
+                ),
                 $file
             );
 
             /*
-             * Calculate status.
+             * Calculate validation result.
              */
-            $this->refreshUploadStatus($upload);
+            $this->refreshUploadStatus(
+                $upload
+            );
 
             DB::commit();
 
+            $upload->refresh();
+
             return response()->json([
                 'status' => 200,
-                'message' => 'File uploaded successfully.',
+
+                'message' =>
+                'File uploaded and validated successfully.',
 
                 'data' => [
-                    'id' => $upload->id,
-                    'document_id' => $upload->document_id,
-                    'file_name' => $upload->file_name,
-                    'status' => $upload->status,
-                    'total_rows' => $upload->total_rows,
-                    'error_rows' => $upload->error_rows,
-                ],
-            ], 200);
-        } catch (\Throwable $e) {
-
-            DB::rollBack();
-
-            Log::error('Recovery bulk upload failed', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'status' => 500,
-                'message' => 'Unable to process recovery file.',
-                'error' => $e->getMessage(),
-            ], 500);
-        }
-    }
-
-
-    /**
-     * Refresh upload status.
-     */
-    private function refreshUploadStatus(RecoveryUpload $upload): void
-    {
-        $total = $upload->rows()->count();
-
-        $errors = $upload->rows()
-            ->where('is_valid', false)
-            ->count();
-
-        $upload->update([
-            'total_rows' => $total,
-            'error_rows' => $errors,
-
-            'status' => $errors > 0
-                ? 'failed'
-                : 'success',
-        ]);
-    }
-
-
-    /**
-     * Upload list / first screen.
-     *
-     * GET /api/recoveries/uploads
-     */
-    public function uploads(Request $request)
-    {
-        $query = RecoveryUpload::query()
-            ->with('user')
-            ->latest();
-
-        if ($request->filled('year')) {
-            $query->whereYear(
-                'created_at',
-                $request->integer('year')
-            );
-        }
-
-        if ($request->filled('month')) {
-            $query->whereMonth(
-                'created_at',
-                $request->integer('month')
-            );
-        }
-
-        if ($request->filled('search')) {
-
-            $search = trim($request->search);
-
-            $query->where(function ($q) use ($search) {
-
-                $q->where(
-                    'file_name',
-                    'like',
-                    "%{$search}%"
-                );
-
-                $q->orWhere(
-                    'document_id',
-                    'like',
-                    "%{$search}%"
-                );
-            });
-        }
-
-        $uploads = $query->paginate(
-            $request->integer('per_page', 10)
-        );
-
-        $uploads->getCollection()->transform(
-            function ($upload) {
-
-                return [
-                    'id' => $upload->id,
+                    'id' =>
+                    $upload->id,
 
                     'document_id' =>
                     $upload->document_id,
 
                     'file_name' =>
                     $upload->file_name,
-
-                    'uploaded_by' =>
-                    optional($upload->user)->name,
 
                     'status' =>
                     $upload->status,
@@ -204,10 +168,290 @@ class RecoveryUploadController extends Controller
                     'error_rows' =>
                     $upload->error_rows,
 
+                    'can_submit' =>
+                    $upload->status === 'ready',
+                ],
+            ], 200);
+        } catch (\Throwable $e) {
+
+            DB::rollBack();
+
+            Log::error(
+                'Recovery bulk upload failed',
+                [
+                    'message' =>
+                    $e->getMessage(),
+
+                    'trace' =>
+                    $e->getTraceAsString(),
+                ]
+            );
+
+            return response()->json([
+                'status' => 500,
+
+                'message' =>
+                'Unable to process recovery file.',
+
+                'error' =>
+                $e->getMessage(),
+
+            ], 500);
+        }
+    }
+
+
+    /**
+     * =========================================================
+     * REFRESH UPLOAD STATUS
+     * =========================================================
+     */
+    private function refreshUploadStatusOLD(
+        RecoveryUpload $upload
+    ): void {
+
+        $total = $upload
+            ->rows()
+            ->count();
+
+        $errors = $upload
+            ->rows()
+            ->where('is_valid', false)
+            ->count();
+
+        /*
+         * READY means:
+         * - all staging rows are valid
+         * - data has NOT been submitted yet
+         */
+        $status =
+            $errors > 0
+            ? 'failed'
+            : 'ready';
+
+        $upload->update([
+            'total_rows' =>
+            $total,
+
+            'error_rows' =>
+            $errors,
+
+            'status' =>
+            $status,
+        ]);
+    }
+    private function refreshUploadStatus(RecoveryUpload $upload): void
+    {
+        $total = $upload->rows()->count();
+
+        $errors = $upload->rows()
+            ->where('is_valid', false)
+            ->count();
+
+        /*
+     * Don't change an already successfully submitted upload.
+     */
+        if ($upload->status === 'success') {
+            return;
+        }
+
+        $upload->update([
+            'total_rows' => $total,
+            'error_rows' => $errors,
+
+            'status' => $errors > 0
+                ? 'failed'
+                : 'ready',
+        ]);
+    }
+
+    /**
+     * =========================================================
+     * GET UPLOADS
+     * =========================================================
+     *
+     * GET /api/recoveries/uploads
+     */
+    /**
+     * Get recovery upload list.
+     *
+     * GET /api/recovery-uploads
+     *
+     * Optional filters:
+     * ?year=2026
+     * ?month=8
+     * ?status=success
+     * ?search=Penalty
+     * ?per_page=10
+     */
+    public function uploads(Request $request)
+    {
+        $query = RecoveryUpload::query()
+            ->with('user')
+            ->latest('created_at');
+
+        /*
+     * Filter by year.
+     */
+        if ($request->filled('year')) {
+            $query->whereYear(
+                'created_at',
+                (int) $request->input('year')
+            );
+        }
+
+        /*
+     * Filter by month.
+     */
+        if ($request->filled('month')) {
+            $query->whereMonth(
+                'created_at',
+                (int) $request->input('month')
+            );
+        }
+
+        /*
+     * Filter by upload status.
+     *
+     * success = submitted successfully
+     * failed  = validation errors
+     */
+        if ($request->filled('status')) {
+
+            $allowedStatuses = [
+                'success',
+                'failed',
+            ];
+
+            $status = strtolower(
+                trim($request->input('status'))
+            );
+
+            if (in_array($status, $allowedStatuses, true)) {
+                $query->where('status', $status);
+            }
+        }
+
+        /*
+     * Search by:
+     * - document ID
+     * - file name
+     */
+        if ($request->filled('search')) {
+
+            $search = trim(
+                $request->input('search')
+            );
+
+            $query->where(function ($q) use ($search) {
+
+                $q->where(
+                    'document_id',
+                    'like',
+                    "%{$search}%"
+                );
+
+                $q->orWhere(
+                    'file_name',
+                    'like',
+                    "%{$search}%"
+                );
+            });
+        }
+
+        /*
+     * Pagination.
+     */
+        $perPage = (int) $request->input(
+            'per_page',
+            10
+        );
+
+        /*
+     * Prevent unreasonable pagination values.
+     */
+        $perPage = max(
+            1,
+            min($perPage, 100)
+        );
+
+        $uploads = $query->paginate(
+            $perPage
+        );
+
+        /*
+     * Transform response.
+     */
+        $uploads->getCollection()->transform(
+            function (RecoveryUpload $upload) {
+
+                return [
+
+                    'id' =>
+                    $upload->id,
+
+                    'document_id' =>
+                    $upload->document_id,
+
+                    'file_name' =>
+                    $upload->file_name,
+
+                    'uploaded_by' =>
+                    optional($upload->user)->name,
+
+                    'uploaded_by_id' =>
+                    $upload->uploaded_by,
+
+                    'status' =>
+                    $upload->status,
+
+                    'total_rows' =>
+                    $upload->total_rows,
+
+                    'error_rows' =>
+                    $upload->error_rows,
+
+                    /*
+                 * True only when every row is valid.
+                 * This does NOT mean data was inserted
+                 * into recoveries table.
+                 */
+                    'can_submit' =>
+                    $upload->status === 'success'
+                        &&
+                        $upload->error_rows === 0,
+
+                    /*
+                 * Whether this upload has already
+                 * been transferred to recoveries table.
+                 */
+                    'is_submitted' =>
+                    Recovery::where(
+                        'recovery_upload_id',
+                        $upload->id
+                    )->exists(),
+
                     'uploaded_at' =>
-                    $upload->created_at?->format(
-                        'Y-m-d H:i:s'
-                    ),
+                    $upload->created_at
+                        ? $upload->created_at
+                        ->format('Y-m-d H:i:s')
+                        : null,
+
+                    'month' =>
+                    $upload->created_at
+                        ? $upload->created_at
+                        ->format('F Y')
+                        : null,
+
+                    'year' =>
+                    $upload->created_at
+                        ? $upload->created_at->year
+                        : null,
+
+                    'month_number' =>
+                    $upload->created_at
+                        ? $upload->created_at->month
+                        : null,
                 ];
             }
         );
@@ -220,15 +464,20 @@ class RecoveryUploadController extends Controller
 
 
     /**
-     * Preview uploaded Excel.
+     * =========================================================
+     * PREVIEW
+     * =========================================================
      *
      * GET /api/recoveries/uploads/{upload}/preview
      */
-    public function preview(RecoveryUpload $upload)
-    {
+    public function preview(
+        RecoveryUpload $upload
+    ) {
+
         $upload->load('user');
 
-        $rows = $upload->rows()
+        $rows = $upload
+            ->rows()
             ->orderBy('id')
             ->get();
 
@@ -236,7 +485,9 @@ class RecoveryUploadController extends Controller
             'status' => 200,
 
             'data' => [
-                'id' => $upload->id,
+
+                'id' =>
+                $upload->id,
 
                 'document_id' =>
                 $upload->document_id,
@@ -245,7 +496,9 @@ class RecoveryUploadController extends Controller
                 $upload->file_name,
 
                 'uploaded_by' =>
-                optional($upload->user)->name,
+                optional(
+                    $upload->user
+                )->name,
 
                 'status' =>
                 $upload->status,
@@ -257,180 +510,54 @@ class RecoveryUploadController extends Controller
                 $upload->error_rows,
 
                 /*
-                 * Frontend can use this directly.
+                 * Only READY upload can be submitted.
                  */
                 'can_submit' =>
-                $upload->error_rows === 0,
+                $upload->status === 'ready',
 
-                'rows' => $rows,
+                'submitted' =>
+                $upload->status === 'submitted',
+
+                'rows' =>
+                $rows,
             ]
         ]);
     }
 
 
     /**
-     * Update one field in a staging row.
+     * =========================================================
+     * UPDATE ROW
+     * =========================================================
      *
      * PUT /api/recoveries/uploads/rows/{row}
-     *
-     * Body:
-     * {
-     *   "field": "name",
-     *   "value": "Michael Scott"
-     * }
      */
-    public function updateRowOLD(
-        Request $request,
-        RecoveryUploadRow $row
-    ) {
-
-        $request->validate([
-            'field' => 'required|string',
-        ]);
-
-        $allowed = [
-            'employee_code',
-            'name',
-            'recovery_type',
-            'particulars',
-            'damage_loss_date',
-            'amount',
-            'show_cause_issued',
-            'explanation_witness',
-            'number_of_installments',
-            'first_month_year',
-            'last_month_year',
-            'complete_recovery_date',
-            'remarks',
-        ];
-
-        if (!in_array($request->field, $allowed, true)) {
-
-            return response()->json([
-                'status' => 422,
-                'message' => 'Invalid field.',
-            ], 422);
-        }
-
-        /*
-         * Convert the incoming value according to field.
-         */
-        $value = $request->input('value');
-
-        try {
-
-            switch ($request->field) {
-
-                case 'amount':
-
-                    if (
-                        $value === null ||
-                        $value === '' ||
-                        !is_numeric($value)
-                    ) {
-                        $convertedValue = $value;
-                    } else {
-                        $convertedValue = (float) $value;
-                    }
-
-                    break;
-
-                case 'number_of_installments':
-
-                    if (
-                        $value === null ||
-                        $value === '' ||
-                        !is_numeric($value)
-                    ) {
-                        $convertedValue = $value;
-                    } else {
-                        $convertedValue = (int) $value;
-                    }
-
-                    break;
-
-                case 'damage_loss_date':
-                case 'complete_recovery_date':
-
-                    $convertedValue =
-                        $this->parseDate($value);
-
-                    /*
-                     * If value was supplied but invalid,
-                     * keep null and validation will create error.
-                     */
-                    break;
-
-                case 'first_month_year':
-                case 'last_month_year':
-
-                    $convertedValue =
-                        $value !== null
-                        ? trim((string) $value)
-                        : null;
-
-                    break;
-
-                case 'show_cause_issued':
-
-                    $convertedValue =
-                        $this->normalizeYesNo($value);
-
-                    break;
-
-                default:
-
-                    $convertedValue =
-                        $value !== null
-                        ? trim((string) $value)
-                        : null;
-            }
-
-            $row->{$request->field} =
-                $convertedValue;
-
-            /*
-             * Revalidate the entire row.
-             */
-            $this->validateRow($row);
-
-            $row->save();
-
-            $this->refreshUploadStatus(
-                $row->upload
-            );
-
-            return response()->json([
-                'status' => 200,
-                'message' => 'Row updated successfully.',
-
-                'data' => $row->fresh(),
-
-                'upload' => [
-                    'id' => $row->upload->id,
-                    'status' => $row->upload->status,
-                    'total_rows' => $row->upload->total_rows,
-                    'error_rows' => $row->upload->error_rows,
-                    'can_submit' =>
-                    $row->upload->error_rows === 0,
-                ],
-            ]);
-        } catch (\Throwable $e) {
-
-            return response()->json([
-                'status' => 422,
-                'message' => $e->getMessage(),
-            ], 422);
-        }
-    }
-
     public function updateRow(
         Request $request,
         RecoveryUploadRow $row
     ) {
+
+        /*
+         * Do not allow editing after submission.
+         */
+        if (
+            $row->upload &&
+            $row->upload->status === 'submitted'
+        ) {
+
+            return response()->json([
+                'status' => 422,
+                'message' =>
+                'Submitted upload cannot be edited.',
+            ], 422);
+        }
+
         $request->validate([
-            'field' => 'required|string',
-            'value' => 'nullable',
+            'field' =>
+            'required|string',
+
+            'value' =>
+            'nullable',
         ]);
 
         $allowed = [
@@ -449,55 +576,191 @@ class RecoveryUploadController extends Controller
             'remarks',
         ];
 
-        if (!in_array($request->field, $allowed)) {
+        $field = $request->input('field');
+
+        if (!in_array(
+            $field,
+            $allowed,
+            true
+        )) {
+
             return response()->json([
                 'status' => 422,
-                'message' => 'Invalid field.'
+                'message' =>
+                'Invalid field.',
             ], 422);
         }
 
-        $row->{$request->field} = $request->value;
+        /*
+         * Normalize value according to field.
+         */
+        $value = $request->input('value');
 
+        switch ($field) {
+
+            case 'amount':
+
+                if (
+                    $value === null ||
+                    $value === '' ||
+                    !is_numeric($value)
+                ) {
+
+                    $convertedValue =
+                        $value;
+                } else {
+
+                    $convertedValue =
+                        (float) $value;
+                }
+
+                break;
+
+            case 'number_of_installments':
+
+                if (
+                    $value === null ||
+                    $value === '' ||
+                    !is_numeric($value)
+                ) {
+
+                    $convertedValue =
+                        $value;
+                } else {
+
+                    $convertedValue =
+                        (int) $value;
+                }
+
+                break;
+
+            case 'damage_loss_date':
+            case 'complete_recovery_date':
+
+                if (
+                    $value === null ||
+                    $value === ''
+                ) {
+
+                    $convertedValue = null;
+                } else {
+
+                    $convertedValue =
+                        $this->parseDate(
+                            $value
+                        );
+                }
+
+                break;
+
+            case 'first_month_year':
+            case 'last_month_year':
+
+                $convertedValue =
+                    $value !== null
+                    ? trim((string) $value)
+                    : null;
+
+                break;
+
+            case 'show_cause_issued':
+
+                $convertedValue =
+                    $this->normalizeYesNo(
+                        $value
+                    );
+
+                break;
+
+            default:
+
+                $convertedValue =
+                    $value !== null
+                    ? trim((string) $value)
+                    : null;
+        }
+
+        $row->{$field} =
+            $convertedValue;
+
+        /*
+         * Validate entire row again.
+         */
         $this->validateRow($row);
 
         $row->save();
 
-        // Get upload explicitly
         $upload = $row->upload;
 
         if (!$upload) {
+
             return response()->json([
                 'status' => 422,
-                'message' => 'Upload record not found for this row.',
-                'row_id' => $row->id,
-                'recovery_upload_id' => $row->recovery_upload_id,
+                'message' =>
+                'Upload record not found.',
             ], 422);
         }
 
-        $this->refreshUploadStatus($upload);
+        /*
+         * Recalculate status.
+         */
+        $this->refreshUploadStatus(
+            $upload
+        );
+
+        $row->refresh();
+        $upload->refresh();
 
         return response()->json([
             'status' => 200,
-            'message' => 'Row updated successfully.',
-            'data' => $row->fresh(),
-            'upload' => $upload->fresh(),
+
+            'message' =>
+            'Row updated successfully.',
+
+            'data' =>
+            $row,
+
+            'upload' => [
+                'id' =>
+                $upload->id,
+
+                'status' =>
+                $upload->status,
+
+                'total_rows' =>
+                $upload->total_rows,
+
+                'error_rows' =>
+                $upload->error_rows,
+
+                'can_submit' =>
+                $upload->status === 'ready',
+            ],
         ]);
     }
 
+
     /**
-     * Validate complete staging row.
+     * =========================================================
+     * VALIDATE COMPLETE ROW
+     * =========================================================
      */
     private function validateRow(
         RecoveryUploadRow $row
     ): RecoveryUploadRow {
 
         $errors = [];
+
         /*
-         * Employee validation.
+         * EMPLOYEE
          */
         $employee = null;
 
-        if (empty(trim((string) $row->employee_code))) {
+        $employeeCode = trim(
+            (string) $row->employee_code
+        );
+
+        if ($employeeCode === '') {
 
             $errors['employee_code'][] =
                 'Employee code is required.';
@@ -505,7 +768,7 @@ class RecoveryUploadController extends Controller
 
             $employee = Employee::where(
                 'employee_code',
-                trim($row->employee_code)
+                $employeeCode
             )->first();
 
             if (!$employee) {
@@ -516,25 +779,34 @@ class RecoveryUploadController extends Controller
         }
 
         /*
-         * Name must match employee.
+         * NAME
          */
-        if (empty(trim((string) $row->name))) {
+        $name = trim(
+            (string) $row->name
+        );
+
+        if ($name === '') {
 
             $errors['name'][] =
                 'Employee name is required.';
-        } elseif ($employee) {
+        } elseif (!$employee) {
 
-            $employeeName =
-                strtolower(
-                    trim($employee->full_name)
-                );
+            $errors['name'][] =
+                'Employee name cannot be verified because the employee code does not exist.';
+        } else {
 
-            $uploadedName =
-                strtolower(
-                    trim($row->name)
-                );
+            $employeeName = strtolower(
+                trim($employee->full_name)
+            );
 
-            if ($employeeName !== $uploadedName) {
+            $uploadedName = strtolower(
+                trim($name)
+            );
+
+            if (
+                $employeeName !==
+                $uploadedName
+            ) {
 
                 $errors['name'][] =
                     'Employee name does not match.';
@@ -542,7 +814,7 @@ class RecoveryUploadController extends Controller
         }
 
         /*
-         * Recovery type.
+         * RECOVERY TYPE
          */
         $allowedTypes = [
             'damage',
@@ -553,17 +825,23 @@ class RecoveryUploadController extends Controller
         ];
 
         $type = strtolower(
-            trim((string) $row->recovery_type)
+            trim(
+                (string) $row->recovery_type
+            )
         );
 
-        if (!in_array($type, $allowedTypes, true)) {
+        if (!in_array(
+            $type,
+            $allowedTypes,
+            true
+        )) {
 
             $errors['recovery_type'][] =
                 'Invalid recovery type. Allowed values: damage, loss, fine, advance, loans.';
         }
 
         /*
-         * Amount.
+         * AMOUNT
          */
         if (
             $row->amount === null ||
@@ -573,17 +851,21 @@ class RecoveryUploadController extends Controller
 
             $errors['amount'][] =
                 'Amount must be numeric.';
-        } elseif ((float) $row->amount <= 0) {
+        } elseif (
+            (float) $row->amount <= 0
+        ) {
 
             $errors['amount'][] =
                 'Amount must be greater than zero.';
         }
 
         /*
-         * Show cause.
+         * SHOW CAUSE
          */
         $showCause = strtolower(
-            trim((string) $row->show_cause_issued)
+            trim(
+                (string) $row->show_cause_issued
+            )
         );
 
         if (!in_array(
@@ -597,7 +879,7 @@ class RecoveryUploadController extends Controller
         }
 
         /*
-         * Number of installments.
+         * INSTALLMENTS
          */
         if (
             $row->number_of_installments !== null &&
@@ -622,11 +904,16 @@ class RecoveryUploadController extends Controller
         }
 
         /*
-         * Damage/Loss date.
+         * DAMAGE DATE
+         *
+         * Because the database field is already normalized,
+         * check whether it contains a valid date value.
          */
         if (
-            $row->damage_loss_date === null &&
-            !empty($row->damage_loss_date)
+            $row->damage_loss_date !== null &&
+            !$this->isValidDateValue(
+                $row->damage_loss_date
+            )
         ) {
 
             $errors['damage_loss_date'][] =
@@ -634,11 +921,13 @@ class RecoveryUploadController extends Controller
         }
 
         /*
-         * Complete recovery date.
+         * COMPLETE DATE
          */
         if (
-            $row->complete_recovery_date === null &&
-            !empty($row->complete_recovery_date)
+            $row->complete_recovery_date !== null &&
+            !$this->isValidDateValue(
+                $row->complete_recovery_date
+            )
         ) {
 
             $errors['complete_recovery_date'][] =
@@ -646,13 +935,15 @@ class RecoveryUploadController extends Controller
         }
 
         /*
-         * First Month/Year.
+         * FIRST MONTH
          */
         if (
             !empty($row->first_month_year) &&
             !preg_match(
                 '/^\d{4}-(0[1-9]|1[0-2])$/',
-                trim($row->first_month_year)
+                trim(
+                    $row->first_month_year
+                )
             )
         ) {
 
@@ -661,13 +952,15 @@ class RecoveryUploadController extends Controller
         }
 
         /*
-         * Last Month/Year.
+         * LAST MONTH
          */
         if (
             !empty($row->last_month_year) &&
             !preg_match(
                 '/^\d{4}-(0[1-9]|1[0-2])$/',
-                trim($row->last_month_year)
+                trim(
+                    $row->last_month_year
+                )
             )
         ) {
 
@@ -676,7 +969,7 @@ class RecoveryUploadController extends Controller
         }
 
         /*
-         * First period cannot be after last period.
+         * PERIOD
          */
         if (
             empty($errors['first_month_year']) &&
@@ -695,8 +988,13 @@ class RecoveryUploadController extends Controller
             }
         }
 
+        /*
+         * SAVE ERRORS
+         */
         $row->errors =
-            empty($errors) ? null : $errors;
+            empty($errors)
+            ? null
+            : $errors;
 
         $row->is_valid =
             empty($errors);
@@ -706,9 +1004,32 @@ class RecoveryUploadController extends Controller
 
 
     /**
-     * Delete staging row.
-     *
-     * DELETE /api/recoveries/uploads/rows/{row}
+     * Check date value.
+     */
+    private function isValidDateValue(
+        mixed $value
+    ): bool {
+
+        if ($value === null || $value === '') {
+            return true;
+        }
+
+        try {
+
+            Carbon::parse($value);
+
+            return true;
+        } catch (\Throwable $e) {
+
+            return false;
+        }
+    }
+
+
+    /**
+     * =========================================================
+     * DELETE STAGING ROW
+     * =========================================================
      */
     public function deleteRow(
         RecoveryUploadRow $row
@@ -716,100 +1037,179 @@ class RecoveryUploadController extends Controller
 
         $upload = $row->upload;
 
+        if (!$upload) {
+
+            return response()->json([
+                'status' => 404,
+                'message' =>
+                'Upload not found.',
+            ], 404);
+        }
+
+        if (
+            $upload->status === 'submitted'
+        ) {
+
+            return response()->json([
+                'status' => 422,
+                'message' =>
+                'Submitted upload cannot be modified.',
+            ], 422);
+        }
+
         $row->delete();
 
-        $this->refreshUploadStatus($upload);
+        $this->refreshUploadStatus(
+            $upload
+        );
+
+        $upload->refresh();
 
         return response()->json([
             'status' => 200,
-            'message' => 'Row deleted successfully.',
+
+            'message' =>
+            'Row deleted successfully.',
 
             'upload' => [
-                'id' => $upload->id,
-                'status' => $upload->status,
-                'total_rows' => $upload->total_rows,
-                'error_rows' => $upload->error_rows,
+                'id' =>
+                $upload->id,
+
+                'status' =>
+                $upload->status,
+
+                'total_rows' =>
+                $upload->total_rows,
+
+                'error_rows' =>
+                $upload->error_rows,
+
                 'can_submit' =>
-                $upload->error_rows === 0,
+                $upload->status === 'ready',
             ],
         ]);
     }
 
 
     /**
-     * Submit final data.
+     * =========================================================
+     * SUBMIT
+     * =========================================================
      *
      * POST /api/recoveries/uploads/{upload}/submit
+     *
+     * THIS IS THE ONLY PLACE WHERE DATA ENTERS recoveries.
      */
-    public function submit(
-        RecoveryUpload $upload
-    ) {
+    public function submit(RecoveryUpload $upload)
+    {
+        /*
+     * Prevent duplicate submission.
+     */
+        if ($upload->status === 'success') {
+
+            return response()->json([
+                'status' => 422,
+                'message' =>
+                'This recovery file has already been submitted.',
+            ], 422);
+        }
 
         /*
-         * Never trust the previous validation state.
-         * Validate every row again before final insertion.
-         */
-        foreach ($upload->rows as $row) {
+     * Get all staging rows.
+     */
+        $rows = $upload->rows()
+            ->orderBy('id')
+            ->get();
+
+        /*
+     * Revalidate every row.
+     */
+        foreach ($rows as $row) {
 
             $this->validateRow($row);
 
             $row->save();
         }
 
-        $this->refreshUploadStatus($upload);
+        /*
+     * Recalculate counts.
+     */
+        $totalRows = $upload->rows()->count();
+
+        $errorRows = $upload->rows()
+            ->where('is_valid', false)
+            ->count();
 
         /*
-         * Stop if any error remains.
-         */
-        if (
-            $upload->error_rows > 0
-        ) {
+     * Update upload counters.
+     */
+        $upload->update([
+            'total_rows' => $totalRows,
+            'error_rows' => $errorRows,
+        ]);
+
+        /*
+     * If there are errors, DO NOT insert anything
+     * into the recoveries table.
+     */
+        if ($errorRows > 0) {
+
+            $upload->update([
+                'status' => 'failed',
+            ]);
 
             return response()->json([
                 'status' => 422,
+
                 'message' =>
                 'Fix remaining errors before submitting.',
-                'error_rows' =>
-                $upload->error_rows,
+
+                'data' => [
+                    'upload_id' =>
+                    $upload->id,
+
+                    'document_id' =>
+                    $upload->document_id,
+
+                    'status' =>
+                    'failed',
+
+                    'total_rows' =>
+                    $totalRows,
+
+                    'error_rows' =>
+                    $errorRows,
+
+                    'can_submit' =>
+                    false,
+                ],
             ], 422);
         }
 
         /*
-         * Prevent duplicate submission.
-         */
-        if ($upload->status === 'success') {
-
-            $alreadySubmitted =
-                Recovery::where(
-                    'recovery_upload_id',
-                    $upload->id
-                )->exists();
-
-            if ($alreadySubmitted) {
-
-                return response()->json([
-                    'status' => 422,
-                    'message' =>
-                    'This recovery file has already been submitted.',
-                ], 422);
-            }
-        }
+     * All rows are valid.
+     *
+     * Mark as ready BEFORE actual submission.
+     */
+        $upload->update([
+            'status' => 'ready',
+            'error_rows' => 0,
+        ]);
 
         DB::beginTransaction();
 
         try {
 
-            foreach ($upload->rows as $row) {
+            foreach ($rows as $row) {
 
+                /*
+             * Find employee.
+             */
                 $employee = Employee::where(
                     'employee_code',
                     trim($row->employee_code)
                 )->first();
 
-                /*
-                 * This should never happen because validation
-                 * already checked it.
-                 */
                 if (!$employee) {
 
                     throw new \Exception(
@@ -817,6 +1217,23 @@ class RecoveryUploadController extends Controller
                     );
                 }
 
+                /*
+             * Verify employee name again.
+             */
+                if (
+                    strtolower(trim($employee->full_name))
+                    !==
+                    strtolower(trim($row->name))
+                ) {
+
+                    throw new \Exception(
+                        "Employee name does not match for {$row->employee_code}."
+                    );
+                }
+
+                /*
+             * Insert into MAIN recoveries table.
+             */
                 Recovery::create([
 
                     'recovery_upload_id' =>
@@ -834,6 +1251,265 @@ class RecoveryUploadController extends Controller
                     'recovery_type' =>
                     strtolower(
                         trim($row->recovery_type)
+                    ),
+
+                    'particulars' =>
+                    $row->particulars,
+
+                    'damage_loss_date' =>
+                    $row->damage_loss_date,
+
+                    'amount' =>
+                    $row->amount,
+
+                    'show_cause_issued' =>
+                    strtolower(
+                        trim($row->show_cause_issued)
+                    ) === 'yes',
+
+                    'explanation_witness' =>
+                    $row->explanation_witness,
+
+                    'number_of_installments' =>
+                    $row->number_of_installments,
+
+                    'first_month_year' =>
+                    $row->first_month_year,
+
+                    'last_month_year' =>
+                    $row->last_month_year,
+
+                    'complete_recovery_date' =>
+                    $row->complete_recovery_date,
+
+                    'remarks' =>
+                    $row->remarks,
+                ]);
+            }
+
+            /*
+         * IMPORTANT:
+         *
+         * Only AFTER all rows have successfully
+         * been inserted into recoveries,
+         * change status to success.
+         */
+            $upload->update([
+                'status' => 'success',
+                'error_rows' => 0,
+                'total_rows' => $totalRows,
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'status' => 200,
+
+                'message' =>
+                'Recovery data submitted successfully.',
+
+                'data' => [
+                    'upload_id' =>
+                    $upload->id,
+
+                    'document_id' =>
+                    $upload->document_id,
+
+                    'status' =>
+                    'success',
+
+                    'total_rows' =>
+                    $totalRows,
+
+                    'error_rows' =>
+                    0,
+
+                    'can_submit' =>
+                    false,
+                ],
+            ], 200);
+        } catch (\Throwable $e) {
+
+            DB::rollBack();
+
+            /*
+         * Keep upload in ready state because
+         * validation passed but submission failed.
+         */
+            $upload->update([
+                'status' => 'ready',
+            ]);
+
+            Log::error(
+                'Recovery submission failed',
+                [
+                    'upload_id' =>
+                    $upload->id,
+
+                    'message' =>
+                    $e->getMessage(),
+
+                    'trace' =>
+                    $e->getTraceAsString(),
+                ]
+            );
+
+            return response()->json([
+                'status' => 500,
+
+                'message' =>
+                'Unable to submit recovery data.',
+
+                'error' =>
+                $e->getMessage(),
+            ], 500);
+        }
+    }
+    public function submitOLD(
+        RecoveryUpload $upload
+    ) {
+
+        /*
+         * Prevent duplicate submission.
+         */
+        if (
+            $upload->status === 'submitted'
+        ) {
+
+            return response()->json([
+                'status' => 422,
+
+                'message' =>
+                'This recovery file has already been submitted.',
+            ], 422);
+        }
+
+        /*
+         * Revalidate EVERY row.
+         *
+         * Never trust the previous validation state.
+         */
+        $rows = $upload
+            ->rows()
+            ->orderBy('id')
+            ->get();
+
+        foreach ($rows as $row) {
+
+            $this->validateRow($row);
+
+            $row->save();
+        }
+
+        /*
+         * Refresh validation status.
+         */
+        $this->refreshUploadStatus(
+            $upload
+        );
+
+        $upload->refresh();
+
+        /*
+         * Stop if errors remain.
+         */
+        if (
+            $upload->error_rows > 0
+        ) {
+
+            return response()->json([
+                'status' => 422,
+
+                'message' =>
+                'Fix remaining errors before submitting.',
+
+                'error_rows' =>
+                $upload->error_rows,
+
+                'can_submit' =>
+                false,
+            ], 422);
+        }
+
+        /*
+         * There must be at least one row.
+         */
+        if ($upload->total_rows === 0) {
+
+            return response()->json([
+                'status' => 422,
+
+                'message' =>
+                'Cannot submit an empty recovery file.',
+            ], 422);
+        }
+
+        /*
+         * =====================================================
+         * ONLY NOW INSERT INTO recoveries
+         * =====================================================
+         */
+        DB::beginTransaction();
+
+        try {
+
+            foreach ($rows as $row) {
+
+                /*
+                 * Find employee again.
+                 */
+                $employee = Employee::where(
+                    'employee_code',
+                    trim($row->employee_code)
+                )->first();
+
+                if (!$employee) {
+
+                    throw new \Exception(
+                        "Employee {$row->employee_code} does not exist."
+                    );
+                }
+
+                /*
+                 * Double-check employee name.
+                 */
+                if (
+                    strtolower(
+                        trim($employee->full_name)
+                    ) !==
+                    strtolower(
+                        trim($row->name)
+                    )
+                ) {
+
+                    throw new \Exception(
+                        "Employee name does not match for {$row->employee_code}."
+                    );
+                }
+
+                /*
+                 * IMPORTANT:
+                 * This is the actual insertion into recoveries.
+                 */
+                Recovery::create([
+
+                    'recovery_upload_id' =>
+                    $upload->id,
+
+                    'employee_id' =>
+                    $employee->id,
+
+                    'employee_code' =>
+                    $employee->employee_code,
+
+                    'employee_name' =>
+                    $employee->full_name,
+
+                    'recovery_type' =>
+                    strtolower(
+                        trim(
+                            $row->recovery_type
+                        )
                     ),
 
                     'particulars' =>
@@ -872,17 +1548,27 @@ class RecoveryUploadController extends Controller
                 ]);
             }
 
+            /*
+             * Mark upload as submitted.
+             */
             $upload->update([
-                'status' => 'success',
-                'error_rows' => 0,
+                'status' =>
+                'submitted',
+
+                'error_rows' =>
+                0,
             ]);
 
             DB::commit();
 
+            $upload->refresh();
+
             return response()->json([
                 'status' => 200,
+
                 'message' =>
                 'Recovery data submitted successfully.',
+
                 'data' => [
                     'upload_id' =>
                     $upload->id,
@@ -892,8 +1578,14 @@ class RecoveryUploadController extends Controller
 
                     'status' =>
                     $upload->status,
+
+                    'total_rows' =>
+                    $upload->total_rows,
+
+                    'error_rows' =>
+                    $upload->error_rows,
                 ],
-            ]);
+            ], 200);
         } catch (\Throwable $e) {
 
             DB::rollBack();
@@ -901,15 +1593,20 @@ class RecoveryUploadController extends Controller
             Log::error(
                 'Recovery submission failed',
                 [
-                    'upload_id' => $upload->id,
-                    'message' => $e->getMessage(),
+                    'upload_id' =>
+                    $upload->id,
+
+                    'message' =>
+                    $e->getMessage(),
                 ]
             );
 
             return response()->json([
                 'status' => 500,
+
                 'message' =>
                 'Unable to submit recovery data.',
+
                 'error' =>
                 $e->getMessage(),
             ], 500);
@@ -918,10 +1615,12 @@ class RecoveryUploadController extends Controller
 
 
     /**
-     * Parse Excel/date input.
+     * Parse date.
      */
-    private function parseDate(int $value): ?string
-    {
+    private function parseDate(
+        mixed $value
+    ): ?string {
+
         if (
             $value === null ||
             $value === ''
@@ -931,24 +1630,21 @@ class RecoveryUploadController extends Controller
 
         try {
 
-            /*
-             * Excel serial date.
-             */
             if (
                 is_numeric($value) &&
                 (float) $value > 0
             ) {
 
                 return ExcelDate
-                    ::excelToDateTimeObject($value)
+                    ::excelToDateTimeObject(
+                        $value
+                    )
                     ->format('Y-m-d');
             }
 
-            /*
-             * Normal date.
-             */
-            return Carbon::parse($value)
-                ->format('Y-m-d');
+            return Carbon::parse(
+                $value
+            )->format('Y-m-d');
         } catch (\Throwable $e) {
 
             return null;
@@ -957,10 +1653,12 @@ class RecoveryUploadController extends Controller
 
 
     /**
-     * Normalize Yes / No.
+     * Normalize Yes/No.
      */
-    private function normalizeYesNo(int $value): ?string
-    {
+    private function normalizeYesNo(
+        mixed $value
+    ): ?string {
+
         if ($value === null) {
             return null;
         }
@@ -969,15 +1667,19 @@ class RecoveryUploadController extends Controller
             trim((string) $value)
         );
 
-        if (
-            in_array($value, ['yes', 'y', '1', 'true'], true)
-        ) {
+        if (in_array(
+            $value,
+            ['yes', 'y', '1', 'true'],
+            true
+        )) {
             return 'yes';
         }
 
-        if (
-            in_array($value, ['no', 'n', '0', 'false'], true)
-        ) {
+        if (in_array(
+            $value,
+            ['no', 'n', '0', 'false'],
+            true
+        )) {
             return 'no';
         }
 

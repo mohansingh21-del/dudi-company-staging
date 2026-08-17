@@ -22,6 +22,7 @@ class RecoveryUploadRow extends Model
         'last_month_year',
         'complete_recovery_date',
         'remarks',
+        'raw_values',
         'errors',
         'is_valid',
     ];
@@ -30,6 +31,7 @@ class RecoveryUploadRow extends Model
         'damage_loss_date' => 'date:Y-m-d',
         'complete_recovery_date' => 'date:Y-m-d',
         'amount' => 'decimal:2',
+        'raw_values' => 'array',
         'errors' => 'array',
         'is_valid' => 'boolean',
     ];

@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 
 class Recovery extends Model
 {
+    use HasFactory;
+
     protected $fillable = [
         'recovery_upload_id',
         'employee_id',
@@ -26,19 +28,31 @@ class Recovery extends Model
     ];
 
     protected $casts = [
-        'damage_loss_date' => 'date:Y-m-d',
-        'complete_recovery_date' => 'date:Y-m-d',
-        'amount' => 'decimal:2',
-        'show_cause_issued' => 'boolean',
+        'damage_loss_date' =>
+        'date:Y-m-d',
+
+        'complete_recovery_date' =>
+        'date:Y-m-d',
+
+        'amount' =>
+        'decimal:2',
+
+        'show_cause_issued' =>
+        'boolean',
     ];
 
     public function employee()
     {
-        return $this->belongsTo(Employee::class);
+        return $this->belongsTo(
+            Employee::class
+        );
     }
 
     public function upload()
     {
-        return $this->belongsTo(RecoveryUpload::class);
+        return $this->belongsTo(
+            RecoveryUpload::class,
+            'recovery_upload_id'
+        );
     }
 }
