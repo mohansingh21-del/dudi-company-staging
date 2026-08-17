@@ -339,7 +339,6 @@ Route::prefix('v1')->group(function () {
                     '/uploads/{upload}/preview',
                     [RecoveryUploadController::class, 'preview']
                 );
-
                 // Edit one field of one row
                 Route::put(
                     '/uploads/rows/{row}',
