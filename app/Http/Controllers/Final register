@@ -1,0 +1,108 @@
+Final register
+GET /api/recoveries?year=2026
+
+
+
+
+
+
+
+
+
+
+
+
+March only:
+
+GET /api/recoveries?year=2026&month=3
+
+
+
+
+
+
+
+
+
+
+
+
+Search:
+
+GET /api/recoveries?year=2026&search=march
+
+
+
+
+
+
+
+
+
+
+
+
+Specific uploaded file:
+
+GET /api/recoveries?upload_id=1
+
+
+
+
+
+
+
+
+
+
+
+
+Details:
+
+GET /api/recoveries/25/details
+
+1. POST
+   /api/recoveries/bulk-upload
+
+        ↓
+
+2. GET
+   /api/recoveries/uploads
+
+        ↓
+
+3. GET
+   /api/recoveries/uploads/{id}/preview
+
+        ↓
+
+4. PUT
+   /api/recoveries/uploads/rows/{rowId}
+
+        ↓
+   field + value
+
+        ↓
+
+5. DELETE
+   /api/recoveries/uploads/rows/{rowId}
+
+        ↓
+
+6. POST
+   /api/recoveries/uploads/{id}/submit
+
+        ↓
+
+7. GET
+   /api/recoveries?year=2026&month=3
+
+        ↓
+
+8. GET
+   /api/recoveries?upload_id=3
+
+        ↓
+
+9. GET
+   /api/recoveries/{id}/details
