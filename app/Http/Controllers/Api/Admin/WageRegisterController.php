@@ -548,15 +548,20 @@ class WageRegisterController extends Controller
     }
 
     /**
-     * A frozen register's employee rows, downloaded — the "Export CSV" button on
-     * the month detail screen.
+     * A frozen register's employee rows, downloaded — the export button on the
+     * month detail screen.
      *
      * Rows come out as stored and are never recomputed, which is the point of a
      * frozen register: this file has to agree with what was filed, not with what
      * the figures would calculate to today.
      *
-     *   format=csv   (default) flat data, one header line — see WageRegisterRowsExport
-     *   format=xlsx            the printed Form B layout, banded header and all
+     *   format=xlsx  (default) the printed Form B layout, banded header and all
+     *   format=csv             flat data, one header line — see WageRegisterRowsExport
+     *
+     * Defaults to xlsx because the register is a statutory form and the printed
+     * layout is what it is meant to look like. CSV stays available for anyone
+     * feeding the figures into something else, since Form B's merged three-row
+     * header is not machine-readable.
      *
      * The whole register is written; `search` is a screen filter and is not
      * honoured here, because a register exported minus some of its employees is
@@ -595,21 +600,21 @@ class WageRegisterController extends Controller
                 ], 422);
             }
 
-            $format = $request->input('format', 'csv');
+            $format = $request->input('format', 'xlsx');
             $label = $report->month_label;
             $slug = Carbon::create($report->year, $report->month, 1)->format('Y-m');
 
-            if ($format === 'xlsx') {
+            if ($format === 'csv') {
                 return Excel::download(
-                    new WageRegisterExport($rows, $label),
-                    "wage-register-{$slug}.xlsx"
+                    new WageRegisterRowsExport($rows, $label),
+                    "wage-register-{$slug}.csv",
+                    \Maatwebsite\Excel\Excel::CSV
                 );
             }
 
             return Excel::download(
-                new WageRegisterRowsExport($rows, $label),
-                "wage-register-{$slug}.csv",
-                \Maatwebsite\Excel\Excel::CSV
+                new WageRegisterExport($rows, $label),
+                "wage-register-{$slug}.xlsx"
             );
         } catch (\Throwable $th) {
             return response()->json([
