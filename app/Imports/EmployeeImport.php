@@ -69,25 +69,9 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
                 continue;
             }
 
-            $relay = null;
-            if (!empty($row['relay'])) {
-                $relay = \App\Models\Relay::where('id', $row['relay'])
-                    ->orWhere('name', $row['relay'])
-                    ->first();
-            } elseif (!empty($row['relay_shift'])) {
-                $relayName = $row['relay_shift'];
-                // Normalize legacy names
-                if (strtolower($relayName) === 'relay_1') {
-                    $relayName = 'Relay A';
-                } elseif (strtolower($relayName) === 'relay_2') {
-                    $relayName = 'Relay B';
-                } elseif (strtolower($relayName) === 'relay_3') {
-                    $relayName = 'Relay C';
-                }
-                $relay = \App\Models\Relay::where('name', $relayName)
-                    ->orWhere('id', $row['relay_shift'])
-                    ->first();
-            }
+            $relay = !empty($row['relay'])
+                ? $this->findRelay($row['relay'])
+                : (!empty($row['relay_shift']) ? $this->findRelay($row['relay_shift']) : null);
 
             $department = !empty($row['department'])
                 ? Department::where('id', $row['department'])
@@ -216,6 +200,12 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
             '*.mobile.unique' =>
                 'Mobile number already exists.',
 
+            '*.employee_code.distinct' =>
+                'Employee Code is repeated in this file.',
+
+            '*.mobile.distinct' =>
+                'Mobile number is repeated in this file.',
+
             '*.reason_for_exit.required_with' =>
                 'Reason for exit is required when a date of exit is given.',
         ];
@@ -228,7 +218,9 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
     {
         return [
 
-            '*.employee_code' => 'required|string|max:255|unique:employees,employee_code',
+            // `unique` only looks at the table, so `distinct` is what catches a
+            // code or mobile repeated twice inside the same spreadsheet.
+            '*.employee_code' => 'required|string|max:255|distinct|unique:employees,employee_code',
             '*.name' => 'required|string|max:255',
             '*.surname' => 'nullable|string|max:255',
 
@@ -242,7 +234,7 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
 
             '*.gender' => ['nullable', $this->enumRule(self::GENDERS, 'Gender')],
 
-            '*.mobile' => 'nullable|max:15|unique:employees,mobile',
+            '*.mobile' => 'nullable|max:15|distinct|unique:employees,mobile',
 
             '*.address' => 'nullable|string',
             '*.permanent_address' => 'nullable|string',
@@ -260,6 +252,8 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
             '*.department' => ['nullable', $this->lookupRule(Department::class, 'name', 'Department')],
             '*.designation' => ['nullable', $this->lookupRule(Role::class, 'name', 'Designation')],
             '*.site' => ['nullable', $this->lookupRule(Site::class, 'site_name', 'Site')],
+            '*.relay' => ['nullable', $this->relayRule()],
+            '*.relay_shift' => ['nullable', $this->relayRule()],
 
             '*.date_of_exit' => 'nullable',
             '*.reason_for_exit' => 'nullable|required_with:*.date_of_exit|string|max:255',
@@ -268,6 +262,64 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
 
             '*.status' => 'nullable|in:0,1',
         ];
+    }
+
+    /**
+     * An unknown relay used to import as null, the same silent failure
+     * skill_category had. Reject it with the row and column instead.
+     */
+    private function relayRule(): \Closure
+    {
+        return function ($attribute, $value, $fail) {
+            if ($value === null || $value === '') {
+                return;
+            }
+
+            if (!$this->findRelay($value)) {
+                $fail("Relay \"{$value}\" was not found. Allowed: "
+                    . \App\Models\Relay::pluck('name')->implode(', ') . '.');
+            }
+        };
+    }
+
+    /**
+     * Checks that need the whole row, which per-column rules cannot see:
+     * date formats and the exit-after-joining ordering.
+     */
+    public function withValidator($validator)
+    {
+        $validator->after(function ($validator) {
+
+            foreach ($validator->getData() as $index => $row) {
+
+                if (empty($row['employee_code'])) {
+                    continue;
+                }
+
+                foreach (['dob', 'joining_date', 'date_of_exit'] as $field) {
+                    if (!empty($row[$field]) && !$this->tryDate($row[$field])) {
+                        $label = ucfirst(str_replace('_', ' ', $field));
+                        $validator->errors()->add(
+                            "{$index}.{$field}",
+                            "{$label} \"{$row[$field]}\" is not a valid date. Use d/m/Y, e.g. 01/04/2024."
+                        );
+                    }
+                }
+
+                if (!empty($row['date_of_exit']) && !empty($row['joining_date'])) {
+
+                    $exit = $this->tryDate($row['date_of_exit']);
+                    $join = $this->tryDate($row['joining_date']);
+
+                    if ($exit && $join && $exit->lt($join)) {
+                        $validator->errors()->add(
+                            "{$index}.date_of_exit",
+                            'Date of exit cannot be before the joining date.'
+                        );
+                    }
+                }
+            }
+        });
     }
 
     /**
@@ -309,6 +361,38 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
                 $fail("{$label} \"{$value}\" was not found.");
             }
         };
+    }
+
+    /**
+     * Relay by id or name, tolerating the legacy relay_1/2/3 spellings.
+     * Shared by the validation rule and the write so they cannot disagree.
+     */
+    private function findRelay($value)
+    {
+        $legacy = [
+            'relay_1' => 'Relay A',
+            'relay_2' => 'Relay B',
+            'relay_3' => 'Relay C',
+        ];
+
+        $name = $legacy[strtolower((string) $value)] ?? $value;
+
+        return \App\Models\Relay::where('name', $name)
+            ->orWhere('id', $value)
+            ->first();
+    }
+
+    /**
+     * parseDate throws, which loses the row and column. This reports instead,
+     * so a bad date fails validation like every other column.
+     */
+    private function tryDate($value): ?Carbon
+    {
+        try {
+            return $this->parseDate($value);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**
