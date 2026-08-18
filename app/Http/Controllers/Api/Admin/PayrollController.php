@@ -169,7 +169,13 @@ class PayrollController extends Controller
                 $unpaidRestDays = max(0, $restDays - $paidRestDays);
 
                 // ── Salary Calculation (per documentation) ──
-                $basicSalary = (float) optional($activePayroll)->basic_salary;
+                // Priced at the rate in force in the month being listed, not
+                // whatever the wage master says today.
+                $basicSalary = \App\Models\EmployeeWage::monthlyPay(
+                    $overtimeRates,
+                    $employee->skill_category,
+                    optional($activePayroll)->basic_salary
+                );
                 $shiftAllowance = 0;
                 $incentives = 0;
 
@@ -400,7 +406,13 @@ class PayrollController extends Controller
 
                     // ── Earnings ──
                     $activePayroll = $employee->activePayroll;
-                    $basicSalary = (float) optional($activePayroll)->basic_salary;
+                    // Priced at the rate in force in the month being generated,
+                    // so a month still pending is paid at its own rate.
+                    $basicSalary = \App\Models\EmployeeWage::monthlyPay(
+                        $overtimeRates,
+                        $employee->skill_category,
+                        optional($activePayroll)->basic_salary
+                    );
                     $shiftAllowance = 0;
                     $incentives = 0;
                     // Absence is priced against the monthly entitlement only —
@@ -594,7 +606,20 @@ class PayrollController extends Controller
 
             // Earnings
             $activePayroll = $employee->activePayroll;
-            $basicSalary = (float) optional($activePayroll)->basic_salary;
+
+            $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
+                ->overtimeSummary([$employee->id], $month, $year);
+            // Fetched before basic salary below, which is priced from the same
+            // month's revision.
+            $overtimeRates = \App\Models\EmployeeWage::effectiveSet(
+                Carbon::create($year, $month, 1)->endOfMonth()->toDateString()
+            );
+
+            $basicSalary = \App\Models\EmployeeWage::monthlyPay(
+                $overtimeRates,
+                $employee->skill_category,
+                optional($activePayroll)->basic_salary
+            );
             $shiftAllowance = 0;
             $incentives = 0;
             // Absence is priced against the monthly entitlement only — overtime
@@ -602,12 +627,6 @@ class PayrollController extends Controller
             // deduct the same day twice.
             $monthlyEarnings = $basicSalary + $shiftAllowance + $incentives;
             $perDaySalary = $daysInMonth > 0 ? $monthlyEarnings / $daysInMonth : 0;
-
-            $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
-                ->overtimeSummary([$employee->id], $month, $year);
-            $overtimeRates = \App\Models\EmployeeWage::effectiveSet(
-                Carbon::create($year, $month, 1)->endOfMonth()->toDateString()
-            );
 
             $overtimeHours = round($overtimeHoursMap[$employee->id] ?? 0, 2);
             $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
@@ -905,8 +924,11 @@ class PayrollController extends Controller
                     ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
                     : 0.0;
 
-                $grossSalary = (float) optional($employee->activePayroll)->basic_salary
-                    + round($overtimeHours * $overtimeRate, 2);
+                $grossSalary = \App\Models\EmployeeWage::monthlyPay(
+                    $overtimeRates,
+                    $employee->skill_category,
+                    optional($employee->activePayroll)->basic_salary
+                ) + round($overtimeHours * $overtimeRate, 2);
             }
 
             $recoveryPlan = app(\App\Services\LoanRecoveryService::class)

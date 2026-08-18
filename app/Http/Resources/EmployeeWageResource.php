@@ -21,6 +21,9 @@ class EmployeeWageResource extends JsonResource
             // What payroll would assign as basic salary: minimum basic + DA.
             'basic_salary' => $this->basic_salary,
 
+            // 12% of that basic — what payroll prefills pf_amount with.
+            'pf_amount' => $this->pf_amount,
+
             'effective_from' => optional($this->effective_from)->toDateString(),
             'is_active' => $this->is_active,
         ];

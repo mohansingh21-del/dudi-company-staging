@@ -25,6 +25,9 @@ class EmployeeWage extends Model
         'unskilled',
     ];
 
+    /** Employee's EPF contribution share, as a fraction of basic salary. */
+    public const PF_RATE = 0.12;
+
     protected $fillable = [
         'skill_category',
         'minimum_basic',
@@ -50,6 +53,16 @@ class EmployeeWage extends Model
         return round((float) $this->minimum_basic + (float) $this->dearness_allowance, 2);
     }
 
+    /**
+     * The employee's statutory PF share on that basic — 12% of it, the figure
+     * the payroll form prefills pf_amount with. Payroll still stores its own
+     * copy, so revising a rate here never rewrites PF already assigned.
+     */
+    public function getPfAmountAttribute()
+    {
+        return round($this->basic_salary * self::PF_RATE, 2);
+    }
+
     public function getSkillCategoryLabelAttribute()
     {
         if (!$this->skill_category) {
@@ -57,6 +70,26 @@ class EmployeeWage extends Model
         }
 
         return ucwords(str_replace('_', '-', $this->skill_category), '-');
+    }
+
+    /**
+     * The monthly pay a payroll month is priced at.
+     *
+     * A payroll month must be priced at the rate that was in force that month,
+     * not at whatever the master says today — otherwise generating a month that
+     * is still pending would pay it at a later revision's rate. Callers pass
+     * the effectiveSet() map for the month being generated and the figure
+     * frozen on employee_payrolls; the higher of the two wins, so a
+     * revision lifts everyone on the statutory minimum while an above-minimum
+     * salary keeps its own figure. An employee with no skill category, or a
+     * category with no rate configured, keeps the stored figure.
+     */
+    public static function monthlyPay(array $rates, ?string $skillCategory, $storedBasic): float
+    {
+        $stored = (float) $storedBasic;
+        $wage = $skillCategory ? ($rates[$skillCategory] ?? null) : null;
+
+        return $wage ? max((float) $wage->basic_salary, $stored) : $stored;
     }
 
     /**

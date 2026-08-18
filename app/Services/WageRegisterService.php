@@ -124,10 +124,15 @@ class WageRegisterService
             $wage = $wages[$employee->skill_category] ?? null;
             $overtimeRate = $wage ? (float) $wage->overtime_rate : 0.0;
 
-            // The employee's monthly rate, from employee_payrolls rather than the
-            // wage master: someone may be paid above the statutory minimum, and a
+            // The employee's monthly rate for this register month: the revision
+            // in force that month, or the figure on employee_payrolls when that
+            // is higher — someone may be paid above the statutory minimum, and a
             // wage register has to show what is really paid.
-            $monthlyPay = (float) optional($payroll)->basic_salary;
+            $monthlyPay = EmployeeWage::monthlyPay(
+                $wages,
+                $employee->skill_category,
+                optional($payroll)->basic_salary
+            );
 
             // Columns 6 and 8 are the monthly figures, NOT pro-rated — they are
             // the rate the month is priced at. basic_salary is minimum_basic + DA

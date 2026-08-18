@@ -718,8 +718,11 @@ class PenaltyController extends Controller
             ? (float) $rates[$employee->skill_category]->overtime_rate
             : 0.0;
 
-        return (float) optional($employee->activePayroll)->basic_salary
-            + round($overtimeHours * $rate, 2);
+        return \App\Models\EmployeeWage::monthlyPay(
+            $rates,
+            $employee->skill_category,
+            optional($employee->activePayroll)->basic_salary
+        ) + round($overtimeHours * $rate, 2);
     }
 
     /**
