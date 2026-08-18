@@ -202,6 +202,15 @@ class Employee extends Model
             ->latest();
     }
 
+    /**
+     * The employee's payroll configuration, active or not. One row per employee
+     * is enforced on write, so the latest is the only one.
+     */
+    public function employeePayroll()
+    {
+        return $this->hasOne(EmployeePayroll::class)->latestOfMany();
+    }
+
     public function attendanceProcesseds()
     {
         return $this->hasMany(AttendanceProcessed::class);

@@ -205,6 +205,11 @@ Route::prefix('v1')->group(function () {
         // ADMIN ONLY
         Route::middleware(['role:super-admin'])->prefix('admin')->group(function () {
 
+            // Employee record joined with its employee_payrolls configuration.
+            // Registered before the resource so it is not read as employees/{id}.
+            Route::get('employees/details', [EmployeeController::class, 'detailIndex']);
+            Route::get('employees/details/{id}', [EmployeeController::class, 'detailShow']);
+
             Route::apiResource('employees', EmployeeController::class);
 
             Route::post('employees/bulk-upload', [EmployeeController::class, 'bulkUpload']);

@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Models\Department;
 use App\Models\Employee;
+use App\Models\EmployeePayroll;
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreEmployeeRequest;
 use App\Http\Requests\UpdateEmployeeRequest;
+use App\Http\Resources\EmployeeDetailResource;
 use App\Http\Resources\EmployeeResource;
 use App\Imports\EmployeeImport;
 use Illuminate\Support\Facades\Storage;
@@ -211,6 +213,176 @@ class EmployeeController extends Controller
             ]);
         }
     }
+    /*
+    |--------------------------------------------------------------------------
+    | Employee + Payroll (combined)
+    |--------------------------------------------------------------------------
+    |
+    | Everything the employee record holds together with its employee_payrolls
+    | configuration — salary, statutory identifiers and bank details — in one
+    | response, so the UI does not have to join two endpoints itself.
+    */
+    public function detailIndex(Request $request)
+    {
+        try {
+
+            $employees = Employee::with([
+                'department',
+                'designation',
+                'site',
+                'supervisor',
+                'relay',
+                'employeePayroll',
+            ]);
+
+            // Search spans the employee record and its payroll identifiers.
+            if ($request->filled('search')) {
+
+                $search = $request->search;
+
+                $employees->where(function ($query) use ($search) {
+
+                    $query->where('name', 'LIKE', "%{$search}%")
+                        ->orWhere('surname', 'LIKE', "%{$search}%")
+                        ->orWhere('employee_code', 'LIKE', "%{$search}%")
+                        ->orWhere('mobile', 'LIKE', "%{$search}%")
+                        ->orWhereHas('department', function ($q) use ($search) {
+                            $q->where('name', 'LIKE', "%{$search}%");
+                        })
+                        ->orWhereHas('designation', function ($q) use ($search) {
+                            $q->where('name', 'LIKE', "%{$search}%");
+                        })
+                        // employeePayroll is a latestOfMany relation, so match
+                        // against the table directly rather than through it.
+                        ->orWhereIn('id', EmployeePayroll::query()
+                            ->select('employee_id')
+                            ->where(function ($q) use ($search) {
+                                $q->where('pan', 'LIKE', "%{$search}%")
+                                    ->orWhere('uan', 'LIKE', "%{$search}%")
+                                    ->orWhere('pf_number', 'LIKE', "%{$search}%")
+                                    ->orWhere('esic_ip_number', 'LIKE', "%{$search}%")
+                                    ->orWhere('bank_account_number', 'LIKE', "%{$search}%");
+                            }));
+                });
+            }
+
+            // Employee filters
+            if ($request->filled('department_id')) {
+                $employees->where('department_id', $request->department_id);
+            }
+
+            if ($request->filled('designation_id')) {
+                $employees->where('designation_id', $request->designation_id);
+            }
+
+            if ($request->filled('site_id')) {
+                $employees->where('site_id', $request->site_id);
+            }
+
+            if ($request->filled('place_of_employment')) {
+                $employees->where('place_of_employment', $request->place_of_employment);
+            }
+
+            if ($request->filled('skill_category')) {
+                $employees->where('skill_category', $request->skill_category);
+            }
+
+            if ($request->filled('status')) {
+                $employees->where('is_active', filter_var($request->status, FILTER_VALIDATE_BOOLEAN));
+            }
+
+            // Payroll filters
+            if ($request->filled('salary_type')) {
+                $employees->whereIn('id', EmployeePayroll::query()
+                    ->select('employee_id')
+                    ->where('salary_type', $request->salary_type));
+            }
+
+            if ($request->filled('pf_applicable')) {
+                $employees->whereIn('id', EmployeePayroll::query()
+                    ->select('employee_id')
+                    ->where('pf_applicable', filter_var($request->pf_applicable, FILTER_VALIDATE_BOOLEAN)));
+            }
+
+            // has_payroll=0 lists the employees still missing a configuration.
+            if ($request->filled('has_payroll')) {
+                filter_var($request->has_payroll, FILTER_VALIDATE_BOOLEAN)
+                    ? $employees->has('employeePayroll')
+                    : $employees->doesntHave('employeePayroll');
+            }
+
+            $employees = $employees->latest();
+
+            // limit => paginate, otherwise return everything
+            if ($request->filled('limit')) {
+
+                $employees = $employees->paginate($request->limit);
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Employee details fetched successfully',
+                    'data' => EmployeeDetailResource::collection($employees),
+                    'pagination' => [
+                        'current_page' => $employees->currentPage(),
+                        'last_page' => $employees->lastPage(),
+                        'per_page' => $employees->perPage(),
+                        'total' => $employees->total(),
+                        'from' => $employees->firstItem(),
+                        'to' => $employees->lastItem(),
+                    ]
+                ]);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Employee details fetched successfully',
+                'data' => EmployeeDetailResource::collection($employees->get()),
+            ]);
+        } catch (\Throwable $th) {
+
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ]);
+        }
+    }
+
+    /**
+     * One employee with its payroll configuration.
+     */
+    public function detailShow($id)
+    {
+        try {
+            $employee = Employee::with([
+                'department',
+                'designation',
+                'site',
+                'supervisor',
+                'relay',
+                'employeePayroll',
+            ])->find($id);
+
+            if (!$employee) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Employee not found'
+                ], 404);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Employee details fetched successfully',
+                'data' => new EmployeeDetailResource($employee),
+            ]);
+        } catch (\Throwable $th) {
+
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ]);
+        }
+    }
+
     public function store(StoreEmployeeRequest $request)
     {
         try {
