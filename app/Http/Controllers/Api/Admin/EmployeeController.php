@@ -459,10 +459,14 @@ class EmployeeController extends Controller
                 'file' => 'required|mimes:xlsx,xls,csv'
             ]);
 
-            Excel::import(
-                new EmployeeImport(),
-                $request->file('file')
-            );
+            // A bad row part-way down the file would otherwise leave the
+            // employees created before it behind. Import all or nothing.
+            \Illuminate\Support\Facades\DB::transaction(function () use ($request) {
+                Excel::import(
+                    new EmployeeImport(),
+                    $request->file('file')
+                );
+            });
 
             return response()->json([
                 'status' => 200,
