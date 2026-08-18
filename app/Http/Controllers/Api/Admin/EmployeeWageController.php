@@ -9,6 +9,7 @@ use App\Http\Requests\UpdateEmployeeWageRequest;
 use App\Http\Resources\EmployeeWageResource;
 use App\Models\Employee;
 use App\Models\EmployeeWage;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -19,7 +20,10 @@ use Illuminate\Support\Facades\DB;
 class EmployeeWageController extends Controller
 {
     /**
-     * Every revision, newest effective date first.
+     * The revision dates, newest first — one row per effective_from, not per
+     * skill category, because the four categories are always revised together.
+     *
+     * Expand a row through matrix?effective_on=<date> for the rates themselves.
      */
     public function index(Request $request)
     {
@@ -42,14 +46,46 @@ class EmployeeWageController extends Controller
             }
 
             $wages = $wages
+                ->select('effective_from')
+                ->groupBy('effective_from')
                 ->orderByDesc('effective_from')
-                ->orderByDesc('id')
                 ->paginate($limit);
+
+            $today = now()->toDateString();
+
+            // The one revision actually in force today: the latest that has
+            // already taken effect. Everything dated later is still pending,
+            // everything earlier has been superseded by it.
+            $currentFrom = EmployeeWage::query()
+                ->where('is_active', true)
+                ->whereDate('effective_from', '<=', $today)
+                ->max('effective_from');
+
+            $currentFrom = $currentFrom
+                ? Carbon::parse($currentFrom)->toDateString()
+                : null;
+
+            $rows = collect($wages->items())->map(function ($wage) use ($today, $currentFrom) {
+                $effectiveFrom = $wage->effective_from->toDateString();
+
+                if ($effectiveFrom === $currentFrom) {
+                    $status = 'current';
+                } elseif ($effectiveFrom > $today) {
+                    $status = 'upcoming';
+                } else {
+                    $status = 'past';
+                }
+
+                return [
+                    'effective_from' => $effectiveFrom,
+                    'status' => $status,
+                ];
+            });
 
             return response()->json([
                 'status' => 200,
                 'message' => 'Wage rates fetched successfully',
-                'data' => EmployeeWageResource::collection($wages),
+                'data' => $rows,
                 'pagination' => [
                     'current_page' => $wages->currentPage(),
                     'last_page' => $wages->lastPage(),

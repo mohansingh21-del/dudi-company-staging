@@ -95,11 +95,46 @@ class WageRegisterImportService
     }
 
     /**
+     * Wages for days not worked, recovered from a submitted row.
+     *
+     * Form B has no absence column — see WageRegisterService, which takes it off
+     * the net directly — so an edited sheet cannot carry the figure back. What it
+     * does carry back is the net, and the net was built as
+     *
+     *   net = earnings - deductions - absence
+     *
+     * so absence is what the other three imply. Deriving it rather than
+     * recalculating from attendance is deliberate: the review step exists so that
+     * what was approved on screen is what gets filed, and a fresh calculation
+     * could disagree with a net the user corrected by hand — or with attendance
+     * edited since the sheet was exported.
+     *
+     * Two rows cannot be read exactly, and both are floored to 0 rather than
+     * guessed at:
+     *
+     *   - The net was floored at 0 because deductions outran earnings. Absence
+     *     and the written-off excess are then indistinguishable, and the whole
+     *     shortfall is reported as unrecovered instead — see
+     *     WageRegisterReportRow::unrecoveredDeduction().
+     *   - The net was edited upward past earnings minus deductions. Nothing
+     *     stored can explain that, and the summary export reports the remainder
+     *     as an unaccounted difference rather than hiding it here.
+     */
+    protected function absenceFrom(float $earnings, float $deductions, float $net): float
+    {
+        return round(max(0, $earnings - $deductions - $net), 2);
+    }
+
+    /**
      * Move a staged sheet into the register proper.
      *
      * The frozen rows are copied from staging exactly as the user left them —
-     * nothing is recalculated here. That is the point of the review step: what
+     * no figure is recalculated here. That is the point of the review step: what
      * was approved on screen is what gets filed.
+     *
+     * The one value not copied is absence, which has no Form B column to come
+     * back in. It is derived from the row's own approved figures rather than
+     * recalculated — see absenceFrom().
      *
      * The staged batch is then discarded: it was scratch space for the review,
      * and the register is the record from here on.
@@ -147,6 +182,10 @@ class WageRegisterImportService
             $insert = [];
 
             foreach ($rows as $row) {
+                $earnings = (float) ($row->total_earnings ?? 0);
+                $deductions = (float) ($row->total_deductions ?? 0);
+                $net = (float) ($row->net_payment ?? 0);
+
                 $insert[] = [
                     'report_id' => $report->id,
                     'employee_id' => $row->employee_id,
@@ -164,7 +203,7 @@ class WageRegisterImportService
                     'overtime_payment' => $row->overtime_payment ?? 0,
                     'hra' => $row->hra,
                     'other_earnings' => $row->other_earnings,
-                    'total_earnings' => $row->total_earnings ?? 0,
+                    'total_earnings' => $earnings,
 
                     'pf_deduction' => $row->pf_deduction ?? 0,
                     'esic_deduction' => $row->esic_deduction,
@@ -173,18 +212,25 @@ class WageRegisterImportService
                     'insurance' => $row->insurance,
 
                     // Column 18 came back from the sheet as one figure. The
-                    // system's own other/mess/penalty/absence split cannot be
-                    // recovered from it, so the whole amount is carried as
-                    // "other" and the rest are zero — column 18 still prints the
-                    // same total the user approved.
+                    // system's own other/mess/penalty split cannot be recovered
+                    // from it, so the whole amount is carried as "other" and the
+                    // rest are zero — column 18 still prints the same total the
+                    // user approved.
                     'other_deduction' => $row->other_deductions ?? 0,
                     'mess_deduction' => 0,
                     'penalty_deduction' => 0,
-                    'absence_deduction' => 0,
+
+                    // Absence has no column on Form B, so it cannot come back
+                    // from the sheet — but the net that did come back already has
+                    // it taken off. Derived from the identity the net was built
+                    // on rather than recalculated from attendance, so the register
+                    // reconciles against the figures the user actually approved
+                    // even where they were edited by hand.
+                    'absence_deduction' => $this->absenceFrom($earnings, $deductions, $net),
 
                     'recoveries' => $row->recoveries,
-                    'total_deductions' => $row->total_deductions ?? 0,
-                    'net_payment' => $row->net_payment ?? 0,
+                    'total_deductions' => $deductions,
+                    'net_payment' => $net,
                     'employer_pf_share' => $row->employer_pf_share,
 
                     'payment_reference' => $row->payment_reference,

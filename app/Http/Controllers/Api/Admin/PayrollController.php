@@ -7,7 +7,6 @@ use App\Models\Payroll;
 use App\Models\Employee;
 use App\Models\AttendanceProcessed;
 use App\Models\Leave;
-use App\Models\Penalty;
 use App\Models\Holiday;
 use App\Http\Resources\PayrollResource;
 use Illuminate\Http\Request;
@@ -122,13 +121,10 @@ class PayrollController extends Controller
                 }
             }
 
-            // Penalty totals per employee
-            $penaltyTotals = Penalty::whereIn('employee_id', $employeeIds)
-                ->where('month', $month)
-                ->where('year', $year)
-                ->selectRaw('employee_id, SUM(amount) as total_penalty')
-                ->groupBy('employee_id')
-                ->pluck('total_penalty', 'employee_id');
+            // Recoveries are capped at a percentage of each employee's gross
+            // and carry into later months, so the amount cannot be summed up
+            // front — it is resolved per employee once gross is known below.
+            $recoveryService = app(\App\Services\LoanRecoveryService::class);
 
             // Site-specific holidays
             $siteHolidays = Holiday::whereMonth('holiday_date', $month)
@@ -155,10 +151,9 @@ class PayrollController extends Controller
             );
 
             // ── Build result collection ──
-            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $penaltyTotals, $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year, $overtimeHoursMap, $overtimeRates) {
+            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $recoveryService, $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year, $overtimeHoursMap, $overtimeRates) {
                 $att = $attendanceCounts->get($employee->id);
                 $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
-                $penaltyTotal = $penaltyTotals[$employee->id] ?? 0;
 
                 $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
                 $activePayroll = $employee->activePayroll;
@@ -193,6 +188,17 @@ class PayrollController extends Controller
                 $overtimePayment = round($overtimeHours * $overtimeRate, 2);
 
                 $grossSalary = $monthlyEarnings + $overtimePayment;
+
+                // Recovery deduction, capped at a share of gross and carried
+                // forward. This is a read-only listing, so plan the month
+                // without writing installment rows.
+                $recoveryPlan = $recoveryService->planEmployeeRecoveries(
+                    $employee->id,
+                    $grossSalary,
+                    $month,
+                    $year
+                );
+                $penaltyTotal = $recoveryPlan['total'];
 
                 // Unmarked days count as absent: effective_absent = total - accounted days
                 $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
@@ -238,6 +244,8 @@ class PayrollController extends Controller
                     'unpaid_leave_days' => $unpaidLeaveDays,
                     'payable_days' => $payableDays,
                     'penalty_amount' => (float) $penaltyTotal,
+                    'recovery_limit' => $recoveryPlan['budget'],
+                    'recovery_carried_forward' => $recoveryPlan['carried'],
                     'basic_salary' => $basicSalary,
                     'shift_allowance' => $shiftAllowance,
                     'incentives' => $incentives,
@@ -428,16 +436,24 @@ class PayrollController extends Controller
                     $messDeduction = $messDeductionApplicable ? (float) optional($activePayroll)->mess_deduction_amount : 0;
                     $otherDeduction = $otherDeductionApplicable ? (float) optional($activePayroll)->other_deduction : 0;
 
-                    // ── Penalty ──
-                    $penaltyTotal = Penalty::where('employee_id', $employee->id)
-                        ->where('month', $month)->where('year', $year)->sum('amount');
+                    // ── Recovery (penalty / fine / damage / loss / advance / loan) ──
+                    // Capped at a share of gross; the balance carries into
+                    // later months as installments.
+                    $recoveryPlan = app(\App\Services\LoanRecoveryService::class)
+                        ->applyEmployeeRecoveries(
+                            $employee->id,
+                            $grossSalary,
+                            $month,
+                            $year
+                        );
+                    $penaltyTotal = $recoveryPlan['total'];
 
                     // ── Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction) ──
                     $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
                     $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
 
                     // ── Upsert payroll record ──
-                    Payroll::updateOrCreate(
+                    $payroll = Payroll::updateOrCreate(
                         ['employee_id' => $employee->id, 'month' => $month, 'year' => $year],
                         [
                             'basic_salary' => $basicSalary,
@@ -462,6 +478,10 @@ class PayrollController extends Controller
                             'generated_by' => auth()->id(),
                         ]
                     );
+
+                    // Record which payroll the installments were taken on.
+                    app(\App\Services\LoanRecoveryService::class)
+                        ->attachToPayroll($employee->id, $month, $year, $payroll->id);
 
                     $generated++;
                 }
@@ -556,14 +576,6 @@ class PayrollController extends Controller
                 }
             }
 
-            // ── Penalties ──
-            $penalties = Penalty::where('employee_id', $employeeId)
-                ->where('month', $month)
-                ->where('year', $year)
-                ->get(['id', 'penalty_date', 'reason', 'amount']);
-
-            $penaltyTotal = $penalties->sum('amount');
-
             // ── Holidays ──
             $holidays = Holiday::whereMonth('holiday_date', $month)
                 ->whereYear('holiday_date', $year)
@@ -604,6 +616,15 @@ class PayrollController extends Controller
             $overtimePayment = round($overtimeHours * $overtimeRate, 2);
 
             $grossSalary = $monthlyEarnings + $overtimePayment;
+
+            // ── Recoveries ──
+            // Capped at a share of gross and carried forward, so this has to
+            // run once gross is known. Read-only endpoint: plan, don't persist.
+            $recoveryPlan = app(\App\Services\LoanRecoveryService::class)
+                ->planEmployeeRecoveries($employeeId, $grossSalary, $month, $year);
+
+            $penalties = $recoveryPlan['lines'];
+            $penaltyTotal = $recoveryPlan['total'];
 
             // rest day is counted as paid leave
             $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
@@ -860,21 +881,51 @@ class PayrollController extends Controller
                 ], 404);
             }
 
-            $penalties = Penalty::where('employee_id', $employeeId)
+            /*
+             * This breakdown has to agree with the payroll row it opens
+             * from, so it applies the same cap. Where payroll has already
+             * been generated its stored gross is authoritative — that is
+             * the figure the deduction was actually calculated against.
+             */
+            $payroll = Payroll::where('employee_id', $employeeId)
                 ->where('month', $month)
                 ->where('year', $year)
-                ->orderBy('penalty_date', 'asc')
-                ->get();
+                ->first();
 
-            $totalPenalty = $penalties->sum('amount');
+            if ($payroll) {
+                $grossSalary = (float) $payroll->gross_salary;
+            } else {
+                $overtimeHours = round(
+                    app(\App\Services\WageRegisterService::class)
+                        ->overtimeSummary([$employee->id], $month, $year)[$employee->id] ?? 0,
+                    2
+                );
+                $overtimeRates = \App\Models\EmployeeWage::effectiveSet($monthEnd->toDateString());
+                $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
+                    ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
+                    : 0.0;
+
+                $grossSalary = (float) optional($employee->activePayroll)->basic_salary
+                    + round($overtimeHours * $overtimeRate, 2);
+            }
+
+            $recoveryPlan = app(\App\Services\LoanRecoveryService::class)
+                ->planEmployeeRecoveries($employeeId, $grossSalary, $month, $year);
+
             $monthName = Carbon::create($year, $month)->format('M Y');
 
-            $formattedPenalties = $penalties->map(function ($p) {
+            $formattedPenalties = collect($recoveryPlan['lines'])->map(function ($line) {
                 return [
-                    'id' => $p->id,
-                    'date' => Carbon::parse($p->penalty_date)->format('d M Y'),
-                    'reason' => $p->reason,
-                    'amount' => (float) $p->amount,
+                    'id' => $line['penalty_id'],
+                    'recovery_type' => $line['recovery_type'],
+                    'particulars' => $line['particulars'],
+                    'reason' => $line['reason'],
+                    'total_amount' => $line['total_amount'],
+                    'opening_balance' => $line['opening_balance'],
+                    // What comes out of this month's salary.
+                    'amount' => $line['installment_amount'],
+                    'closing_balance' => $line['closing_balance'],
+                    'fully_recovered' => $line['fully_recovered'],
                 ];
             });
 
@@ -887,7 +938,9 @@ class PayrollController extends Controller
                         'name' => $employee->name,
                         'employee_code' => $employee->employee_code,
                     ],
-                    'total_penalty' => (float) $totalPenalty,
+                    'total_penalty' => (float) $recoveryPlan['total'],
+                    'recovery_limit' => $recoveryPlan['budget'],
+                    'recovery_carried_forward' => $recoveryPlan['carried'],
                     'month_name' => $monthName,
                     'penalties' => $formattedPenalties,
                 ]

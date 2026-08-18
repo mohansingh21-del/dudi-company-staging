@@ -59,6 +59,9 @@ use App\Http\Controllers\Api\Admin\ShiftClosureController;
 use App\Http\Controllers\Api\Admin\DashboardController;
 use App\Http\Controllers\Api\Admin\ServiceRecordController;
 
+use App\Http\Controllers\RecoveryUploadController;
+use App\Http\Controllers\RecoveryController;
+
 /*
 |--------------------------------------------------------------------------
 | NEW Mining Workforce Controllers
@@ -287,6 +290,11 @@ Route::prefix('v1')->group(function () {
             Route::post('wage-register/generate', [WageRegisterController::class, 'generate']);
             Route::get('wage-register/export', [WageRegisterController::class, 'export']);
 
+            // The Salary Overview listing itself as a sheet — month totals for a
+            // year, no employee rows. Declared before {id} so "export" is not
+            // read as a report id.
+            Route::get('wage-register/reports/export', [WageRegisterController::class, 'exportSummary']);
+
             // Edited sheets are staged and validated only — nothing here writes
             // back to employee_payrolls, payrolls or the wage master.
             Route::post('wage-register/import', [WageRegisterController::class, 'import']);
@@ -296,6 +304,11 @@ Route::prefix('v1')->group(function () {
             Route::post('wage-register/import/{uploadId}/submit', [WageRegisterController::class, 'submitImport']);
             Route::get('wage-register/import/{id}', [WageRegisterController::class, 'stagedImport']);
             Route::delete('wage-register/import/{id}', [WageRegisterController::class, 'discardImport']);
+            // The month detail screen's two downloads: its employee rows, and
+            // the month summarised on a page.
+            Route::get('wage-register/reports/{id}/export', [WageRegisterController::class, 'exportReport']);
+            Route::get('wage-register/reports/{id}/export-summary', [WageRegisterController::class, 'exportReportSummary']);
+
             Route::get('wage-register/reports/{id}', [WageRegisterController::class, 'show']);
             Route::delete('wage-register/reports/{id}', [WageRegisterController::class, 'destroy']);
 
@@ -448,6 +461,11 @@ Route::prefix('v1')->group(function () {
             | Penalty Management
             |--------------------------------------------------------------------------
             */
+            // Static paths must stay above apiResource, or penalties/{penalty}
+            // captures them and tries to load a penalty named "export".
+            Route::post('penalties/preview-schedule', [PenaltyController::class, 'previewSchedule']);
+            Route::get('penalties/recovery-types', [PenaltyController::class, 'recoveryTypes']);
+            Route::get('penalties/export', [PenaltyController::class, 'export']);
             Route::post('penalties/bulk', [PenaltyController::class, 'storeBulk']);
             Route::post('penalties/bulk-upload', [PenaltyController::class, 'bulkUpload']);
             Route::apiResource('penalties', PenaltyController::class);
@@ -555,6 +573,95 @@ Route::prefix('v1')->group(function () {
             Route::get('service-records/machine/{machine}/history', [ServiceRecordController::class, 'history']);
             Route::get('service-records/{serviceRecord}/audit-trail', [ServiceRecordController::class, 'auditTrail']);
             Route::apiResource('service-records', ServiceRecordController::class);
+
+
+            Route::prefix('recoveries')->group(function () {
+ 
+           
+ 
+                // Upload Excel
+                Route::post(
+                    '/bulk-upload',
+                    [RecoveryUploadController::class, 'upload']
+                );
+ 
+                // Upload history
+ 
+ 
+                // Preview staging upload
+                Route::get(
+                    '/uploads/{upload}/preview',
+                    [RecoveryUploadController::class, 'preview']
+                );
+ 
+                // Edit staging row
+                Route::put(
+                    '/uploads/rows/{row}',
+                    [RecoveryUploadController::class, 'updateRow']
+                );
+ 
+                // Delete staging row
+                Route::delete(
+                    '/uploads/rows/{row}',
+                    [RecoveryUploadController::class, 'deleteRow']
+                );
+ 
+                // FINAL SUBMIT
+                Route::post(
+                    '/uploads/{upload}/submit',
+                    [RecoveryUploadController::class, 'submit']
+                );
+ 
+ 
+                /*
+
+ 
+                // Final recovery register
+                /*
+     * =====================================================
+     * LEVEL 1
+     * Successful recovery documents
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries
+     */
+                Route::get(
+                    '/',
+                    [RecoveryController::class, 'index']
+                );
+ 
+ 
+                /*
+     * =====================================================
+     * LEVEL 2
+     * Recovery rows belonging to one document
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries/uploads/1/rows
+     */
+                Route::get(
+                    '/uploads/{upload}/rows',
+                    [RecoveryController::class, 'uploadRows']
+                );
+ 
+ 
+                /*
+     * =====================================================
+     * LEVEL 3
+     * Individual recovery details
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries/15/details
+     */
+                Route::get(
+                    '/{recovery}/details',
+                    [RecoveryController::class, 'details']
+                );
+                Route::get(
+                    '/recovery-uploads',
+                    [RecoveryUploadController::class, 'uploads']
+                );
+            });
 
         });
     /*

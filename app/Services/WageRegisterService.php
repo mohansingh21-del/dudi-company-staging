@@ -7,7 +7,6 @@ use App\Models\Employee;
 use App\Models\EmployeeWage;
 use App\Models\Holiday;
 use App\Models\Leave;
-use App\Models\Penalty;
 use App\Models\Shift;
 use App\Models\WageRegisterReport;
 use App\Models\WageRegisterReportRow;
@@ -87,11 +86,11 @@ class WageRegisterService
 
         $attendance = $this->attendanceSummary($ids, $month, $year);
         $leaves = $this->leaveSummary($ids, $monthStart, $monthEnd);
-        $penalties = Penalty::whereIn('employee_id', $ids)
-            ->where('month', $month)->where('year', $year)
-            ->groupBy('employee_id')
-            ->selectRaw('employee_id, SUM(amount) as total')
-            ->pluck('total', 'employee_id');
+        // Recoveries are capped at a share of each employee's earnings and
+        // carry into later months, so they cannot be summed up front — the
+        // figure depends on a gross that is only known inside the loop.
+        $recoveryService = app(LoanRecoveryService::class);
+
         $holidays = $this->holidayCounts($month, $year);
         $overtime = $this->overtimeSummary($ids, $month, $year);
 
@@ -156,7 +155,6 @@ class WageRegisterService
             $pf = optional($payroll)->pf_applicable ? (float) $payroll->pf_amount : 0.0;
             $mess = optional($payroll)->mess_deduction_applicable ? (float) $payroll->mess_deduction_amount : 0.0;
             $other = optional($payroll)->other_deduction_appliacble ? (float) $payroll->other_deduction : 0.0;
-            $penalty = (float) ($penalties[$employee->id] ?? 0);
 
             // Columns 3, 7, 10, 11, 14-17, 19 and 22-25 are not calculated and
             // stay null so the printed form shows a blank, not a false 0. Every
@@ -169,6 +167,22 @@ class WageRegisterService
             // Column 12 is the sum of the earnings columns as printed, so the
             // form adds up left to right.
             $totalEarnings = round($basic + ($dearnessAmount ?? 0) + $overtimePayment, 2);
+
+            // Column 19. Capped at a share of column 12 and carried forward,
+            // so it has to run once earnings are known. Column 12 equals the
+            // gross PayrollController computes — basic_salary already merges
+            // minimum basic and DA, and the split above only redistributes it
+            // across columns — so both documents cap against the same figure
+            // and cannot disagree.
+            //
+            // Planned, never applied: building the register must not write
+            // installment rows. Payroll generation owns that.
+            $penalty = $recoveryService->planEmployeeRecoveries(
+                $employee->id,
+                $totalEarnings,
+                $month,
+                $year
+            )['total'];
 
             // Absence is deliberately not part of column 20. It is not a
             // deduction the employer withheld — it is pay never earned — and it

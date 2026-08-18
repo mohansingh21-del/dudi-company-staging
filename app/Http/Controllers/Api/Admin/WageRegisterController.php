@@ -3,6 +3,9 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Exports\WageRegisterExport;
+use App\Exports\WageRegisterMonthSummaryExport;
+use App\Exports\WageRegisterRowsExport;
+use App\Exports\WageRegisterSummaryExport;
 use App\Http\Controllers\Controller;
 use App\Models\WageRegisterReport;
 use App\Models\WageRegisterUpload;
@@ -50,34 +53,7 @@ class WageRegisterController extends Controller
                 ], 422);
             }
 
-            $reports = WageRegisterReport::with('generatedBy.employee', 'generatedBy.roles')
-                ->where('year', $year)
-                ->get()
-                ->keyBy('month');
-
-            // Months that have not happened yet are not listed as outstanding.
-            $lastMonth = ($year < now()->year) ? 12 : (int) now()->month;
-
-            $months = [];
-
-            for ($month = 1; $month <= $lastMonth; $month++) {
-                $report = $reports->get($month);
-
-                $months[] = [
-                    'month' => $month,
-                    'year' => $year,
-                    'month_label' => Carbon::create($year, $month, 1)->format('F Y'),
-                    'status' => $report ? 'generated' : 'not_generated',
-                    'report_id' => $report ? $report->id : null,
-                    'employee_count' => $report ? $report->employee_count : null,
-                    'total_earnings' => $report ? $report->total_earnings : null,
-                    'total_deductions' => $report ? $report->total_deductions : null,
-                    'total_net' => $report ? $report->total_net : null,
-                    'version' => $report ? $report->version : null,
-                    'generated_at' => $report ? optional($report->generated_at)->toDateTimeString() : null,
-                ];
-            }
-
+            $months = $this->monthRows($year);
             $generated = collect($months)->where('status', 'generated');
 
             return response()->json([
@@ -96,6 +72,104 @@ class WageRegisterController extends Controller
                     ->orderByDesc('year')
                     ->pluck('year'),
             ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * The month list for a year, shared by the listing and its export so both
+     * show the same figures and the same "NOT GENERATED" months.
+     *
+     * A month with no register carries nulls rather than zeros: nothing was
+     * filed, which is not the same as a month where nobody was paid.
+     */
+    protected function monthRows(int $year): array
+    {
+        $reports = WageRegisterReport::where('year', $year)
+            ->get()
+            ->keyBy('month');
+
+        // Months that have not happened yet are not listed as outstanding.
+        $lastMonth = ($year < now()->year) ? 12 : (int) now()->month;
+
+        $months = [];
+
+        for ($month = 1; $month <= $lastMonth; $month++) {
+            $report = $reports->get($month);
+
+            $months[] = [
+                'month' => $month,
+                'year' => $year,
+                'month_label' => Carbon::create($year, $month, 1)->format('F Y'),
+                'status' => $report ? 'generated' : 'not_generated',
+                'report_id' => $report ? $report->id : null,
+                'employee_count' => $report ? $report->employee_count : null,
+                'total_earnings' => $report ? $report->total_earnings : null,
+                'total_deductions' => $report ? $report->total_deductions : null,
+                'total_net' => $report ? $report->total_net : null,
+                'version' => $report ? $report->version : null,
+                'generated_at' => $report ? optional($report->generated_at)->toDateTimeString() : null,
+            ];
+        }
+
+        return $months;
+    }
+
+    /**
+     * The Salary Overview listing as an .xlsx — one line per month of a year,
+     * with the year's totals underneath.
+     *
+     * This is the summary table behind the "Export" button on the listing, not a
+     * register: it carries no employee rows. Form B itself is exported per month
+     * by export().
+     *
+     * Months with no register are still listed, marked NOT GENERATED with blank
+     * figures, so the sheet reads the same as the screen it was taken from.
+     * Pass only_generated=true to leave them out.
+     */
+    public function exportSummary(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'year' => 'nullable|integer|between:2000,2100',
+            'only_generated' => 'nullable|boolean',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $year = (int) $request->input('year', now()->year);
+            $months = $this->monthRows($year);
+
+            if ($request->boolean('only_generated')) {
+                $months = array_values(array_filter(
+                    $months,
+                    fn($row) => $row['status'] === 'generated'
+                ));
+            }
+
+            if (empty($months)) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "No wage registers have been generated for {$year}, so there is nothing to export."
+                ], 422);
+            }
+
+            // Newest month first, matching the listing.
+            $months = array_reverse($months);
+
+            $filename = 'salary-overview-' . $year . '.xlsx';
+
+            return Excel::download(new WageRegisterSummaryExport($months, $year), $filename);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -471,6 +545,317 @@ class WageRegisterController extends Controller
                 'message' => $th->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * A frozen register's employee rows, downloaded — the "Export CSV" button on
+     * the month detail screen.
+     *
+     * Rows come out as stored and are never recomputed, which is the point of a
+     * frozen register: this file has to agree with what was filed, not with what
+     * the figures would calculate to today.
+     *
+     *   format=csv   (default) flat data, one header line — see WageRegisterRowsExport
+     *   format=xlsx            the printed Form B layout, banded header and all
+     *
+     * The whole register is written; `search` is a screen filter and is not
+     * honoured here, because a register exported minus some of its employees is
+     * not the register.
+     */
+    public function exportReport(Request $request, $id)
+    {
+        $validator = Validator::make($request->all(), [
+            'format' => 'nullable|in:csv,xlsx',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $report = WageRegisterReport::find($id);
+
+            if (!$report) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Wage register not found'
+                ], 404);
+            }
+
+            $rows = $report->rows()->get()->map->toFormB()->values()->all();
+
+            if (empty($rows)) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "The wage register for {$report->month_label} has no rows to export."
+                ], 422);
+            }
+
+            $format = $request->input('format', 'csv');
+            $label = $report->month_label;
+            $slug = Carbon::create($report->year, $report->month, 1)->format('Y-m');
+
+            if ($format === 'xlsx') {
+                return Excel::download(
+                    new WageRegisterExport($rows, $label),
+                    "wage-register-{$slug}.xlsx"
+                );
+            }
+
+            return Excel::download(
+                new WageRegisterRowsExport($rows, $label),
+                "wage-register-{$slug}.csv",
+                \Maatwebsite\Excel\Excel::CSV
+            );
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * One month's register summarised on a page — the "Export Summary" button on
+     * the month detail screen. The stat tiles, who filed it, the earnings and
+     * deduction totals broken out by column, and the rates it was priced against.
+     *
+     * The per-column totals are summed in the database rather than by loading
+     * every row, so this stays cheap on a register with thousands of lines.
+     */
+    public function exportReportSummary($id)
+    {
+        try {
+            $report = WageRegisterReport::with('generatedBy.employee', 'generatedBy.roles')->find($id);
+
+            if (!$report) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Wage register not found'
+                ], 404);
+            }
+
+            $header = $this->reportHeader($report);
+            $totals = $this->columnTotals($report);
+
+            $sections = [
+                [
+                    'title' => 'Register',
+                    'rows' => [
+                        ['Month', $header['month_label'], 'text'],
+                        ['Status', 'Generated', 'text'],
+                        ['Version', $header['version'], 'number'],
+                        ['Generated At', $header['generated_at'], 'text'],
+                        ['Generated By', optional($header['generated_by'])['name'], 'text'],
+                        ['Remarks', $header['remarks'], 'text'],
+                    ],
+                ],
+                [
+                    'title' => 'Totals',
+                    'rows' => [
+                        ['Total Employees', $header['employee_count'], 'number'],
+                        ['Gross Salary', $header['total_earnings'], 'money'],
+                        ['Total Deductions', $header['total_deductions'], 'money'],
+                        ['Net Salary', $header['total_net'], 'money'],
+                    ],
+                ],
+                [
+                    'title' => 'Reconciliation',
+                    'rows' => $this->reconciliation($header, $totals),
+                ],
+                [
+                    'title' => 'Earnings by Column',
+                    'rows' => [
+                        ['Basic', $totals['basic'], 'money'],
+                        ['Special basic', $totals['special_basic'], 'money'],
+                        ['Dearness Allowance', $totals['dearness_allowance'], 'money'],
+                        ['Payments Overtime', $totals['overtime_payment'], 'money'],
+                        ['HRA', $totals['hra'], 'money'],
+                        ['Other Earnings', $totals['other_earnings'], 'money'],
+                        ['Total Earnings', $totals['total_earnings'], 'money'],
+                    ],
+                ],
+                [
+                    'title' => 'Deductions by Column',
+                    'rows' => [
+                        ['PF', $totals['pf_deduction'], 'money'],
+                        ['ESIC', $totals['esic_deduction'], 'money'],
+                        ['Society', $totals['society_deduction'], 'money'],
+                        ['Income Tax', $totals['income_tax'], 'money'],
+                        ['Insurance', $totals['insurance'], 'money'],
+                        ['Other Deductions', $totals['other_deductions'], 'money'],
+                        ['Recoveries', $totals['recoveries'], 'money'],
+                        ['Total Deductions', $totals['total_deductions'], 'money'],
+
+                        // Not a Form B column. Pay never earned, taken off the
+                        // net directly rather than shown as a deduction.
+                        ['Absence Deduction (not a Form B column)', $totals['absence_deduction'], 'money'],
+                    ],
+                ],
+                [
+                    'title' => 'Other',
+                    'rows' => [
+                        ['Overtime Hours Worked', $totals['overtime_hours'], 'money'],
+                        ['Days Worked', $totals['days_worked'], 'money'],
+                        ['Employer Share PF Welfare Fund', $totals['employer_pf_share'], 'money'],
+                    ],
+                ],
+            ];
+
+            // The rates the month was priced against, one block per skill
+            // category. A category with no wage revision in force is listed as
+            // such rather than omitted — its absence is why those employees
+            // priced at 0.
+            $rates = [];
+
+            foreach (($header['wage_rates'] ?: []) as $category => $rate) {
+                $name = ucwords(str_replace(['_', '-'], ' ', (string) $category));
+
+                if (!$rate) {
+                    $rates[] = [$name, 'No rate in force', 'text'];
+                    continue;
+                }
+
+                $rates[] = [$name . ' — Minimum Basic', $rate['minimum_basic'] ?? null, 'money'];
+                $rates[] = [$name . ' — Dearness Allowance', $rate['dearness_allowance'] ?? null, 'money'];
+                $rates[] = [$name . ' — Overtime Rate', $rate['overtime_rate'] ?? null, 'money'];
+                $rates[] = [$name . ' — Effective From', $rate['effective_from'] ?? null, 'text'];
+            }
+
+            if (!empty($rates)) {
+                $sections[] = ['title' => 'Wage Rates', 'rows' => $rates];
+            }
+
+            $slug = Carbon::create($report->year, $report->month, 1)->format('Y-m');
+
+            return Excel::download(
+                new WageRegisterMonthSummaryExport($sections, $header['month_label']),
+                "wage-register-summary-{$slug}.xlsx"
+            );
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Why Net Salary is not Gross minus Total Deductions, spelled out.
+     *
+     * Two things legitimately sit between them, neither of which Form B gives a
+     * column to: wages for days not worked, which come off the net directly, and
+     * deductions that outran what an employee earned and were written off, since
+     * the net is floored at 0. Allowing for both, the register should satisfy
+     *
+     *   (Gross - Deductions) - Net - Absence + Unrecovered = 0
+     *
+     * Anything left over is a register whose stored parts do not account for its
+     * own net, so it is reported as exactly that rather than quietly absorbed
+     * into one of the lines above. A known cause: a register created by
+     * importing an edited sheet carries a net already reduced by absence, but
+     * Form B has no absence column for the figure itself to come back in, so
+     * WageRegisterImportService stores it as 0.
+     */
+    protected function reconciliation(array $header, array $totals): array
+    {
+        $gross = (float) $header['total_earnings'];
+        $deductions = (float) $header['total_deductions'];
+        $net = (float) $header['total_net'];
+        $absence = $totals['absence_deduction'];
+        $unrecovered = (float) $header['unrecovered_deduction'];
+
+        $residual = round(($gross - $deductions) - $net - $absence + $unrecovered, 2);
+
+        $rows = [
+            ['Gross Salary less Total Deductions', round($gross - $deductions, 2), 'money'],
+            ['less Absence Deduction (days not worked)', $absence, 'money'],
+            ['add Unrecovered Deduction (written off)', $unrecovered, 'money'],
+            ['Net Salary', $net, 'money'],
+        ];
+
+        // Only worth a line when it is not zero; on a healthy register saying
+        // "unaccounted: 0.00" invites doubt where there is none.
+        if (abs($residual) >= 0.01) {
+            $rows[] = ['Unaccounted difference', $residual, 'money'];
+            $rows[] = [
+                'Note',
+                'The stored figures do not fully account for this register\'s net '
+                    . 'salary. Registers created by importing an edited sheet lose '
+                    . 'the absence breakdown, which is the usual cause.',
+                'text',
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Every Form B money column summed across a frozen register, in the
+     * database rather than in PHP.
+     *
+     * Columns 18 and 19 are sums of stored components — see
+     * WageRegisterReportRow::otherDeductionsTotal() and recoveriesTotal() — so
+     * they are added up the same way here rather than read from one field.
+     */
+    protected function columnTotals(WageRegisterReport $report): array
+    {
+        $sums = $report->rows()
+            ->selectRaw('
+                COALESCE(SUM(days_worked), 0) as days_worked,
+                COALESCE(SUM(overtime_hours), 0) as overtime_hours,
+                COALESCE(SUM(basic), 0) as basic,
+                COALESCE(SUM(special_basic), 0) as special_basic,
+                COALESCE(SUM(dearness_allowance), 0) as dearness_allowance,
+                COALESCE(SUM(overtime_payment), 0) as overtime_payment,
+                COALESCE(SUM(hra), 0) as hra,
+                COALESCE(SUM(other_earnings), 0) as other_earnings,
+                COALESCE(SUM(total_earnings), 0) as total_earnings,
+                COALESCE(SUM(pf_deduction), 0) as pf_deduction,
+                COALESCE(SUM(esic_deduction), 0) as esic_deduction,
+                COALESCE(SUM(society_deduction), 0) as society_deduction,
+                COALESCE(SUM(income_tax), 0) as income_tax,
+                COALESCE(SUM(insurance), 0) as insurance,
+                COALESCE(SUM(other_deduction), 0) as other_deduction,
+                COALESCE(SUM(mess_deduction), 0) as mess_deduction,
+                COALESCE(SUM(penalty_deduction), 0) as penalty_deduction,
+                COALESCE(SUM(recoveries), 0) as recoveries,
+                COALESCE(SUM(absence_deduction), 0) as absence_deduction,
+                COALESCE(SUM(total_deductions), 0) as total_deductions,
+                COALESCE(SUM(employer_pf_share), 0) as employer_pf_share
+            ')
+            // rows() carries an orderBy, which MySQL rejects alongside an
+            // aggregate with no GROUP BY under ONLY_FULL_GROUP_BY.
+            ->reorder()
+            ->first();
+
+        $of = fn(string $key) => round((float) $sums->{$key}, 2);
+
+        return [
+            'days_worked' => $of('days_worked'),
+            'overtime_hours' => $of('overtime_hours'),
+            'basic' => $of('basic'),
+            'special_basic' => $of('special_basic'),
+            'dearness_allowance' => $of('dearness_allowance'),
+            'overtime_payment' => $of('overtime_payment'),
+            'hra' => $of('hra'),
+            'other_earnings' => $of('other_earnings'),
+            'total_earnings' => $of('total_earnings'),
+            'pf_deduction' => $of('pf_deduction'),
+            'esic_deduction' => $of('esic_deduction'),
+            'society_deduction' => $of('society_deduction'),
+            'income_tax' => $of('income_tax'),
+            'insurance' => $of('insurance'),
+            'other_deductions' => round($of('other_deduction') + $of('mess_deduction'), 2),
+            'recoveries' => round($of('penalty_deduction') + $of('recoveries'), 2),
+            'absence_deduction' => $of('absence_deduction'),
+            'total_deductions' => $of('total_deductions'),
+            'employer_pf_share' => $of('employer_pf_share'),
+        ];
     }
 
     /**
