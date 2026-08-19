@@ -7,6 +7,7 @@ use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
 use App\Models\Leave;
+use App\Models\LeaveType;
 class UpdateLeaveRequest extends FormRequest
 {
     public function authorize(): bool
@@ -45,6 +46,35 @@ class UpdateLeaveRequest extends FormRequest
 public function withValidator($validator)
 {
     $validator->after(function ($validator) {
+
+        // A paid block with no annual quota configured has nothing to draw
+        // against, so moving a leave onto one is refused rather than saved
+        // against an entitlement of zero that the register would silently floor
+        // away. Unpaid leave is uncapped and never gated.
+        //
+        // Only a *change* of block counts as applying against it. Leaves already
+        // filed under a block whose quota is still 0 stay editable, so their
+        // status, reason and dates can be corrected without the master having to
+        // be configured first.
+        if ($this->leave_type_id) {
+
+            $current = Leave::find(
+                $this->route('leave')?->id ?? $this->route('leave')
+            );
+
+            $blockChanged = ! $current
+                || (int) $current->leave_type_id !== (int) $this->leave_type_id;
+
+            $leaveType = LeaveType::find($this->leave_type_id);
+
+            if ($blockChanged && $leaveType && ! $leaveType->canApply()) {
+
+                $validator->errors()->add(
+                    'leave_type_id',
+                    $leaveType->quotaMissingMessage()
+                );
+            }
+        }
 
         if (
             !$this->employee_id ||

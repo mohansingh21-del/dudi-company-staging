@@ -76,6 +76,11 @@ class LeaveTypeController extends Controller
                         'name' => $type->name,
                         'leave_category' => $type->leave_category,
                         'register_group' => $type->register_group,
+                        // So the apply screen can disable a paid block with no
+                        // quota rather than let it be picked and then rejected.
+                        // Unpaid blocks always come back can_apply = true.
+                        'allowed_days' => $type->allowed_days,
+                        'can_apply' => $type->canApply(),
                     ];
                 });
 

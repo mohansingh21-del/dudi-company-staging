@@ -2723,13 +2723,15 @@ class AttendanceController extends Controller
             // Build Employee Query to paginate all employees
             $employeeQuery = \App\Models\Employee::with([
                 'site',
+                'relay',
                 'currentShiftAssignment.shift',
                 'attendanceProcesseds' => function ($q) use ($startDate, $endDate) {
                     $q->whereBetween('date', [
                         $startDate->format('Y-m-d'),
                         $endDate->format('Y-m-d')
                     ]);
-                }
+                },
+                'attendanceProcesseds.shift',
             ]);
 
             // Filter out employees registered after the start date
@@ -2839,6 +2841,13 @@ class AttendanceController extends Controller
 
             $employees = $employeeQuery->orderBy('name')->paginate($isLimitNull ? max(1, (clone $employeeQuery)->count()) : (int)$limit);
 
+            // A processed row only carries shift_id when the import supplied one.
+            // Where it is null the shift still exists on the roster, so resolve it
+            // the same way the register does: override -> relay mapping -> assignment.
+            $pageEmployees = collect($employees->items());
+            $rosterContext = $this->buildShiftRosterContext($pageEmployees, $startDate, $endDate);
+            $shiftNames = \App\Models\Shift::pluck('shift_name', 'id');
+
             $dates = [];
             $currentDate = $startDate->copy();
             while ($currentDate->lte($endDate)) {
@@ -2864,14 +2873,19 @@ class AttendanceController extends Controller
 
                     if ($item) {
                         // Use existing processed record
+                        $shiftId = $item->shift_id
+                            ?: $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
+
                         $data[] = [
                             'id' => $item->id,
                             'employee_id' => $employee->id,
-                            'shift_id' => $item->shift_id,
+                            'shift_id' => $shiftId,
                             'employee_name' => $employee->name,
                             'employee_code' => $employee->employee_code,
                             'site_name' => $employee->site->site_name ?? null,
-                            'shift_name' => $item->shift ? $item->shift->shift_name : null,
+                            'relay_id' => $employee->relay_id,
+                            'relay_name' => optional($employee->relay)->name,
+                            'shift_name' => $shiftId ? ($shiftNames[$shiftId] ?? null) : null,
                             'date' => $carbonDate->format('d M Y'),
                             'check_in' => $item->check_in ? \Carbon\Carbon::parse($item->check_in)->format('H:i') :
                                 null,
@@ -2910,8 +2924,9 @@ class AttendanceController extends Controller
                             $status = 'holiday';
                         }
 
-                        $shiftId = $employee->shift_id;
-                        $shiftName = $shiftId ? optional(\App\Models\Shift::find($shiftId))->shift_name : null;
+                        // shift_id on the model resolves against today; this row is
+                        // for $dateStr, so use the date-aware resolver instead.
+                        $shiftId = $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
 
                         $data[] = [
                             'id' => null,
@@ -2920,7 +2935,9 @@ class AttendanceController extends Controller
                             'employee_name' => $employee->name,
                             'employee_code' => $employee->employee_code,
                             'site_name' => $employee->site->site_name ?? null,
-                            'shift_name' => $shiftName,
+                            'relay_id' => $employee->relay_id,
+                            'relay_name' => optional($employee->relay)->name,
+                            'shift_name' => $shiftId ? ($shiftNames[$shiftId] ?? null) : null,
                             'date' => $carbonDate->format('d M Y'),
                             'check_in' => null,
                             'check_out' => null,

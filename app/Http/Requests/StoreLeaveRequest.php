@@ -6,6 +6,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use App\Models\Leave;
+use App\Models\LeaveType;
 class StoreLeaveRequest extends FormRequest
 {
     public function authorize(): bool
@@ -43,6 +44,23 @@ class StoreLeaveRequest extends FormRequest
 public function withValidator($validator)
 {
     $validator->after(function ($validator) {
+
+        // A paid block with no annual quota configured has nothing to draw
+        // against, so the leave is refused here rather than saved against an
+        // entitlement of zero that the register would silently floor away.
+        // Unpaid leave is uncapped and never gated.
+        if ($this->leave_type_id) {
+
+            $leaveType = LeaveType::find($this->leave_type_id);
+
+            if ($leaveType && ! $leaveType->canApply()) {
+
+                $validator->errors()->add(
+                    'leave_type_id',
+                    $leaveType->quotaMissingMessage()
+                );
+            }
+        }
 
         if (
             !$this->employee_id ||

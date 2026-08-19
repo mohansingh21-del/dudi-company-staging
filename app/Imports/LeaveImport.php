@@ -57,6 +57,18 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
+            // Same rule as the apply form: a paid block the admin has not
+            // given a quota to has nothing to draw against, so the row is
+            // rejected rather than imported against an entitlement of zero.
+            // Unpaid leave is uncapped and never gated.
+            if (! $leaveType->canApply()) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Employee {$employee->employee_code}: " . $leaveType->quotaMissingMessage()
+                ];
+                continue;
+            }
+
             $fromDate = $this->parseDate($row['from_date'] ?? null);
             $toDate = $this->parseDate($row['to_date'] ?? null);
 
@@ -89,7 +101,7 @@ class LeaveImport implements ToCollection, WithHeadingRow
 
             Leave::create([
                 'employee_id'   => $employee->id,
-                'leave_type_id' => $leaveType ? $leaveType->id : null,
+                'leave_type_id' => $leaveType->id,
                 'from_date'     => $fromDate->toDateString(),
                 'to_date'       => $toDate->toDateString(),
                 'reason'        => $row['reason'] ?? null,
