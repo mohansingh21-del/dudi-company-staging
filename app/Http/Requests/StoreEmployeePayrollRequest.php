@@ -54,6 +54,8 @@ class StoreEmployeePayrollRequest extends FormRequest
 
     'esic_ip_number' => 'nullable|string|max:20',
 
+    'lwf_number_applicable' => 'nullable|boolean',
+
     'lwf_number' => 'nullable|string|max:255',
 
     'pan' => 'nullable|string|size:10|regex:/^[A-Z]{5}[0-9]{4}[A-Z]$/|unique:employee_payrolls,pan',

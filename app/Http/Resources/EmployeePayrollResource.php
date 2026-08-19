@@ -6,6 +6,20 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 class EmployeePayrollResource extends JsonResource
 {
+    /**
+     * The stored Aadhaar is decrypted on access, which throws if the row was
+     * written under a different APP_KEY. One unreadable row must not take down
+     * the whole listing, so fall back to null.
+     */
+    private function aadhaarNumber()
+    {
+        try {
+            return $this->aadhaar_number;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     public function toArray($request)
     {
         return [
@@ -35,11 +49,14 @@ class EmployeePayrollResource extends JsonResource
 
             'esic_ip_number' => $this->esic_ip_number,
 
+            'lwf_number_applicable' => $this->lwf_number_applicable,
+
             'lwf_number' => $this->lwf_number,
 
             'pan' => $this->pan,
 
-            // The full Aadhaar number is never exposed.
+            'aadhaar_number' => $this->aadhaarNumber(),
+
             'aadhaar_last4' => $this->aadhaar_last4,
 
             'bank_name' => $this->bank_name,

@@ -26,6 +26,8 @@ class EmployeePayroll extends Model
 
         'esic_ip_number',
 
+        'lwf_number_applicable',
+
         'lwf_number',
 
         'pan',
@@ -56,6 +58,8 @@ class EmployeePayroll extends Model
     protected $casts = [
 
         'pf_applicable' => 'boolean',
+
+        'lwf_number_applicable' => 'boolean',
 
         'mess_deduction_applicable' => 'boolean',
 

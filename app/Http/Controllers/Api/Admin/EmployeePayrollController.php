@@ -137,6 +137,7 @@ class EmployeePayrollController extends Controller
                 'pf_number' => $data['pf_number'] ?? null,
                 'uan' => $data['uan'] ?? null,
                 'esic_ip_number' => $data['esic_ip_number'] ?? null,
+                'lwf_number_applicable' => $data['lwf_number_applicable'] ?? false,
                 'lwf_number' => $data['lwf_number'] ?? null,
                 'pan' => $data['pan'] ?? null,
                 // aadhaar_last4 and aadhaar_hash are derived by the model mutator

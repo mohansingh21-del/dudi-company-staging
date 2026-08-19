@@ -245,6 +245,7 @@ Route::prefix('v1')->group(function () {
             // Generated Form E registers — frozen snapshots, never recomputed.
             // Declared before the {id} route so "reports" is not read as an id.
             Route::post('leave-register/generate', [LeaveBalanceController::class, 'generate']);
+            Route::get('leave-register/export', [LeaveBalanceController::class, 'export']);
             Route::get('leave-register/reports', [LeaveBalanceController::class, 'reports']);
             Route::get('leave-register/reports/{id}', [LeaveBalanceController::class, 'reportShow']);
             Route::delete('leave-register/reports/{id}', [LeaveBalanceController::class, 'reportDestroy']);

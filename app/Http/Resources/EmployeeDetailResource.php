@@ -115,6 +115,7 @@ class EmployeeDetailResource extends JsonResource
                 'pf_amount' => $payroll->pf_amount,
                 'uan' => $payroll->uan,
                 'esic_ip_number' => $payroll->esic_ip_number,
+                'lwf_number_applicable' => $payroll->lwf_number_applicable,
                 'lwf_number' => $payroll->lwf_number,
                 'pan' => $payroll->pan,
 
