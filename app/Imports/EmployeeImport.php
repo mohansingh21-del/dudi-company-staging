@@ -364,21 +364,45 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
     }
 
     /**
-     * Relay by id or name, tolerating the legacy relay_1/2/3 spellings.
+     * Relay by name or id. The sheet's literal value wins: sites that named
+     * their relays Relay_1/2/3 must not be rewritten to the legacy Relay A/B/C
+     * spellings, which is what made a real relay import as "not found".
      * Shared by the validation rule and the write so they cannot disagree.
      */
     private function findRelay($value)
     {
+        $value = trim((string) $value);
+
+        if ($value === '') {
+            return null;
+        }
+
+        if ($relay = $this->relayByName($value)) {
+            return $relay;
+        }
+
+        if (ctype_digit($value) && $relay = \App\Models\Relay::find((int) $value)) {
+            return $relay;
+        }
+
         $legacy = [
             'relay_1' => 'Relay A',
             'relay_2' => 'Relay B',
             'relay_3' => 'Relay C',
         ];
 
-        $name = $legacy[strtolower((string) $value)] ?? $value;
+        $alias = $legacy[strtolower($value)] ?? null;
 
-        return \App\Models\Relay::where('name', $name)
-            ->orWhere('id', $value)
+        return $alias ? $this->relayByName($alias) : null;
+    }
+
+    /**
+     * Case- and spacing-insensitive, so "relay 4" in the sheet still matches
+     * "Relay 4" in the table.
+     */
+    private function relayByName(string $name)
+    {
+        return \App\Models\Relay::whereRaw('LOWER(TRIM(name)) = ?', [strtolower($name)])
             ->first();
     }
 
