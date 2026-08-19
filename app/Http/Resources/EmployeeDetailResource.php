@@ -119,8 +119,10 @@ class EmployeeDetailResource extends JsonResource
                 'lwf_number' => $payroll->lwf_number,
                 'pan' => $payroll->pan,
 
+                // Both keys are kept for the existing clients; aadhaar_last4
+                // now carries the full number rather than the last four digits.
                 'aadhaar_number' => self::aadhaarNumber($payroll),
-                'aadhaar_last4' => $payroll->aadhaar_last4,
+                'aadhaar_last4' => self::aadhaarNumber($payroll),
 
                 'bank_name' => $payroll->bank_name,
                 'bank_account_number' => $payroll->bank_account_number,

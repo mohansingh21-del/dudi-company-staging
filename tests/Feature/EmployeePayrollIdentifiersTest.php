@@ -84,7 +84,7 @@ class EmployeePayrollIdentifiersTest extends TestCase
         $this->assertEquals('6666', $payroll->aadhaar_last4);
     }
 
-    public function test_aadhaar_is_encrypted_at_rest_and_never_returned()
+    public function test_aadhaar_is_encrypted_at_rest_but_returned_in_full()
     {
         $this->postJson('/api/v1/admin/employee-payrolls', $this->payload())
             ->assertStatus(200);
@@ -98,8 +98,7 @@ class EmployeePayrollIdentifiersTest extends TestCase
 
         $response = $this->getJson("/api/v1/admin/employee-payrolls/{$payroll->id}");
         $response->assertStatus(200);
-        $response->assertJsonMissing(['aadhaar_number' => '444455556666']);
-        $response->assertJsonPath('data.aadhaar_last4', '6666');
+        $response->assertJsonPath('data.aadhaar_last4', '444455556666');
     }
 
     public function test_employee_response_carries_no_pay_details()

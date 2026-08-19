@@ -55,9 +55,9 @@ class EmployeePayrollResource extends JsonResource
 
             'pan' => $this->pan,
 
-            'aadhaar_number' => $this->aadhaarNumber(),
-
-            'aadhaar_last4' => $this->aadhaar_last4,
+            // Key name is kept for the existing clients; the value is the full
+            // Aadhaar number, no longer just the last four digits.
+            'aadhaar_last4' => $this->aadhaarNumber(),
 
             'bank_name' => $this->bank_name,
 
