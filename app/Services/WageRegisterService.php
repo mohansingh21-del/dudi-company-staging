@@ -7,7 +7,6 @@ use App\Models\Employee;
 use App\Models\EmployeeWage;
 use App\Models\Holiday;
 use App\Models\Leave;
-use App\Models\Shift;
 use App\Models\WageRegisterReport;
 use App\Models\WageRegisterReportRow;
 use Carbon\Carbon;
@@ -352,10 +351,15 @@ class WageRegisterService
      * Overtime hours per employee for the month.
      *
      * A day's overtime is how much longer the employee was punched in than the
-     * shift they were assigned to: (check_out - check_in) - (shift end - shift
+     * shift they were rostered on: (check_out - check_in) - (shift end - shift
      * start). Measured against the shift's own clock rather than its
      * `minimum_working_hours`, which is a separate figure and does not always
      * agree with the times.
+     *
+     * attendance_processeds.shift_id is mostly NULL, so the day's shift falls
+     * back to the roster and then to a standard day — the same resolution the
+     * Attendance Register's OT column uses, so both agree. Skipping unresolved
+     * days here instead would silently drop their overtime from payroll.
      *
      * Days with no punch pair are skipped rather than counted as zero overtime —
      * an unrecorded day says nothing about whether extra hours were worked.
@@ -368,33 +372,41 @@ class WageRegisterService
             return [];
         }
 
-        $shifts = Shift::all()->keyBy('id');
-        $lengths = [];
-
-        foreach ($shifts as $shift) {
-            $start = Carbon::parse($shift->start_time);
-            $end = Carbon::parse($shift->end_time);
-
-            // A shift finishing at or before it starts runs past midnight.
-            if ($end->lessThanOrEqualTo($start)) {
-                $end->addDay();
-            }
-
-            $lengths[$shift->id] = $start->diffInMinutes($end) / 60;
-        }
+        $resolver = app(ShiftRosterResolver::class);
+        $lengths = $resolver->shiftLengths();
 
         $rows = AttendanceProcessed::whereIn('employee_id', $ids)
             ->whereMonth('date', $month)->whereYear('date', $year)
             ->whereNotNull('check_in')
             ->whereNotNull('check_out')
-            ->get(['employee_id', 'shift_id', 'check_in', 'check_out']);
+            ->get(['employee_id', 'shift_id', 'date', 'check_in', 'check_out']);
+
+        if ($rows->isEmpty()) {
+            return [];
+        }
+
+        // Only the rows whose shift_id is NULL need the roster, but preloading is
+        // per employee set, so load it once for everyone who has a row.
+        $employees = Employee::with('relay')
+            ->whereIn('id', $rows->pluck('employee_id')->unique()->all())
+            ->get()
+            ->keyBy('id');
+
+        $monthStart = Carbon::create($year, $month, 1)->startOfDay();
+        $rosterContext = $resolver->preload($employees, $monthStart, $monthStart->copy()->endOfMonth());
 
         $hours = [];
 
         foreach ($rows as $row) {
-            $shiftLength = $lengths[$row->shift_id] ?? null;
+            $employee = $employees->get($row->employee_id);
+            $dateStr = Carbon::parse($row->date)->format('Y-m-d');
 
-            if ($shiftLength === null || $shiftLength <= 0) {
+            $shiftId = $row->shift_id ?: ($employee ? $resolver->resolve($employee, $dateStr, $rosterContext) : null);
+            $shiftLength = $shiftId && isset($lengths[$shiftId])
+                ? $lengths[$shiftId]
+                : ShiftRosterResolver::STANDARD_WORKING_HOURS;
+
+            if ($shiftLength <= 0) {
                 continue;
             }
 
