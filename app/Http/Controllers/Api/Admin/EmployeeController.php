@@ -735,7 +735,9 @@ class EmployeeController extends Controller
     public function getActiveEmployees(Request $request)
     {
         try {
-            $query = Employee::where('is_active', 1);
+            // designation_id points at the roles table, so the employee's role
+            // is the designation relation.
+            $query = Employee::where('is_active', 1)->with('designation');
 
             // Optional Search
             if ($request->filled('search')) {
@@ -756,9 +758,41 @@ class EmployeeController extends Controller
                 $query->where('site_id', $request->site_id);
             }
 
+            // Optional Role Filter — comma separated, and accepts a slug, a
+            // name or an id, so ?role=driver,worker and ?role=8,5 both work.
+            // No match means no rows, which is the honest answer for an
+            // unknown role rather than silently returning everyone.
+            if ($request->filled('role')) {
+
+                $wanted = collect(explode(',', $request->role))
+                    ->map(fn($value) => trim($value))
+                    ->filter()
+                    ->values();
+
+                $roleIds = \App\Models\Role::query()
+                    ->whereIn('slug', $wanted->map(fn($value) => \Illuminate\Support\Str::slug($value))->all())
+                    ->orWhereIn('name', $wanted->all())
+                    ->orWhereIn('id', $wanted->filter(fn($value) => ctype_digit($value))->all())
+                    ->pluck('id');
+
+                $query->whereIn('designation_id', $roleIds);
+            }
+
             // Return limited/paginated active employees if limit parameter exists
             if ($request->filled('limit')) {
                 $employees = $query->paginate($request->limit);
+
+                $employees->through(function ($employee) {
+                    $data = $employee->toArray();
+
+                    unset($data['designation']);
+
+                    $data['role_id'] = $employee->designation ? $employee->designation->id : null;
+                    $data['role'] = $employee->designation ? $employee->designation->name : null;
+
+                    return $data;
+                });
+
                 return response()->json([
                     'status' => 200,
                     'message' => 'Active employees fetched successfully',
@@ -774,7 +808,17 @@ class EmployeeController extends Controller
                 ]);
             }
 
-            $employees = $query->latest()->get(['id', 'name', 'employee_code']);
+            $employees = $query->latest()
+                ->get(['id', 'name', 'employee_code', 'designation_id'])
+                ->map(function ($employee) {
+                    return [
+                        'id' => $employee->id,
+                        'name' => $employee->name,
+                        'employee_code' => $employee->employee_code,
+                        'role_id' => $employee->designation ? $employee->designation->id : null,
+                        'role' => $employee->designation ? $employee->designation->name : null,
+                    ];
+                });
 
             return response()->json([
                 'status' => 200,

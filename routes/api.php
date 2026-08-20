@@ -24,6 +24,7 @@ use App\Http\Controllers\Api\Admin\LeaveBalanceController;
 use App\Http\Controllers\Api\Admin\HolidayController;
 
 use App\Http\Controllers\Api\Admin\TrainingTypeController;
+use App\Http\Controllers\Api\Admin\TrainingController;
 
 use App\Http\Controllers\Api\Admin\AttendanceController;
 use App\Http\Controllers\Api\Admin\AttendanceController as AdminAttendanceController;
@@ -166,6 +167,7 @@ Route::prefix('v1')->group(function () {
         Route::get('incident-types', [IncidentTypeController::class, 'publicIndex']);
         Route::get('breakdown-types', [BreakdownTypeController::class, 'publicIndex']);
         Route::get('delay-categories', [DelayCategoryController::class, 'publicIndex']);
+        Route::get('training-types', [TrainingTypeController::class, 'publicIndex']);
         Route::get('shifts', [ShiftController::class, 'getPublicShifts']);
         Route::get('relays', [RelayController::class, 'getPublicRelays']);
         Route::get('employees', [EmployeeController::class, 'getPublicEmployees']);
@@ -255,6 +257,11 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('trainingtype', TrainingTypeController::class);
 
             Route::patch('trainingtype/{id}/status', [TrainingTypeController::class, 'toggleStatus']);
+
+            // Scheduled trainings. The status route is declared before the
+            // resource so it is not read as trainings/{id}.
+            Route::patch('trainings/{id}/status', [TrainingController::class, 'toggleStatus']);
+            Route::apiResource('trainings', TrainingController::class);
             Route::post('attendance/bulk-upload', [AttendanceController::class, 'bulkUpload']);
             Route::patch('attendance/bulk-status', [AttendanceController::class, 'bulkUpdateStatus']);
             Route::get('attendance/employee/{employee_id}', [AttendanceController::class, 'getEmployeeAttendanceDetails']);
