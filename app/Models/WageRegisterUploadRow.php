@@ -114,10 +114,21 @@ class WageRegisterUploadRow extends Model
     public function toPreview(): array
     {
         $errors = $this->errors ?: [];
+        $raw = $this->raw_data ?: [];
         $values = [];
 
         foreach (self::COLUMNS as [$field, , $type]) {
             $value = $this->{$field};
+
+            // A cell that failed parsing was never stored — a bad figure is
+            // refused rather than coerced, so the column is null. Showing that
+            // null would leave the table blank beside an error message quoting
+            // what was typed, and the user would have nothing to correct. So a
+            // failing cell shows the text as it came off the sheet.
+            if (isset($errors[$field]) && array_key_exists($field, $raw)) {
+                $values[$field] = $raw[$field];
+                continue;
+            }
 
             // A date attribute comes back as a Carbon instance, which serialises
             // to a UTC timestamp and can land a day earlier than the date the
