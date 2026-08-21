@@ -29,24 +29,58 @@ use Illuminate\Support\Facades\DB;
 class LeaveBalanceService
 {
     /**
-     * How many rest days in a month are paid.
+     * Fallback monthly paid-rest-day cap, used only when the Compensatory Rest
+     * block is missing from the leave master or carries no quota.
      *
      * Replaces the old per-employee employee_payrolls.rest_days setting, which
      * was reached through an Employee::rest_days accessor that no longer exists.
      * One establishment-wide number so payroll cannot vary person to person.
-     *
-     * Note this is a fresh cap each month, not a yearly budget: a worker with
-     * rest days in every month can be paid up to 4 x 12 across the year.
      */
     const MONTHLY_PAID_REST_DAYS = 4;
 
+    /** Memoised cap, so a per-employee listing does not re-query per row. */
+    protected static $monthlyPaidRestDays;
+
     /**
-     * The monthly paid-rest-day cap. Kept as a method so it can later read from
-     * the leave master or a settings table without touching the call sites.
+     * The monthly paid-rest-day cap, taken from the Compensatory Rest quota on
+     * the leave master rather than a constant, so an admin editing the annual
+     * quota moves payroll and attendance together.
+     *
+     * The stored quota is annual (48 days = 4 a month). It is floored, never
+     * rounded up: a cap that rounded up would pay out more rest days across the
+     * year than the quota actually grants. A positive quota below 12 cannot be
+     * expressed as a whole monthly cap at all, and is treated as one a month
+     * rather than flooring to zero — a zero cap would quietly stop paying rest
+     * days entirely, which is both the worse error and hard to tell from a
+     * month where none were marked.
+     *
+     * Note this is a fresh cap each month, not a yearly budget: a worker with
+     * rest days in every month can be paid up to the monthly cap x 12.
      */
     public static function monthlyPaidRestDays(): int
     {
-        return self::MONTHLY_PAID_REST_DAYS;
+        if (static::$monthlyPaidRestDays !== null) {
+            return static::$monthlyPaidRestDays;
+        }
+
+        try {
+            $annualQuota = (int) LeaveType::where('register_group', 'compensatory_rest')
+                ->value('allowed_days');
+        } catch (\Throwable $e) {
+            // Master unreadable (migrations not run yet, for instance) — fall
+            // back rather than break the payroll listing.
+            $annualQuota = 0;
+        }
+
+        return static::$monthlyPaidRestDays = $annualQuota > 0
+            ? max(1, intdiv($annualQuota, 12))
+            : self::MONTHLY_PAID_REST_DAYS;
+    }
+
+    /** Drop the memoised cap. Called after the leave master is edited. */
+    public static function forgetMonthlyPaidRestDays(): void
+    {
+        static::$monthlyPaidRestDays = null;
     }
 
     /**

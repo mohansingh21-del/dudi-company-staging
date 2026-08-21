@@ -143,6 +143,11 @@ class LeaveTypeController extends Controller
 
         $leaveType->update($payload);
 
+        // The Compensatory Rest quota is the source of the monthly paid rest-day
+        // cap, which is memoised. Drop it so a long-lived worker does not keep
+        // pricing rest days against the old quota.
+        \App\Services\LeaveBalanceService::forgetMonthlyPaidRestDays();
+
         return response()->json([
             'status' => 200,
             'message' => 'Leave Type updated successfully',
