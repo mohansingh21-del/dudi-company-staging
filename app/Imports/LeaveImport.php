@@ -99,6 +99,26 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
+            // Same monthly Compensatory Rest cap as the apply form. Rows are
+            // created as the sheet is walked, so an earlier row in this same
+            // upload is already counted by the time a later one is checked.
+            if ($leaveType->register_group === 'compensatory_rest') {
+
+                $capMessage = \App\Services\LeaveBalanceService::compRestLeaveCapMessage(
+                    $employee->id,
+                    $fromDate->toDateString(),
+                    $toDate->toDateString()
+                );
+
+                if ($capMessage) {
+                    $this->errors[] = [
+                        'row' => $index + 2,
+                        'message' => "Employee {$employee->employee_code}: {$capMessage}"
+                    ];
+                    continue;
+                }
+            }
+
             Leave::create([
                 'employee_id'   => $employee->id,
                 'leave_type_id' => $leaveType->id,

@@ -447,37 +447,19 @@ class WageRegisterService
      * Approved leave days falling inside the month, split paid vs unpaid. A
      * leave spanning a month boundary is clipped to the part inside it.
      */
+    /**
+     * Delegates to the payroll rule so the register and the payslip cannot
+     * count a month's leave differently. Days are distinct calendar dates, net
+     * of anything attendance already pays for — summing each leave's length
+     * double-counted overlapping leaves and leaves filed over worked days.
+     */
     protected function leaveSummary(array $ids, Carbon $monthStart, Carbon $monthEnd): array
     {
-        $leaves = Leave::whereIn('employee_id', $ids)
-            ->where('status', 'approved')
-            ->where(function ($q) use ($monthStart, $monthEnd) {
-                $q->whereBetween('from_date', [$monthStart, $monthEnd])
-                    ->orWhereBetween('to_date', [$monthStart, $monthEnd])
-                    ->orWhere(function ($q2) use ($monthStart, $monthEnd) {
-                        // Fully spans the month.
-                        $q2->where('from_date', '<', $monthStart)
-                            ->where('to_date', '>', $monthEnd);
-                    });
-            })
-            ->with('leaveType')
-            ->get();
-
-        $summary = [];
-
-        foreach ($leaves as $leave) {
-            $from = Carbon::parse($leave->from_date)->max($monthStart);
-            $to = Carbon::parse($leave->to_date)->min($monthEnd);
-            $days = $from->diffInDays($to) + 1;
-
-            $bucket = (optional($leave->leaveType)->leave_category === 'paid') ? 'paid' : 'unpaid';
-
-            $summary[$leave->employee_id]['paid'] = $summary[$leave->employee_id]['paid'] ?? 0;
-            $summary[$leave->employee_id]['unpaid'] = $summary[$leave->employee_id]['unpaid'] ?? 0;
-            $summary[$leave->employee_id][$bucket] += $days;
-        }
-
-        return $summary;
+        return LeaveBalanceService::monthlyLeaveDays(
+            $ids,
+            (int) $monthStart->month,
+            (int) $monthStart->year
+        );
     }
 
     /**

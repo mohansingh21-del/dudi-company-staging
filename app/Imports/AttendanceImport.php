@@ -19,6 +19,12 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
         $errors = [];
         $data = [];
 
+        // Rest days accepted so far in this sheet, keyed employee|YYYY-MM. The
+        // rows are not inserted until step 2, so the monthly cap has to count
+        // them itself or one upload could hand an employee a whole month of
+        // rest days.
+        $pendingRestDays = [];
+
         /*
         |--------------------------------------------------------------------------
         | STEP 1: NORMALIZE + VALIDATE
@@ -100,6 +106,29 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 $errors["row_{$rowNumber}"][] =
                     "Attendance already exists for {$employee->employee_code}.";
                 continue;
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | REST DAY MONTHLY CAP
+            |--------------------------------------------------------------------------
+            */
+            if ($status === 'rest_day') {
+                $monthKey = $employee->id . '|' . $date->format('Y-m');
+
+                $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
+                    $employee->id,
+                    $date->format('Y-m-d'),
+                    [],
+                    $pendingRestDays[$monthKey] ?? 0
+                );
+
+                if ($capMessage) {
+                    $errors["row_{$rowNumber}"][] = $capMessage;
+                    continue;
+                }
+
+                $pendingRestDays[$monthKey] = ($pendingRestDays[$monthKey] ?? 0) + 1;
             }
 
             /*

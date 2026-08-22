@@ -70,20 +70,60 @@ public function withValidator($validator)
             return;
         }
 
+        // Overlap, not just an exact date match. Matching only on identical
+        // from/to let an employee be booked on two different blocks for the same
+        // days, which double-counts on the register.
         $leaveExists = Leave::where(
             'employee_id',
             $this->employee_id
         )
-        ->whereDate('from_date', $this->from_date)
-        ->whereDate('to_date', $this->to_date)
+        ->where('status', '!=', 'rejected')
+        ->where(function ($query) {
+
+            $query->whereBetween('from_date', [
+                    $this->from_date,
+                    $this->to_date
+                ])
+                ->orWhereBetween('to_date', [
+                    $this->from_date,
+                    $this->to_date
+                ])
+                ->orWhere(function ($q) {
+
+                    $q->where('from_date', '<=', $this->from_date)
+                      ->where('to_date', '>=', $this->to_date);
+                });
+        })
         ->exists();
 
         if ($leaveExists) {
 
             $validator->errors()->add(
                 'from_date',
-                'A leave already exists for this employee with the same From Date and To Date.'
+                'Leave already exists or overlaps with another leave for this employee.'
             );
+
+            return;
+        }
+
+        // Compensatory Rest is capped per month, counting rest days already
+        // marked in attendance as well, so the two screens share one budget.
+        if ($this->leave_type_id) {
+
+            $leaveType = LeaveType::find($this->leave_type_id);
+
+            if ($leaveType && $leaveType->register_group === 'compensatory_rest') {
+
+                $capMessage = \App\Services\LeaveBalanceService::compRestLeaveCapMessage(
+                    (int) $this->employee_id,
+                    $this->from_date,
+                    $this->to_date
+                );
+
+                if ($capMessage) {
+                    $validator->errors()->add('leave_type_id', $capMessage);
+                }
+            }
         }
     });
 }

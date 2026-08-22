@@ -247,6 +247,24 @@ class AttendanceController extends Controller
                 $dbStatus = 'absent';
             }
 
+            // A correction cannot be used to slip past the monthly rest-day cap
+            // either. The row being corrected is excluded so a day already
+            // marked rest_day can still be re-saved.
+            if ($dbStatus === 'rest_day') {
+                $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
+                    $employee->id,
+                    $attendanceDate,
+                    $attendance ? [$attendance->id] : []
+                );
+
+                if ($capMessage) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => $capMessage
+                    ], 422);
+                }
+            }
+
             // Resolve shift
             $shift = $attendance ? $attendance->shift : null;
             $shiftId = $attendance ? $attendance->shift_id : null;
@@ -1195,6 +1213,24 @@ class AttendanceController extends Controller
             ]);
         }
 
+        // A month gives only so many rest days; past that the next one waits for
+        // the following month. Excludes this row so re-saving a day that is
+        // already a rest day is not read as a new one.
+        if ($request->attendance_status === 'rest_day') {
+            $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
+                $attendance->employee_id,
+                Carbon::parse($attendance->date)->format('Y-m-d'),
+                [$attendance->id]
+            );
+
+            if ($capMessage) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $capMessage
+                ], 422);
+            }
+        }
+
         $attendance->update([
             'attendance_status' => $request->attendance_status,
             'remarks' => $request->remarks
@@ -1265,6 +1301,40 @@ class AttendanceController extends Controller
                         $resolvedAttendanceIds[] = $record->id;
                     } else {
                         throw new \Exception("The selected ID {$id} is invalid.");
+                    }
+                }
+
+                // Same monthly rest-day cap as the single update, checked per
+                // employee. Days already marked rest_day are skipped, and days
+                // accepted earlier in this same batch are carried forward so one
+                // request cannot push an employee past the cap.
+                if ($request->attendance_status === 'rest_day') {
+                    $records = AttendanceProcessed::with('employee')
+                        ->whereIn('id', $resolvedAttendanceIds)
+                        ->get();
+
+                    $pendingByEmployee = [];
+
+                    foreach ($records as $record) {
+                        if ($record->attendance_status === 'rest_day') {
+                            continue;
+                        }
+
+                        $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
+                            $record->employee_id,
+                            $dateStr,
+                            [$record->id],
+                            $pendingByEmployee[$record->employee_id] ?? 0
+                        );
+
+                        if ($capMessage) {
+                            $code = optional($record->employee)->employee_code;
+
+                            throw new \Exception($code ? "{$code}: {$capMessage}" : $capMessage);
+                        }
+
+                        $pendingByEmployee[$record->employee_id] =
+                            ($pendingByEmployee[$record->employee_id] ?? 0) + 1;
                     }
                 }
 

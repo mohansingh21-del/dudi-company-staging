@@ -116,6 +116,29 @@ public function withValidator($validator)
                 'from_date',
                 'Leave already exists or overlaps with another leave for this employee.'
             );
+
+            return;
+        }
+
+        // Same monthly Compensatory Rest cap as applying. This leave is excluded
+        // from the count so its own days are not read as somebody else's.
+        if ($this->leave_type_id) {
+
+            $leaveType = LeaveType::find($this->leave_type_id);
+
+            if ($leaveType && $leaveType->register_group === 'compensatory_rest') {
+
+                $capMessage = \App\Services\LeaveBalanceService::compRestLeaveCapMessage(
+                    (int) $this->employee_id,
+                    $this->from_date,
+                    $this->to_date,
+                    $leaveId ? (int) $leaveId : null
+                );
+
+                if ($capMessage) {
+                    $validator->errors()->add('leave_type_id', $capMessage);
+                }
+            }
         }
     });
 }

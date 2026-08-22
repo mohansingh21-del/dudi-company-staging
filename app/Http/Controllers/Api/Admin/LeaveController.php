@@ -11,6 +11,7 @@ use App\Http\Resources\LeaveResource;
 use App\Http\Requests\ApproveLeaveRequest;
 use Illuminate\Support\Facades\Auth;
 use App\Imports\LeaveImport;
+use Carbon\Carbon;
 use Maatwebsite\Excel\Facades\Excel;
 class LeaveController extends Controller
 {
@@ -184,6 +185,29 @@ class LeaveController extends Controller
                 'status' => 400,
                 'message' => 'Leave already processed'
             ]);
+        }
+
+        // Backstop for the monthly Compensatory Rest cap. Applying already
+        // enforces it, but leaves that predate the rule or came in through the
+        // bulk sheet can still be sitting pending, and approving them should not
+        // put the month over. Excludes this leave so its own days are counted
+        // once, as the ones being added.
+        if ($request->status === 'approved'
+            && optional($leave->leaveType)->register_group === 'compensatory_rest') {
+
+            $capMessage = \App\Services\LeaveBalanceService::compRestLeaveCapMessage(
+                $leave->employee_id,
+                Carbon::parse($leave->from_date)->format('Y-m-d'),
+                Carbon::parse($leave->to_date)->format('Y-m-d'),
+                $leave->id
+            );
+
+            if ($capMessage) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $capMessage
+                ], 422);
+            }
         }
 
         $leave->update([

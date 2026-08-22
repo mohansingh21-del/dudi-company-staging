@@ -85,41 +85,15 @@ class PayrollController extends Controller
                 ->get()
                 ->keyBy('employee_id');
 
-            // Approved leaves per employee for the month (paid vs unpaid)
-            $leaves = Leave::whereIn('employee_id', $employeeIds)
-                ->where('status', 'approved')
-                ->where(function ($q) use ($month, $year) {
-                    $q->where(function ($q2) use ($month, $year) {
-                        $q2->whereMonth('from_date', $month)->whereYear('from_date', $year);
-                    })->orWhere(function ($q2) use ($month, $year) {
-                        $q2->whereMonth('to_date', $month)->whereYear('to_date', $year);
-                    });
-                })
-                ->with('leaveType')
-                ->get();
-
-            // Calculate leave days per employee (paid / unpaid)
-            $leaveSummary = [];
-            $monthStart = Carbon::create($year, $month, 1)->startOfDay();
-            $monthEnd = $monthStart->copy()->endOfMonth();
-
-            foreach ($leaves as $leave) {
-                $empId = $leave->employee_id;
-                if (!isset($leaveSummary[$empId])) {
-                    $leaveSummary[$empId] = ['paid' => 0, 'unpaid' => 0];
-                }
-
-                $from = Carbon::parse($leave->from_date)->max($monthStart);
-                $to = Carbon::parse($leave->to_date)->min($monthEnd);
-                $days = $from->diffInDays($to) + 1;
-
-                $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
-                if ($category === 'paid') {
-                    $leaveSummary[$empId]['paid'] += $days;
-                } else {
-                    $leaveSummary[$empId]['unpaid'] += $days;
-                }
-            }
+            // Approved leave days per employee, counted as distinct calendar
+            // dates and net of days attendance already pays for. Summing each
+            // leave's length double-paid any day two leaves overlapped on, and
+            // any day filed as leave that attendance had marked present.
+            $leaveSummary = \App\Services\LeaveBalanceService::monthlyLeaveDays(
+                $employeeIds->all(),
+                $month,
+                $year
+            );
 
             // Recoveries are capped at a percentage of each employee's gross
             // and carry into later months, so the amount cannot be summed up
@@ -352,7 +326,16 @@ class PayrollController extends Controller
 
             $generated = 0;
 
-            DB::transaction(function () use ($employees, $month, $year, $daysInMonth, $monthStart, $monthEnd, &$generated, $overtimeHoursMap, $overtimeRates) {
+            // Distinct leave dates per employee, net of days attendance already
+            // pays for. Same rule as the listing, so a generated payroll cannot
+            // disagree with the screen it was generated from.
+            $leaveSummary = \App\Services\LeaveBalanceService::monthlyLeaveDays(
+                $employees->pluck('id')->all(),
+                $month,
+                $year
+            );
+
+            DB::transaction(function () use ($employees, $month, $year, $daysInMonth, $monthStart, $monthEnd, &$generated, $overtimeHoursMap, $overtimeRates, $leaveSummary) {
                 foreach ($employees as $employee) {
 
                     // ── Attendance summary ──
@@ -373,29 +356,9 @@ class PayrollController extends Controller
                     $restDays = $attendance ? (int) $attendance->rest_days : 0;
 
                     // ── Leave breakdown (paid vs unpaid) ──
-                    $paidLeaveDays = 0;
-                    $unpaidLeaveDays = 0;
-                    $approvedLeaves = Leave::where('employee_id', $employee->id)
-                        ->where('status', 'approved')
-                        ->where(function ($q) use ($month, $year) {
-                            $q->where(function ($q2) use ($month, $year) {
-                                $q2->whereMonth('from_date', $month)->whereYear('from_date', $year);
-                            })->orWhere(function ($q2) use ($month, $year) {
-                                $q2->whereMonth('to_date', $month)->whereYear('to_date', $year);
-                            });
-                        })->with('leaveType')->get();
-
-                    foreach ($approvedLeaves as $leave) {
-                        $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
-                        $from = Carbon::parse($leave->from_date)->max($monthStart);
-                        $to = Carbon::parse($leave->to_date)->min($monthEnd);
-                        $days = $from->diffInDays($to) + 1;
-                        if ($category === 'paid') {
-                            $paidLeaveDays += $days;
-                        } else {
-                            $unpaidLeaveDays += $days;
-                        }
-                    }
+                    $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
+                    $paidLeaveDays = $empLeave['paid'];
+                    $unpaidLeaveDays = $empLeave['unpaid'];
 
                     // ── Holidays for this employee's site ──
                     $holidays = Holiday::whereMonth('holiday_date', $month)->whereYear('holiday_date', $year)
@@ -562,31 +525,16 @@ class PayrollController extends Controller
                 ->first();
 
             // ── Leave breakdown ──
-            $approvedLeaves = Leave::where('employee_id', $employeeId)
-                ->where('status', 'approved')
-                ->where(function ($q) use ($month, $year) {
-                    $q->where(function ($q2) use ($month, $year) {
-                        $q2->whereMonth('from_date', $month)->whereYear('from_date', $year);
-                    })->orWhere(function ($q2) use ($month, $year) {
-                        $q2->whereMonth('to_date', $month)->whereYear('to_date', $year);
-                    });
-                })
-                ->with('leaveType')
-                ->get();
+            // Distinct leave dates net of days attendance already pays for,
+            // same as the listing and the generate path.
+            $empLeave = \App\Services\LeaveBalanceService::monthlyLeaveDays(
+                [$employeeId],
+                $month,
+                $year
+            )[$employeeId] ?? ['paid' => 0, 'unpaid' => 0];
 
-            $paidLeaveDays = 0;
-            $unpaidLeaveDays = 0;
-            foreach ($approvedLeaves as $leave) {
-                $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
-                $from = Carbon::parse($leave->from_date)->max($monthStart);
-                $to = Carbon::parse($leave->to_date)->min($monthEnd);
-                $days = $from->diffInDays($to) + 1;
-                if ($category === 'paid') {
-                    $paidLeaveDays += $days;
-                } else {
-                    $unpaidLeaveDays += $days;
-                }
-            }
+            $paidLeaveDays = $empLeave['paid'];
+            $unpaidLeaveDays = $empLeave['unpaid'];
 
             // ── Holidays ──
             $holidays = Holiday::whereMonth('holiday_date', $month)
