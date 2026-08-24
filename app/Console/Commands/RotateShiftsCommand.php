@@ -94,7 +94,12 @@ class RotateShiftsCommand extends Command
                 // First run — seed from current employee_shift_assignments
                 $this->seedInitialMappings($rotatingRelays, $activeSequence, $weekStart, $weekEnd);
             } else {
-                // Rotate: each relay's shift moves to the next in the sequence
+                // Rotate: each relay's shift moves to the next in the sequence.
+                // Advancing every relay by one step preserves distinctness, so a
+                // collision here means the previous week's mappings were already
+                // inconsistent — skip and warn rather than write a duplicate.
+                $claimedShifts = [];
+
                 foreach ($rotatingRelays as $relay) {
                     $prevMapping = $latestMappings->firstWhere('relay_id', $relay->id);
 
@@ -104,6 +109,12 @@ class RotateShiftsCommand extends Command
 
                     $currentIndex = array_search($prevMapping->shift_id, $activeSequence);
                     $nextShiftId = $activeSequence[($currentIndex + 1) % count($activeSequence)];
+
+                    if (in_array($nextShiftId, $claimedShifts)) {
+                        $this->warn("Relay {$relay->name}: Shift {$nextShiftId} already claimed this week. Skipping.");
+                        continue;
+                    }
+                    $claimedShifts[] = $nextShiftId;
 
                     RelayShiftMapping::create([
                         'week_start_date' => $weekStart,
@@ -132,6 +143,10 @@ class RotateShiftsCommand extends Command
     {
         $this->info('No previous relay mappings found. Seeding from current employee assignments...');
 
+        // Each relay's most common shift is derived independently, so two relays
+        // can land on the same shift. Only the first may claim it.
+        $claimedShifts = [];
+
         foreach ($rotatingRelays as $relay) {
             // Find the most common shift_id for employees in this relay
             $mostCommonShiftId = EmployeeShiftAssignment::whereHas('employee', function ($q) use ($relay) {
@@ -142,7 +157,14 @@ class RotateShiftsCommand extends Command
                 ->orderByDesc('cnt')
                 ->value('shift_id');
 
+            if ($mostCommonShiftId && in_array($mostCommonShiftId, $claimedShifts)) {
+                $this->warn("Shift {$mostCommonShiftId} already claimed this week. Skipping Relay {$relay->name}.");
+                continue;
+            }
+
             if ($mostCommonShiftId && in_array($mostCommonShiftId, $activeSequence)) {
+                $claimedShifts[] = $mostCommonShiftId;
+
                 RelayShiftMapping::create([
                     'week_start_date' => $weekStart,
                     'week_end_date' => $weekEnd,

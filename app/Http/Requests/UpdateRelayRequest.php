@@ -33,16 +33,15 @@ class UpdateRelayRequest extends FormRequest
                         }
 
                         if ($isRotating) {
-                            $rotatingRelays = \App\Models\Relay::where('id', '!=', $relayId)
-                                ->where('is_active', 1)
-                                ->where('is_rotating', true)
-                                ->get();
+                            $holder = \App\Models\RelayShiftMapping::getHolderOfShift(
+                                $value,
+                                now()->toDateString(),
+                                $relayId
+                            );
 
-                            foreach ($rotatingRelays as $relay) {
-                                if ($relay->current_shift_id == $value) {
-                                    $fail('The selected shift is already assigned to another rotating relay.');
-                                    break;
-                                }
+                            if ($holder) {
+                                $name = $holder->relay ? $holder->relay->name : 'another relay';
+                                $fail("The selected shift is already assigned to {$name} for this week.");
                             }
                         }
                     }
