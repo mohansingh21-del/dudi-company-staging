@@ -24,32 +24,35 @@ class ShiftChangeController extends Controller
             $today = now()->toDateString();
             $weekStart = Carbon::parse($today)->startOfWeek(Carbon::MONDAY)->toDateString();
 
+            // Resolve each rotating relay's effective shift the same way Relay::getCurrentShiftIdAttribute()
+            // does: current week's mapping if present, else fall back to the latest mapping on record.
+            // An exact "week_start_date = this week's Monday" match would go empty whenever the weekly
+            // rotation job hasn't run yet, so it can't be pushed down as a plain whereHas() condition.
+            $relayCurrentShiftIds = \App\Models\Relay::where('is_active', 1)
+                ->where('is_rotating', 1)
+                ->get()
+                ->mapWithKeys(fn ($relay) => [$relay->id => $relay->current_shift_id]);
+
+            $resolvableRelayIds = $relayCurrentShiftIds->filter(fn ($shiftId) => $shiftId !== null)->keys()->toArray();
+
             $query = Employee::where('is_active', 1)
                 ->whereHas('relay', function ($q) {
                     $q->where('is_rotating', true);
                 })
-                ->where(function ($q) use ($weekStart) {
+                ->where(function ($q) use ($resolvableRelayIds) {
                     $q->whereHas('currentShiftAssignment')
-                      ->orWhereHas('relay', function ($sub) use ($weekStart) {
-                          $sub->whereHas('shiftMappings', function ($m) use ($weekStart) {
-                              $m->where('week_start_date', $weekStart);
-                          });
-                      });
+                      ->orWhereIn('relay_id', $resolvableRelayIds);
                 })
                 ->with(['currentShiftAssignment.shift', 'department', 'site', 'designation', 'supervisor', 'relay']);
 
             if ($request->filled('shift_id')) {
                 $requestedShiftId = $request->shift_id;
-                $query->where(function ($q) use ($requestedShiftId, $weekStart) {
+                $matchingRelayIds = $relayCurrentShiftIds->filter(fn ($shiftId) => $shiftId == $requestedShiftId)->keys()->toArray();
+                $query->where(function ($q) use ($requestedShiftId, $matchingRelayIds) {
                     $q->whereHas('currentShiftAssignment', function ($sub) use ($requestedShiftId) {
                         $sub->where('shift_id', $requestedShiftId);
                     })
-                    ->orWhereHas('relay', function ($sub) use ($requestedShiftId, $weekStart) {
-                        $sub->whereHas('shiftMappings', function ($m) use ($requestedShiftId, $weekStart) {
-                            $m->where('week_start_date', $weekStart)
-                              ->where('shift_id', $requestedShiftId);
-                        });
-                    });
+                    ->orWhereIn('relay_id', $matchingRelayIds);
                 });
             }
 

@@ -154,7 +154,7 @@ class Employee extends Model
         }
 
         // 2. Fallback to relay shift mapping for current week
-        if ($this->relay_id) {
+        if ($this->relay_id && $this->relay && $this->relay->is_rotating) {
             $mapping = RelayShiftMapping::getForDate($this->relay_id, now()->toDateString());
             if ($mapping) {
                 return $mapping->shift_id;

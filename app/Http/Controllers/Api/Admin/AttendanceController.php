@@ -234,11 +234,30 @@ class AttendanceController extends Controller
                 }
             }
 
-            if ($checkIn && $checkOut && $checkOut->lessThanOrEqualTo($checkIn)) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Check-out must be greater than check-in'
-                ], 422);
+            // Both times are parsed against the one attendance date, so a night
+            // shift's check-out lands before its own check-in until it is rolled
+            // onto the next day. Same rule the import applies.
+            if ($checkIn && $checkOut) {
+
+                if ($checkOut->equalTo($checkIn)) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Check-out cannot equal check-in'
+                    ], 422);
+                }
+
+                $checkOut = \App\Services\ShiftRosterResolver::resolveCheckOut($checkIn, $checkOut);
+
+                $spanHours = $checkIn->diffInMinutes($checkOut) / 60;
+
+                if ($spanHours > \App\Services\ShiftRosterResolver::MAX_ATTENDANCE_SPAN_HOURS) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Check-in to check-out spans ' . round($spanHours, 2)
+                            . ' hours, which exceeds the '
+                            . \App\Services\ShiftRosterResolver::MAX_ATTENDANCE_SPAN_HOURS . ' hour limit'
+                    ], 422);
+                }
             }
 
             $status = strtolower($data['attendance_status']);
@@ -2633,13 +2652,22 @@ class AttendanceController extends Controller
 
                 foreach ($leaves as $leave) {
                     $empId = $leave->employee_id;
-                    if (!isset($leaveSummary[$empId])) {
-                        $leaveSummary[$empId] = ['paid' => 0, 'unpaid' => 0];
+
+                    // Compensatory Rest leave (applied through Leave Management) gets
+                    // its own attendance_processeds row on approval and is counted as
+                    // rest_day from there — skip it here so it is not double counted
+                    // as a generic leave day too.
+                    if (optional($leave->leaveType)->register_group === 'compensatory_rest') {
+                        continue;
                     }
 
                     $from = Carbon::parse($leave->from_date)->max($monthStart);
                     $to = Carbon::parse($leave->to_date)->min($monthEnd);
                     $days = $from->diffInDays($to) + 1;
+
+                    if (!isset($leaveSummary[$empId])) {
+                        $leaveSummary[$empId] = ['paid' => 0, 'unpaid' => 0];
+                    }
 
                     $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
                     if ($category === 'paid') {
@@ -2656,6 +2684,9 @@ class AttendanceController extends Controller
                     $present = $att ? (int) $att->present_days : 0;
                     $absent = $att ? (int) $att->absent_days : 0;
                     $halfDay = $att ? (int) $att->half_days : 0;
+                    // An approved Compensatory Rest leave gets its own
+                    // attendance_processeds row (see LeaveController::syncAttendanceForLeave),
+                    // so rest_day reads from attendance alone — no separate add-on here.
                     $restDay = $att ? (int) $att->rest_days : 0;
                     $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
 
@@ -2672,6 +2703,7 @@ class AttendanceController extends Controller
                         'employee_id' => $employee->id,
                         'employee_name' => $employee->name,
                         'employee_code' => $employee->employee_code,
+                        'site_id' => $employee->site_id,
                         'site_name' => $employee->site ? $employee->site->site_name : null,
                         'total_days' => $daysInMonth,
                         'present' => $present,
@@ -2869,6 +2901,7 @@ class AttendanceController extends Controller
                             'shift_id' => $shiftId,
                             'employee_name' => $employee->name,
                             'employee_code' => $employee->employee_code,
+                            'site_id' => $employee->site_id,
                             'site_name' => $employee->site->site_name ?? null,
                             'relay_id' => $employee->relay_id,
                             'relay_name' => optional($employee->relay)->name,
@@ -2921,6 +2954,7 @@ class AttendanceController extends Controller
                             'shift_id' => $shiftId,
                             'employee_name' => $employee->name,
                             'employee_code' => $employee->employee_code,
+                            'site_id' => $employee->site_id,
                             'site_name' => $employee->site->site_name ?? null,
                             'relay_id' => $employee->relay_id,
                             'relay_name' => optional($employee->relay)->name,

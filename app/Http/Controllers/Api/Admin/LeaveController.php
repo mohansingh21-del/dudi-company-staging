@@ -215,12 +215,56 @@ class LeaveController extends Controller
             'approved_by' => Auth::id(),
         ]);
 
+        if ($request->status === 'approved') {
+            $this->syncAttendanceForLeave($leave);
+        }
+
         return response()->json([
             'status' => 200,
             'message' => 'Leave ' . $request->status . ' successfully',
             'data' => new LeaveResource($leave)
         ]);
     }
+
+    /**
+     * Give an approved leave a same-day row in attendance_processeds so the
+     * attendance views and payroll read one source instead of two.
+     * Compensatory Rest leave lands as 'rest_day', every other leave type as
+     * 'leave'. A day already backed by a real present/half_day record is left
+     * alone — attendance from actual work is not overwritten by a leave.
+     */
+    private function syncAttendanceForLeave(Leave $leave): void
+    {
+        $leave->loadMissing('leaveType');
+
+        $status = optional($leave->leaveType)->register_group === 'compensatory_rest'
+            ? 'rest_day'
+            : 'leave';
+
+        $from = Carbon::parse($leave->from_date)->startOfDay();
+        $to = Carbon::parse($leave->to_date)->startOfDay();
+
+        for ($day = $from->copy(); $day->lte($to); $day->addDay()) {
+            $record = \App\Models\AttendanceProcessed::firstOrNew([
+                'employee_id' => $leave->employee_id,
+                'date' => $day->format('Y-m-d'),
+            ]);
+
+            if ($record->exists && in_array($record->attendance_status, ['present', 'half_day'])) {
+                continue;
+            }
+
+            $record->fill([
+                'shift_id' => $record->shift_id ?: optional($leave->employee)->shift_id,
+                'attendance_status' => $status,
+                'working_hours' => $record->working_hours ?? 0.00,
+                'late_minutes' => $record->late_minutes ?? 0,
+                'early_exit_minutes' => $record->early_exit_minutes ?? 0,
+            ]);
+            $record->save();
+        }
+    }
+
     public function show(int $id)
     {
        $leave = Leave::with(['employee', 'leaveType', 'approver'])->find($id);
@@ -258,6 +302,10 @@ class LeaveController extends Controller
             'status' => $request->status,
             'approved_by' => $request->approved_by,
         ]);
+
+        if ($request->status === 'approved') {
+            $this->syncAttendanceForLeave($leave);
+        }
 
         return response()->json([
             'status' => 200,

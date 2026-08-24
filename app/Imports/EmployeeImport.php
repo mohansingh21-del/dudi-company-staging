@@ -197,6 +197,12 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
             '*.joining_date.required' =>
                 'Joining Date is required.',
 
+            '*.site.required' =>
+                'Site is required.',
+
+            '*.skill_category.required' =>
+                'Skill category is required.',
+
             '*.mobile.unique' =>
                 'Mobile number already exists.',
 
@@ -246,12 +252,12 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
             '*.service_book_no' => 'nullable|string|max:255',
 
             '*.employee_type' => ['nullable', $this->enumRule(self::TYPES, 'Employee type')],
-            '*.skill_category' => ['nullable', $this->enumRule(self::SKILLS, 'Skill category')],
+            '*.skill_category' => ['required', $this->enumRule(self::SKILLS, 'Skill category')],
             '*.place_of_employment' => ['nullable', $this->enumRule(self::PLACES, 'Place of employment')],
 
             '*.department' => ['nullable', $this->lookupRule(Department::class, 'name', 'Department')],
             '*.designation' => ['nullable', $this->lookupRule(Role::class, 'name', 'Designation')],
-            '*.site' => ['nullable', $this->lookupRule(Site::class, 'site_name', 'Site')],
+            '*.site' => ['required', $this->lookupRule(Site::class, 'site_name', 'Site')],
             '*.relay' => ['nullable', $this->relayRule()],
             '*.relay_shift' => ['nullable', $this->relayRule()],
 

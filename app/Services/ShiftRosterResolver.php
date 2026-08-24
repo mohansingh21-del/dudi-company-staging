@@ -29,6 +29,34 @@ class ShiftRosterResolver
     public const STANDARD_WORKING_HOURS = 8.0;
 
     /**
+     * Longest span a single attendance day may cover, in hours.
+     *
+     * Rolling a check-out past midnight is unconditional, so a day shift whose
+     * check-out was mistyped (09:00 to "06:00" instead of 16:00) would otherwise
+     * become a silent 21-hour day and inflate that day's overtime. No real shift
+     * here runs anywhere near this long, so anything above it is a bad row.
+     */
+    public const MAX_ATTENDANCE_SPAN_HOURS = 16.0;
+
+    /**
+     * The check-out belonging to a check-in, moved onto the next calendar day
+     * when the shift ran past midnight.
+     *
+     * Both times arrive stamped against one date — Excel gives a night shift as
+     * date 01-08, in 22:00, out 06:00 — so the raw check-out lands 16 hours
+     * before its own check-in. Same rule scheduledHours() applies to a shift's
+     * own clock: finishing at or before the start means the next day.
+     */
+    public static function resolveCheckOut(Carbon $checkIn, Carbon $checkOut): Carbon
+    {
+        $checkOut = $checkOut->copy();
+
+        return $checkOut->lessThanOrEqualTo($checkIn)
+            ? $checkOut->addDay()
+            : $checkOut;
+    }
+
+    /**
      * A shift's length is its own clock: end_time - start_time.
      * minimum_working_hours is a separate payroll threshold and does not always
      * agree with the times, so it is deliberately not used here.

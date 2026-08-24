@@ -54,21 +54,8 @@ class RelayController extends Controller
                 'is_active' => $request->input('is_active', true),
             ]);
 
-            if ($request->filled('shift_id')) {
-                $today = now();
-                $weekStart = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
-                $weekEnd = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->addDays(6)->toDateString();
-
-                \App\Models\RelayShiftMapping::updateOrCreate(
-                    [
-                        'week_start_date' => $weekStart,
-                        'relay_id' => $relay->id,
-                    ],
-                    [
-                        'week_end_date' => $weekEnd,
-                        'shift_id' => $request->shift_id,
-                    ]
-                );
+            if ($request->filled('shift_id') && $relay->is_rotating) {
+                $this->assignShiftToRelay($relay, $request->shift_id);
             }
 
             return response()->json([
@@ -113,27 +100,21 @@ class RelayController extends Controller
                 ], 404);
             }
 
+            if ($request->filled('shift_id') && (int) $request->shift_id === (int) $relay->current_shift_id) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'This shift is already assigned to this relay.'
+                ], 422);
+            }
+
             $relay->update([
                 'name' => $request->name,
                 'is_rotating' => $request->input('is_rotating', $relay->is_rotating),
                 'is_active' => $request->input('is_active', $relay->is_active),
             ]);
 
-            if ($request->filled('shift_id')) {
-                $today = now();
-                $weekStart = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
-                $weekEnd = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->addDays(6)->toDateString();
-
-                \App\Models\RelayShiftMapping::updateOrCreate(
-                    [
-                        'week_start_date' => $weekStart,
-                        'relay_id' => $relay->id,
-                    ],
-                    [
-                        'week_end_date' => $weekEnd,
-                        'shift_id' => $request->shift_id,
-                    ]
-                );
+            if ($request->filled('shift_id') && $relay->is_rotating) {
+                $this->assignShiftToRelay($relay, $request->shift_id);
             }
 
             return response()->json([
@@ -245,6 +226,34 @@ class RelayController extends Controller
                 'status' => 500,
                 'message' => $th->getMessage()
             ], 500);
+        }
+    }
+
+    /**
+     * Create/update this week's relay-shift mapping. Assigning a shift named
+     * "General" pins the relay out of the auto-rotation cycle going forward,
+     * since a manual General assignment means the relay is no longer rotating.
+     */
+    private function assignShiftToRelay(Relay $relay, $shiftId)
+    {
+        $today = now();
+        $weekStart = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
+        $weekEnd = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->addDays(6)->toDateString();
+
+        \App\Models\RelayShiftMapping::updateOrCreate(
+            [
+                'week_start_date' => $weekStart,
+                'relay_id' => $relay->id,
+            ],
+            [
+                'week_end_date' => $weekEnd,
+                'shift_id' => $shiftId,
+            ]
+        );
+
+        $shift = \App\Models\Shift::find($shiftId);
+        if ($shift && stripos($shift->shift_name, 'general') !== false) {
+            $relay->update(['is_rotating' => false]);
         }
     }
 }

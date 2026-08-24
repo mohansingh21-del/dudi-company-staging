@@ -180,9 +180,36 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 }
             }
 
-            if ($checkInTime && $checkOutTime && $checkOutTime->lessThanOrEqualTo($checkInTime)) {
-                $errors["row_{$rowNumber}"][] = "Check-out time must be after check-in time.";
-                continue;
+            /*
+            |--------------------------------------------------------------------------
+            | NIGHT SHIFT: ROLL CHECK-OUT PAST MIDNIGHT
+            |--------------------------------------------------------------------------
+            |
+            | The sheet carries one date per row, so parseTime() pins both times
+            | to it. A 22:00 to 06:00 night shift therefore arrives with a
+            | check-out that sits before its own check-in; the check-out really
+            | belongs to the next day.
+            */
+            if ($checkInTime && $checkOutTime) {
+
+                if ($checkOutTime->equalTo($checkInTime)) {
+                    $errors["row_{$rowNumber}"][] = "Check-out time cannot equal check-in time.";
+                    continue;
+                }
+
+                $checkOutTime = \App\Services\ShiftRosterResolver::resolveCheckOut(
+                    $checkInTime,
+                    $checkOutTime
+                );
+
+                $spanHours = $checkInTime->diffInMinutes($checkOutTime) / 60;
+
+                if ($spanHours > \App\Services\ShiftRosterResolver::MAX_ATTENDANCE_SPAN_HOURS) {
+                    $errors["row_{$rowNumber}"][] =
+                        "Check-in to check-out spans " . round($spanHours, 2) . " hours, which exceeds the "
+                        . \App\Services\ShiftRosterResolver::MAX_ATTENDANCE_SPAN_HOURS . " hour limit.";
+                    continue;
+                }
             }
 
             /*
