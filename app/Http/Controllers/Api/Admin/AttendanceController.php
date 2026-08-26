@@ -346,7 +346,10 @@ class AttendanceController extends Controller
                     $resultAttendance = AttendanceProcessed::create([
                         'employee_id' => $employee->id,
                         'shift_id' => $shiftId,
-                        'place_of_work' => $placeOfWork,
+                        // A new day starts at the worker's standing assignment
+                        // so Form D column 4 is never blank; a later correction
+                        // overrides it with where they actually were.
+                        'place_of_work' => $placeOfWork ?: $employee->place_of_employment,
                         'date' => $attendanceDate,
                         'check_in' => $checkIn,
                         'check_out' => $checkOut,
@@ -1207,7 +1210,7 @@ class AttendanceController extends Controller
     public function show(int $id)
     {
         try {
-            $employee = AttendanceProcessed::find($id);
+            $employee = AttendanceProcessed::with(['employee.site', 'employee.relay', 'shift'])->find($id);
             if (!$employee) {
                 return response()->json(['status' => 404, 'message' => 'Employee not found']);
             }
@@ -1308,6 +1311,7 @@ class AttendanceController extends Controller
                                 'date' => $dateStr
                             ], [
                                 'shift_id' => $employee->shift_id,
+                                'place_of_work' => $employee->place_of_employment,
                                 'attendance_status' => 'absent',
                                 'working_hours' => 0.00,
                                 'late_minutes' => 0,
@@ -1381,7 +1385,7 @@ class AttendanceController extends Controller
 
             return response()->json([
                 'status' => 200,
-                'message' => 'Attendance statuses updated successfully'
+                'message' => 'Attendance status updated successfully'
             ]);
         } catch (\Throwable $th) {
             return response()->json([

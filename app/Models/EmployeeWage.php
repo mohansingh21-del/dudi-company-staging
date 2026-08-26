@@ -73,26 +73,6 @@ class EmployeeWage extends Model
     }
 
     /**
-     * The monthly pay a payroll month is priced at.
-     *
-     * A payroll month must be priced at the rate that was in force that month,
-     * not at whatever the master says today — otherwise generating a month that
-     * is still pending would pay it at a later revision's rate. Callers pass
-     * the effectiveSet() map for the month being generated and the figure
-     * frozen on employee_payrolls; the higher of the two wins, so a
-     * revision lifts everyone on the statutory minimum while an above-minimum
-     * salary keeps its own figure. An employee with no skill category, or a
-     * category with no rate configured, keeps the stored figure.
-     */
-    public static function monthlyPay(array $rates, ?string $skillCategory, $storedBasic): float
-    {
-        $stored = (float) $storedBasic;
-        $wage = $skillCategory ? ($rates[$skillCategory] ?? null) : null;
-
-        return $wage ? max((float) $wage->basic_salary, $stored) : $stored;
-    }
-
-    /**
      * The revision in force on a date — the latest one that had already taken
      * effect by then.
      */

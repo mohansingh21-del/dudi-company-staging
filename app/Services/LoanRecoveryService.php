@@ -178,6 +178,10 @@ class LoanRecoveryService
 
             $lines[] = [
                 'penalty_id' => $recovery->id,
+                // Same precedence the ordering above uses.
+                'date' => optional(
+                    $recovery->calculation_date ?? $recovery->penalty_date
+                )->toDateString(),
                 'recovery_type' => $recovery->calculation_recovery_type
                     ?? $recovery->recovery_type,
                 'particulars' => $recovery->calculation_particulars

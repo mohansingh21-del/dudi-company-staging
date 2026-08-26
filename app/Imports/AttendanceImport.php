@@ -283,6 +283,9 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
             AttendanceProcessed::create([
                 'employee_id' => $employee->id,
                 'date' => $date->format('Y-m-d'),
+                // Imported rows carry no location, so the day inherits the
+                // worker's standing assignment; a correction can override it.
+                'place_of_work' => $employee->place_of_employment,
                 'check_in' => $checkIn ? $checkIn->toDateTimeString() : null,
                 'check_out' => $checkOut ? $checkOut->toDateTimeString() : null,
                 'working_hours' => $workingHours,

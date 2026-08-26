@@ -289,11 +289,23 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
     }
 
     /**
+     * Columns whose value must stay as the sheet gave it: a date cell arrives
+     * as an Excel serial or a DateTime, and parseDate needs it that way.
+     */
+    private const RAW_COLUMNS = ['dob', 'joining_date', 'date_of_exit'];
+
+    /**
      * Checks that need the whole row, which per-column rules cannot see:
      * date formats and the exit-after-joining ordering.
      */
     public function withValidator($validator)
     {
+        // A numeric-looking cell ("122", a mobile number) reaches us as an int,
+        // which fails `string` and makes `max:15` compare sizes instead of
+        // lengths. prepareForValidation is not called on the ToCollection path,
+        // so the cast has to happen here, before the rules run.
+        $validator->setData($this->stringifyCells($validator->getData()));
+
         $validator->after(function ($validator) {
 
             foreach ($validator->getData() as $index => $row) {
@@ -326,6 +338,31 @@ class EmployeeImport implements ToCollection, WithHeadingRow, WithValidation
                 }
             }
         });
+    }
+
+    /**
+     * Numbers become strings so the text rules see text. Dates, blanks and
+     * anything that is not a plain number are left exactly as they were.
+     */
+    private function stringifyCells(array $rows): array
+    {
+        foreach ($rows as $index => $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            foreach ($row as $column => $value) {
+                if (in_array($column, self::RAW_COLUMNS, true)) {
+                    continue;
+                }
+
+                if (is_int($value) || is_float($value)) {
+                    $rows[$index][$column] = (string) $value;
+                }
+            }
+        }
+
+        return $rows;
     }
 
     /**

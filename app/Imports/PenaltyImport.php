@@ -34,6 +34,10 @@ class PenaltyImport implements ToCollection, WithHeadingRow, WithValidation
                 'year' => $parsedDate->year,
                 'reason' => $row['reason'],
                 'amount' => $row['amount'],
+
+                // Snapshot: required for LoanRecoveryService to pick this up
+                'calculation_amount' => $row['amount'],
+                'calculation_date' => $parsedDate->toDateString(),
             ]);
         }
     }

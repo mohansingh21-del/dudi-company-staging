@@ -98,6 +98,21 @@ class EmployeePayroll extends Model
         $this->attributes['aadhaar_hash']   = hash('sha256', $digits);
     }
 
+    /**
+     * The monthly pay a payroll month is priced at.
+     *
+     * An employee's salary comes from their payroll record and nowhere else.
+     * The wage master (employee_wages) is a minimum-wage reference that
+     * prefills this figure when a payroll is assigned — it never prices a
+     * month on its own, or revising a rate would silently rewrite pay that was
+     * already assigned. An employee with no active payroll has no assigned
+     * salary, so the month is priced at 0 until one is created.
+     */
+    public static function monthlyPay($payroll): float
+    {
+        return (float) optional($payroll)->basic_salary;
+    }
+
     public function employee()
     {
         return $this->belongsTo(Employee::class);

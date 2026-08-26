@@ -143,13 +143,10 @@ class PayrollController extends Controller
                 $unpaidRestDays = max(0, $restDays - $paidRestDays);
 
                 // ── Salary Calculation (per documentation) ──
-                // Priced at the rate in force in the month being listed, not
-                // whatever the wage master says today.
-                $basicSalary = \App\Models\EmployeeWage::monthlyPay(
-                    $overtimeRates,
-                    $employee->skill_category,
-                    optional($activePayroll)->basic_salary
-                );
+                // Salary comes from the employee's payroll record only. With no
+                // payroll assigned there is no salary to list, not a figure
+                // borrowed from the wage master.
+                $basicSalary = \App\Models\EmployeePayroll::monthlyPay($activePayroll);
                 $shiftAllowance = 0;
                 $incentives = 0;
 
@@ -369,13 +366,8 @@ class PayrollController extends Controller
 
                     // ── Earnings ──
                     $activePayroll = $employee->activePayroll;
-                    // Priced at the rate in force in the month being generated,
-                    // so a month still pending is paid at its own rate.
-                    $basicSalary = \App\Models\EmployeeWage::monthlyPay(
-                        $overtimeRates,
-                        $employee->skill_category,
-                        optional($activePayroll)->basic_salary
-                    );
+                    // Salary comes from the employee's payroll record only.
+                    $basicSalary = \App\Models\EmployeePayroll::monthlyPay($activePayroll);
                     $shiftAllowance = 0;
                     $incentives = 0;
                     // Absence is priced against the monthly entitlement only —
@@ -557,17 +549,13 @@ class PayrollController extends Controller
 
             $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
                 ->overtimeSummary([$employee->id], $month, $year);
-            // Fetched before basic salary below, which is priced from the same
-            // month's revision.
+            // The wage master supplies the overtime rate only; basic salary
+            // comes from the employee's payroll record.
             $overtimeRates = \App\Models\EmployeeWage::effectiveSet(
                 Carbon::create($year, $month, 1)->endOfMonth()->toDateString()
             );
 
-            $basicSalary = \App\Models\EmployeeWage::monthlyPay(
-                $overtimeRates,
-                $employee->skill_category,
-                optional($activePayroll)->basic_salary
-            );
+            $basicSalary = \App\Models\EmployeePayroll::monthlyPay($activePayroll);
             $shiftAllowance = 0;
             $incentives = 0;
             // Absence is priced against the monthly entitlement only — overtime
@@ -872,11 +860,8 @@ class PayrollController extends Controller
                     ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
                     : 0.0;
 
-                $grossSalary = \App\Models\EmployeeWage::monthlyPay(
-                    $overtimeRates,
-                    $employee->skill_category,
-                    optional($employee->activePayroll)->basic_salary
-                ) + round($overtimeHours * $overtimeRate, 2);
+                $grossSalary = \App\Models\EmployeePayroll::monthlyPay($employee->activePayroll)
+                    + round($overtimeHours * $overtimeRate, 2);
             }
 
             $recoveryPlan = app(\App\Services\LoanRecoveryService::class)
@@ -887,6 +872,7 @@ class PayrollController extends Controller
             $formattedPenalties = collect($recoveryPlan['lines'])->map(function ($line) {
                 return [
                     'id' => $line['penalty_id'],
+                    'date' => $line['date'],
                     'recovery_type' => $line['recovery_type'],
                     'particulars' => $line['particulars'],
                     'reason' => $line['reason'],

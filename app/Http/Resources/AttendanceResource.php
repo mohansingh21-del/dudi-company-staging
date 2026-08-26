@@ -19,7 +19,19 @@ class AttendanceResource extends JsonResource
 
             'employee_name' => optional($this->employee)->name,
             'employee_code' => optional($this->employee)->employee_code,
+
+            // Site and relay live on the employee, not on the attendance row.
+            // Kept in step with the keys index() returns so both endpoints
+            // feed the same shape to the frontend.
+            'site_id' => optional($this->employee)->site_id,
+            'site_name' => optional(optional($this->employee)->site)->site_name,
+            'relay_id' => optional($this->employee)->relay_id,
+            'relay_name' => optional(optional($this->employee)->relay)->name,
+
             'shift_name' => optional($this->shift)->shift_name,
+
+            'place_of_work' => $this->place_of_work,
+            'place_of_work_label' => $this->place_of_work_label,
 
             'date' => $this->date
                 ? Carbon::parse($this->date)->format('d M Y')
@@ -38,6 +50,9 @@ class AttendanceResource extends JsonResource
             'early_exit_minutes' => $this->early_exit_minutes,
 
             'attendance_status' => $this->attendance_status,
+            'attendance_status_label' => $this->attendance_status
+                ? ucwords(str_replace('_', ' ', $this->attendance_status))
+                : null,
             'remarks' => $this->remarks,
 
             'created_at' => $this->created_at,
