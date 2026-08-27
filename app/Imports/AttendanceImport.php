@@ -71,21 +71,59 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
             | CLEAN STATUS + TIME
             |--------------------------------------------------------------------------
             */
-            $status = strtolower(trim((string) ($row['status'] ?? 'present')));
+            $statusRaw = trim((string) ($row['status'] ?? ''));
+
+            $status = strtolower($statusRaw);
             $status = str_replace(['-', '_'], ' ', $status);
             $status = preg_replace('/\s+/', ' ', $status);
 
+            // A blank status column still means an ordinary working day, as it
+            // always has.
+            if ($status === '') {
+                $status = 'present';
+            }
+
+            // Keys are matched after the normalisation above, which folds case
+            // and turns '-' and '_' into single spaces: 'Half-Day', 'half_day'
+            // and 'HALF DAY' all arrive here as 'half day'. The shorthands are
+            // the ones site clerks actually write into the sheet.
             $statusMap = [
-                'present'   => 'present',
-                'absent'    => 'absent',
-                'half day'  => 'half_day',
-                'half_day'  => 'half_day',
-                'leave'     => 'leave',
-                'rest day'  => 'rest_day',
-                'rest_day'  => 'rest_day',
+                'present'    => 'present',
+                'p'          => 'present',
+
+                'absent'     => 'absent',
+                'a'          => 'absent',
+
+                'half day'   => 'half_day',
+                'halfday'    => 'half_day',
+                'half'       => 'half_day',
+                'hd'         => 'half_day',
+
+                'leave'      => 'leave',
+                'l'          => 'leave',
+
+                'rest day'   => 'rest_day',
+                'restday'    => 'rest_day',
+                'rest'       => 'rest_day',
+                'weekly off' => 'rest_day',
+                'week off'   => 'rest_day',
+                'weekoff'    => 'rest_day',
+                'off'        => 'rest_day',
+                'wo'         => 'rest_day',
+                'w/o'        => 'rest_day',
             ];
 
-            $status = $statusMap[$status] ?? $status;
+            // An unrecognised status used to fall straight through to the
+            // 'present' default of the insert switch below, so a typo or an
+            // unknown shorthand became a paid working day with no check-in and
+            // no error. Reject the row instead.
+            if (!isset($statusMap[$status])) {
+                $errors["row_{$rowNumber}"][] =
+                    "Unknown status \"{$statusRaw}\". Use one of: Present, Absent, Half Day, Leave, Rest Day.";
+                continue;
+            }
+
+            $status = $statusMap[$status];
 
             $checkInRaw = trim((string) ($row['check_in'] ?? ''));
             $checkOutRaw = trim((string) ($row['check_out'] ?? ''));
@@ -259,26 +297,9 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 );
             }
 
-            switch ($status) {
-                case 'present':
-                    $attendanceStatus = 'present';
-                    break;
-                case 'absent':
-                    $attendanceStatus = 'absent';
-                    break;
-                case 'half_day':
-                    $attendanceStatus = 'half_day';
-                    break;
-                case 'leave':
-                    $attendanceStatus = 'leave';
-                    break;
-                case 'rest_day':
-                    $attendanceStatus = 'rest_day';
-                    break;
-                default:
-                    $attendanceStatus = 'present';
-                    break;
-            }
+            // Already one of the attendance_status enum values: step 1 rejects
+            // every row whose status the map does not recognise.
+            $attendanceStatus = $status;
 
             AttendanceProcessed::create([
                 'employee_id' => $employee->id,

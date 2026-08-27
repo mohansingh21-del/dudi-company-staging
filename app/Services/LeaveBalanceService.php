@@ -196,6 +196,38 @@ class LeaveBalanceService
     }
 
     /**
+     * Split a date range into how many of its days fall in each calendar year.
+     *
+     * The annual quota is a per-year entitlement, so a leave straddling
+     * 31 December spends days out of two different years' budgets.
+     *
+     * @return array  [YYYY => int days]
+     */
+    public static function daysByYear(string $fromDate, string $toDate): array
+    {
+        $from = Carbon::parse($fromDate)->startOfDay();
+        $to = Carbon::parse($toDate)->startOfDay();
+
+        if ($to->lt($from)) {
+            return [];
+        }
+
+        $years = [];
+        $cursor = $from->copy();
+
+        while ($cursor->lte($to)) {
+            $yearEnd = $cursor->copy()->endOfYear();
+            $sliceEnd = $yearEnd->lt($to) ? $yearEnd : $to;
+
+            $years[(int) $cursor->format('Y')] = $cursor->diffInDays($sliceEnd) + 1;
+
+            $cursor = $sliceEnd->copy()->addDay()->startOfDay();
+        }
+
+        return $years;
+    }
+
+    /**
      * Guard for applying Compensatory Rest leave.
      *
      * Checked month by month, so a leave straddling a month boundary is only
@@ -260,6 +292,91 @@ class LeaveBalanceService
 
         return "Rest day limit reached for {$month}: {$used} of {$cap} allowed rest days are already marked. "
             . 'The next rest day can only be assigned in the following month.';
+    }
+
+    /**
+     * Days already booked against one leave block in one calendar year.
+     *
+     * Pending applications count alongside approved ones, for the same reason
+     * compRestLeaveDaysInMonth() counts them: a queue of pending leaves could
+     * otherwise be approved past the quota one by one.
+     *
+     * A leave spanning a year boundary is clipped to the year asked for, the
+     * same way availedMap() clips.
+     */
+    public static function leaveDaysInYear(
+        int $employeeId,
+        int $leaveTypeId,
+        int $year,
+        ?int $excludeLeaveId = null
+    ): int {
+        $start = Carbon::create($year, 1, 1)->format('Y-m-d');
+        $end = Carbon::create($year, 12, 31)->format('Y-m-d');
+
+        $query = DB::table('leaves')
+            ->where('employee_id', $employeeId)
+            ->where('leave_type_id', $leaveTypeId)
+            ->whereIn('status', ['pending', 'approved'])
+            ->whereDate('from_date', '<=', $end)
+            ->whereDate('to_date', '>=', $start);
+
+        if ($excludeLeaveId) {
+            $query->where('id', '!=', $excludeLeaveId);
+        }
+
+        return (int) $query->sum(
+            DB::raw("DATEDIFF(LEAST(to_date, '{$end}'), GREATEST(from_date, '{$start}')) + 1")
+        );
+    }
+
+    /**
+     * Guard for the annual entitlement on a leave block.
+     *
+     * allowed_days on the leave master is a yearly quota. Nothing used to check
+     * it at the point of applying: canApply() only asks whether a quota was
+     * configured at all, so leave past the entitlement saved cleanly and then
+     * disappeared into the register's max(0, ...) floor on the closing balance,
+     * with no one told the balance had run out.
+     *
+     * Checked year by year, so a leave straddling 31 December is only refused
+     * for the year that is actually exhausted.
+     *
+     * Unpaid blocks are not metered and are never refused. Compensatory Rest
+     * carries a monthly cap as well - see compRestLeaveCapMessage(), a tighter
+     * guard applied alongside this one, not instead of it.
+     *
+     * Returns null when the leave may be filed, or the refusal message.
+     */
+    public static function annualQuotaMessage(
+        LeaveType $leaveType,
+        int $employeeId,
+        string $fromDate,
+        string $toDate,
+        ?int $excludeLeaveId = null
+    ): ?string {
+        if (! $leaveType->isMetered()) {
+            return null;
+        }
+
+        $quota = (int) $leaveType->allowed_days;
+
+        foreach (static::daysByYear($fromDate, $toDate) as $year => $adding) {
+            $used = static::leaveDaysInYear($employeeId, $leaveType->id, $year, $excludeLeaveId);
+
+            if ($used + $adding <= $quota) {
+                continue;
+            }
+
+            $remaining = max(0, $quota - $used);
+
+            return "{$leaveType->name} balance is exhausted for {$year}: {$quota} days are allowed, "
+                . "{$used} are already booked, and this leave adds {$adding} more. "
+                . ($remaining > 0
+                    ? "Only {$remaining} day" . ($remaining === 1 ? '' : 's') . ' can still be taken this year.'
+                    : 'No days are left for this year.');
+        }
+
+        return null;
     }
 
     /**

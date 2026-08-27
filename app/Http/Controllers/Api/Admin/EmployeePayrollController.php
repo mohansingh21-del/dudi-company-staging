@@ -150,7 +150,6 @@ class EmployeePayrollController extends Controller
                 'other_deduction' => $data['other_deduction'] ?? 0,
                 'pf_amount' => $data['pf_amount'] ?? 0,
                 'mess_deduction_amount' => $data['mess_deduction_amount'] ?? 0,
-                'rest_days' => $data['rest_days'] ?? 0,
                 'is_active' => true
             ]);
 

@@ -119,6 +119,24 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 }
             }
 
+            // Same annual entitlement check as the apply form. Rows are created
+            // as the sheet is walked, so an earlier row in this same upload is
+            // already counted by the time a later one is checked.
+            $quotaMessage = \App\Services\LeaveBalanceService::annualQuotaMessage(
+                $leaveType,
+                $employee->id,
+                $fromDate->toDateString(),
+                $toDate->toDateString()
+            );
+
+            if ($quotaMessage) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Employee {$employee->employee_code}: {$quotaMessage}"
+                ];
+                continue;
+            }
+
             Leave::create([
                 'employee_id'   => $employee->id,
                 'leave_type_id' => $leaveType->id,

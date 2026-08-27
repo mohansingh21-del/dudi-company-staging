@@ -75,7 +75,6 @@ class StoreEmployeePayrollRequest extends FormRequest
     'other_deduction' => 'nullable|numeric|min:0',
     'pf_amount' => 'nullable|numeric|min:0',
     'mess_deduction_amount' => 'nullable|numeric|min:0',
-    'rest_days' => 'nullable|integer|min:0|max:31',
 
 ];
     }

@@ -124,6 +124,23 @@ public function withValidator($validator)
                     $validator->errors()->add('leave_type_id', $capMessage);
                 }
             }
+
+            // The annual entitlement itself. Leave past allowed_days used to
+            // save cleanly and then vanish into the register's floored closing
+            // balance, so the employee was never told the block had run out.
+            if ($leaveType) {
+
+                $quotaMessage = \App\Services\LeaveBalanceService::annualQuotaMessage(
+                    $leaveType,
+                    (int) $this->employee_id,
+                    $this->from_date,
+                    $this->to_date
+                );
+
+                if ($quotaMessage) {
+                    $validator->errors()->add('leave_type_id', $quotaMessage);
+                }
+            }
         }
     });
 }

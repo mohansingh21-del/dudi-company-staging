@@ -139,6 +139,24 @@ public function withValidator($validator)
                     $validator->errors()->add('leave_type_id', $capMessage);
                 }
             }
+
+            // The annual entitlement, this leave excluded for the same reason:
+            // editing a leave that already fits its quota must not read its own
+            // days as somebody else's and refuse the edit.
+            if ($leaveType) {
+
+                $quotaMessage = \App\Services\LeaveBalanceService::annualQuotaMessage(
+                    $leaveType,
+                    (int) $this->employee_id,
+                    $this->from_date,
+                    $this->to_date,
+                    $leaveId ? (int) $leaveId : null
+                );
+
+                if ($quotaMessage) {
+                    $validator->errors()->add('leave_type_id', $quotaMessage);
+                }
+            }
         }
     });
 }

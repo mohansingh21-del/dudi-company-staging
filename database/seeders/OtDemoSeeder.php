@@ -151,7 +151,9 @@ class OtDemoSeeder extends Seeder
         // leave_types is a fixed four-row master owned by its own migration, so it
         // is left alone here — only the allowances are opened up enough for the
         // demo leaves to sit inside them.
-        DB::table('leave_types')->where('register_group', 'compensatory_rest')->update(['allowed_days' => 4]);
+        // allowed_days is an ANNUAL quota: monthlyPaidRestDays() divides it by 12.
+        // 48 = the 4 paid rest days a month the demo attendance actually marks.
+        DB::table('leave_types')->where('register_group', 'compensatory_rest')->update(['allowed_days' => 48]);
         DB::table('leave_types')->where('register_group', 'medical')->update(['allowed_days' => 7]);
         DB::table('leave_types')->where('register_group', 'other')->update(['allowed_days' => 30]);
 

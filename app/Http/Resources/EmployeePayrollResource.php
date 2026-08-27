@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Services\LeaveBalanceService;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class EmployeePayrollResource extends JsonResource
@@ -72,7 +73,13 @@ class EmployeePayrollResource extends JsonResource
             'other_deduction' => $this->other_deduction,
             'pf_amount' => $this->pf_amount,
             'mess_deduction_amount' => $this->mess_deduction_amount,
-            'rest_days' => $this->rest_days,
+
+            // Display only. The paid-rest-day cap is establishment-wide and
+            // lives on the leave master, not on this row: the employee_payrolls
+            // .rest_days column it used to come from is dead (always 0, read by
+            // nothing) and is deliberately not exposed. Payroll and attendance
+            // read this same accessor, so the screen matches what they pay.
+            'rest_days' => LeaveBalanceService::monthlyPaidRestDays(),
 
             'is_active' => $this->is_active
         ];

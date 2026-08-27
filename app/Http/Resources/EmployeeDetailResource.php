@@ -133,7 +133,6 @@ class EmployeeDetailResource extends JsonResource
                 'other_deduction_appliacble' => $payroll->other_deduction_appliacble,
                 'other_deduction' => $payroll->other_deduction,
 
-                'rest_days' => $payroll->rest_days,
                 'effective_from' => optional($payroll->effective_from)->format('d F Y'),
                 'is_active' => $payroll->is_active,
             ] : null,
