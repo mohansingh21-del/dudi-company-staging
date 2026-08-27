@@ -10,6 +10,8 @@ class AttendanceResource extends JsonResource
 {
     public function toArray($request)
     {
+        $leaveType = \App\Services\AttendanceLeaveSync::leaveTypeForDay($this->employee_id, $this->date);
+
         return [
 
             'id' => $this->id,
@@ -53,6 +55,12 @@ class AttendanceResource extends JsonResource
             'attendance_status_label' => $this->attendance_status
                 ? ucwords(str_replace('_', ' ', $this->attendance_status))
                 : null,
+
+            // Leave type lives on the backing `leaves` row, not on this table.
+            // Null for present/absent/half_day.
+            'leave_type_id' => $leaveType['leave_type_id'],
+            'leave_type_name' => $leaveType['leave_type_name'],
+
             'remarks' => $this->remarks,
 
             'created_at' => $this->created_at,

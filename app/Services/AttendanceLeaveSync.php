@@ -211,6 +211,79 @@ class AttendanceLeaveSync
             ->first();
     }
 
+    /**
+     * The leave type backing one attendance day, for read endpoints.
+     * `['leave_type_id' => int|null, 'leave_type_name' => string|null]`.
+     *
+     * Prefers a same-day attendance-sourced row (what `sync()` writes), then
+     * falls back to any non-rejected leave whose range covers the day — so a
+     * multi-day manual leave still shows its type on each attendance row.
+     */
+    public static function leaveTypeForDay(int $employeeId, string $date): array
+    {
+        $day = Carbon::parse($date)->format('Y-m-d');
+
+        $leave = Leave::with('leaveType:id,name')
+            ->where('employee_id', $employeeId)
+            ->where('status', '!=', 'rejected')
+            ->whereDate('from_date', '<=', $day)
+            ->whereDate('to_date', '>=', $day)
+            ->orderByRaw("source = 'attendance' desc")
+            ->orderByRaw('DATEDIFF(to_date, from_date) asc')
+            ->first();
+
+        return [
+            'leave_type_id' => $leave ? $leave->leave_type_id : null,
+            'leave_type_name' => $leave ? optional($leave->leaveType)->name : null,
+        ];
+    }
+
+    /**
+     * Same as leaveTypeForDay() but batched for a list of attendance rows.
+     * Returns `[attendance_id => ['leave_type_id' => ..., 'leave_type_name' => ...]]`.
+     *
+     * @param  iterable  $attendances  AttendanceProcessed models (need id, employee_id, date)
+     */
+    public static function leaveTypeMap($attendances): array
+    {
+        $attendances = collect($attendances);
+        $map = [];
+
+        if ($attendances->isEmpty()) {
+            return $map;
+        }
+
+        $days = $attendances->map(fn ($a) => Carbon::parse($a->date)->format('Y-m-d'));
+
+        $leaves = Leave::with('leaveType:id,name')
+            ->whereIn('employee_id', $attendances->pluck('employee_id')->unique()->all())
+            ->where('status', '!=', 'rejected')
+            ->whereDate('from_date', '<=', $days->max())
+            ->whereDate('to_date', '>=', $days->min())
+            ->get(['id', 'employee_id', 'from_date', 'to_date', 'leave_type_id', 'source'])
+            // Attendance-sourced first, then shortest range — the closest match
+            // to the day wins when several leaves overlap it.
+            ->sortByDesc(fn ($lv) => $lv->source === 'attendance')
+            ->values();
+
+        foreach ($attendances as $att) {
+            $day = Carbon::parse($att->date)->format('Y-m-d');
+
+            $match = $leaves->first(function ($lv) use ($att, $day) {
+                return $lv->employee_id == $att->employee_id
+                    && $day >= Carbon::parse($lv->from_date)->format('Y-m-d')
+                    && $day <= Carbon::parse($lv->to_date)->format('Y-m-d');
+            });
+
+            $map[$att->id] = [
+                'leave_type_id' => $match ? $match->leave_type_id : null,
+                'leave_type_name' => $match ? optional($match->leaveType)->name : null,
+            ];
+        }
+
+        return $map;
+    }
+
     /** Any non-rejected leave covering $day on this block, whatever its source. */
     protected static function leaveOnBlock(int $employeeId, string $day, int $leaveTypeId): ?Leave
     {

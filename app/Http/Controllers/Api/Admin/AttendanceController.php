@@ -786,6 +786,7 @@ class AttendanceController extends Controller
                 while ($curr->lte($to)) {
                     $leaveDays[$curr->format('Y-m-d')] = [
                         'status' => 'Leave',
+                        'leave_type_id' => $leave->leave_type_id,
                         'leave_type' => optional($leave->leaveType)->name ?? 'Leave',
                         'is_paid' => optional($leave->leaveType)->leave_category === 'paid',
                     ];
@@ -841,10 +842,15 @@ class AttendanceController extends Controller
                     $status = 'Weekend';
                 }
 
+                // Leave type comes from the backing `leaves` row keyed by date.
+                $dayLeave = $leaveDays[$dateString] ?? null;
+
                 $history[] = [
                     'date' => $dateString,
                     'formatted_date' => $carbonDate->format('d/m/Y'),
                     'status' => $status,
+                    'leave_type_id' => $dayLeave['leave_type_id'] ?? null,
+                    'leave_type_name' => $dayLeave['leave_type'] ?? null,
                     'check_in' => $checkIn,
                     'check_out' => $checkOut,
                     'duration' => $durationFormatted,
@@ -3037,6 +3043,10 @@ class AttendanceController extends Controller
                         $shiftId = $item->shift_id
                             ?: $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
 
+                        $leaveType = in_array($item->attendance_status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)
+                            ? \App\Services\AttendanceLeaveSync::leaveTypeForDay($employee->id, $dateStr)
+                            : ['leave_type_id' => null, 'leave_type_name' => null];
+
                         $data[] = [
                             'id' => $item->id,
                             'employee_id' => $employee->id,
@@ -3060,6 +3070,8 @@ class AttendanceController extends Controller
                             'attendance_status_label' => $item->attendance_status
                                 ? ucwords(str_replace('_', ' ', $item->attendance_status))
                                 : null,
+                            'leave_type_id' => $leaveType['leave_type_id'],
+                            'leave_type_name' => $leaveType['leave_type_name'],
                             'remarks' => $item->remarks,
                             'created_at' => $item->created_at,
                             'updated_at' => $item->updated_at,
@@ -3090,6 +3102,10 @@ class AttendanceController extends Controller
                         // for $dateStr, so use the date-aware resolver instead.
                         $shiftId = $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
 
+                        $leaveType = $status === 'leave'
+                            ? \App\Services\AttendanceLeaveSync::leaveTypeForDay($employee->id, $dateStr)
+                            : ['leave_type_id' => null, 'leave_type_name' => null];
+
                         $data[] = [
                             'id' => null,
                             'employee_id' => $employee->id,
@@ -3109,6 +3125,8 @@ class AttendanceController extends Controller
                             'early_exit_minutes' => 0,
                             'attendance_status' => $status,
                             'attendance_status_label' => ucwords(str_replace('_', ' ', $status)),
+                            'leave_type_id' => $leaveType['leave_type_id'],
+                            'leave_type_name' => $leaveType['leave_type_name'],
                             'remarks' => null,
                             'created_at' => null,
                             'updated_at' => null,
