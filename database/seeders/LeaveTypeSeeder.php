@@ -46,7 +46,7 @@ class LeaveTypeSeeder extends Seeder
                     'is_active' => true,
                 ]);
 
-                $this->command?->info("Leave type restored: {$attributes['name']} ({$group})");
+                $this->log("Leave type restored: {$attributes['name']} ({$group})");
                 continue;
             }
 
@@ -56,7 +56,18 @@ class LeaveTypeSeeder extends Seeder
                 'is_active' => true,
             ]);
 
-            $this->command?->info("Leave type created: {$attributes['name']} ({$group})");
+            $this->log("Leave type created: {$attributes['name']} ({$group})");
+        }
+    }
+
+    /**
+     * Console output, guarded for when the seeder runs outside an Artisan
+     * command (e.g. from a tinker call) where $this->command is null.
+     */
+    private function log(string $message)
+    {
+        if ($this->command) {
+            $this->command->info($message);
         }
     }
 }

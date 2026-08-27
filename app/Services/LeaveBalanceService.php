@@ -162,8 +162,57 @@ class LeaveBalanceService
         array $excludeAttendanceIds = [],
         ?int $excludeLeaveId = null
     ): int {
-        return static::attendanceRestDaysInMonth($employeeId, $date, $excludeAttendanceIds)
-            + static::compRestLeaveDaysInMonth($employeeId, $date, $excludeLeaveId);
+        $month = Carbon::parse($date);
+        $start = $month->copy()->startOfMonth();
+        $end = $month->copy()->endOfMonth();
+
+        // Distinct calendar dates, not a sum. A rest day marked in attendance now
+        // also carries a Compensatory Rest leave row (AttendanceLeaveSync), and a
+        // Compensatory Rest leave carries an attendance row, so almost every rest
+        // day sits in both places. Summing the two sources would count it twice
+        // and halve the effective monthly cap.
+        $dates = [];
+
+        $attQuery = DB::table((new AttendanceProcessed)->getTable())
+            ->where('employee_id', $employeeId)
+            ->where('attendance_status', 'rest_day')
+            ->whereBetween('date', [$start->format('Y-m-d'), $end->format('Y-m-d')]);
+
+        $excludeAttendanceIds = array_filter($excludeAttendanceIds);
+
+        if ($excludeAttendanceIds) {
+            $attQuery->whereNotIn('id', $excludeAttendanceIds);
+        }
+
+        foreach ($attQuery->pluck('date') as $attDate) {
+            $dates[Carbon::parse($attDate)->format('Y-m-d')] = true;
+        }
+
+        $typeId = LeaveType::where('register_group', 'compensatory_rest')->value('id');
+
+        if ($typeId) {
+            $leaveQuery = DB::table('leaves')
+                ->where('employee_id', $employeeId)
+                ->where('leave_type_id', $typeId)
+                ->whereIn('status', ['pending', 'approved'])
+                ->whereDate('from_date', '<=', $end->format('Y-m-d'))
+                ->whereDate('to_date', '>=', $start->format('Y-m-d'));
+
+            if ($excludeLeaveId) {
+                $leaveQuery->where('id', '!=', $excludeLeaveId);
+            }
+
+            foreach ($leaveQuery->get(['from_date', 'to_date']) as $leave) {
+                $from = Carbon::parse($leave->from_date)->startOfDay()->max($start);
+                $to = Carbon::parse($leave->to_date)->startOfDay()->min($end);
+
+                for ($day = $from->copy(); $day->lte($to); $day->addDay()) {
+                    $dates[$day->format('Y-m-d')] = true;
+                }
+            }
+        }
+
+        return count($dates);
     }
 
     /**

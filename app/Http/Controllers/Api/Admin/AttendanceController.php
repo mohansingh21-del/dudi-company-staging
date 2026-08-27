@@ -266,6 +266,13 @@ class AttendanceController extends Controller
                 $dbStatus = 'absent';
             }
 
+            // A day marked leave/rest_day must be backed by a Leave row so the
+            // register and payroll read one source; a day marked worked/absent
+            // must not silently bury a leave someone filed by hand.
+            // 'leave' + a Compensatory Rest type folds to a rest day first.
+            $leaveTypeId = $request->filled('leave_type_id') ? (int) $request->input('leave_type_id') : null;
+            [$dbStatus, $leaveTypeId] = \App\Services\AttendanceLeaveSync::normalize($dbStatus, $leaveTypeId);
+
             // A correction cannot be used to slip past the monthly rest-day cap
             // either. The row being corrected is excluded so a day already
             // marked rest_day can still be re-saved.
@@ -280,6 +287,34 @@ class AttendanceController extends Controller
                     return response()->json([
                         'status' => 422,
                         'message' => $capMessage
+                    ], 422);
+                }
+            }
+
+            if (in_array($dbStatus, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                try {
+                    $syncLeaveType = \App\Services\AttendanceLeaveSync::resolveLeaveType($dbStatus, $leaveTypeId);
+                } catch (\InvalidArgumentException $e) {
+                    return response()->json(['status' => 422, 'message' => $e->getMessage()], 422);
+                }
+
+                $blockMessage = \App\Services\AttendanceLeaveSync::blockMessage(
+                    $employee->id,
+                    $attendanceDate,
+                    $syncLeaveType
+                );
+
+                if ($blockMessage) {
+                    return response()->json(['status' => 422, 'message' => $blockMessage], 422);
+                }
+            } else {
+                $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($employee->id, $attendanceDate);
+
+                if ($manualLeave) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'An approved leave in Leave Management covers ' . $attendanceDate
+                            . '. Cancel it there before changing this day.',
                     ], 422);
                 }
             }
@@ -323,7 +358,7 @@ class AttendanceController extends Controller
             $placeOfWork = $request->filled('place_of_work') ? $request->input('place_of_work') : null;
 
             $resultAttendance = null;
-            DB::transaction(function () use (&$attendance, $employee, $shiftId, $attendanceDate, $checkIn, $checkOut, $workingHours, $lateMinutes, $earlyExitMinutes, $dbStatus, $remarks, $placeOfWork, &$resultAttendance) {
+            DB::transaction(function () use (&$attendance, $employee, $shiftId, $attendanceDate, $checkIn, $checkOut, $workingHours, $lateMinutes, $earlyExitMinutes, $dbStatus, $leaveTypeId, $remarks, $placeOfWork, &$resultAttendance) {
                 if ($attendance) {
                     $payload = [
                         'check_in' => $checkIn,
@@ -359,6 +394,18 @@ class AttendanceController extends Controller
                         'attendance_status' => $dbStatus,
                         'remarks' => $remarks,
                     ]);
+                }
+
+                // Keep the backing Leave row in step with the day.
+                if (in_array($dbStatus, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                    \App\Services\AttendanceLeaveSync::sync(
+                        $employee->id,
+                        $attendanceDate,
+                        $dbStatus,
+                        $leaveTypeId
+                    );
+                } else {
+                    \App\Services\AttendanceLeaveSync::clear($employee->id, $attendanceDate);
                 }
             });
 
@@ -1223,6 +1270,7 @@ class AttendanceController extends Controller
     {
         $request->validate([
             'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
+            'leave_type_id' => 'required_if:attendance_status,leave|nullable|integer|exists:leave_types,id',
             'remarks' => 'nullable|string'
         ]);
 
@@ -1235,13 +1283,18 @@ class AttendanceController extends Controller
             ]);
         }
 
+        $attendanceDate = Carbon::parse($attendance->date)->format('Y-m-d');
+        $leaveTypeId = $request->filled('leave_type_id') ? (int) $request->input('leave_type_id') : null;
+        // 'leave' + a Compensatory Rest type folds to a rest day.
+        [$status, $leaveTypeId] = \App\Services\AttendanceLeaveSync::normalize($request->attendance_status, $leaveTypeId);
+
         // A month gives only so many rest days; past that the next one waits for
         // the following month. Excludes this row so re-saving a day that is
         // already a rest day is not read as a new one.
-        if ($request->attendance_status === 'rest_day') {
+        if ($status === 'rest_day') {
             $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
                 $attendance->employee_id,
-                Carbon::parse($attendance->date)->format('Y-m-d'),
+                $attendanceDate,
                 [$attendance->id]
             );
 
@@ -1253,10 +1306,49 @@ class AttendanceController extends Controller
             }
         }
 
-        $attendance->update([
-            'attendance_status' => $request->attendance_status,
-            'remarks' => $request->remarks
-        ]);
+        // Keep attendance and Leave Management in step: a leave/rest_day needs a
+        // backing Leave row (on the block the caller named, or Compensatory Rest
+        // for a rest day); any other status must not overwrite a hand-filed leave.
+        if (in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+            try {
+                $syncLeaveType = \App\Services\AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json(['status' => 422, 'message' => $e->getMessage()], 422);
+            }
+
+            $blockMessage = \App\Services\AttendanceLeaveSync::blockMessage(
+                $attendance->employee_id,
+                $attendanceDate,
+                $syncLeaveType
+            );
+
+            if ($blockMessage) {
+                return response()->json(['status' => 422, 'message' => $blockMessage], 422);
+            }
+        } else {
+            $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($attendance->employee_id, $attendanceDate);
+
+            if ($manualLeave) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'An approved leave in Leave Management covers ' . $attendanceDate
+                        . '. Cancel it there before changing this day.',
+                ], 422);
+            }
+        }
+
+        DB::transaction(function () use ($attendance, $request, $status, $attendanceDate, $leaveTypeId) {
+            $attendance->update([
+                'attendance_status' => $status,
+                'remarks' => $request->remarks
+            ]);
+
+            if (in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                \App\Services\AttendanceLeaveSync::sync($attendance->employee_id, $attendanceDate, $status, $leaveTypeId);
+            } else {
+                \App\Services\AttendanceLeaveSync::clear($attendance->employee_id, $attendanceDate);
+            }
+        });
 
         return response()->json([
             'status' => 200,
@@ -1270,6 +1362,7 @@ class AttendanceController extends Controller
             'attendance_ids' => 'required|array|min:1',
             'attendance_ids.*' => 'integer',
             'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
+            'leave_type_id' => 'required_if:attendance_status,leave|nullable|integer|exists:leave_types,id',
             'remarks' => 'nullable|string',
             'date' => 'nullable|date_format:Y-m-d',
             'from_date' => 'nullable|date_format:Y-m-d',
@@ -1277,11 +1370,24 @@ class AttendanceController extends Controller
 
         $date = $request->input('date') ?: $request->input('from_date') ?: today()->format('Y-m-d');
         $dateStr = \Carbon\Carbon::parse($date)->format('Y-m-d');
+        $leaveTypeId = $request->filled('leave_type_id') ? (int) $request->input('leave_type_id') : null;
+        // 'leave' + a Compensatory Rest type folds to a rest day for the batch.
+        [$status, $leaveTypeId] = \App\Services\AttendanceLeaveSync::normalize($request->attendance_status, $leaveTypeId);
+        $isLeaveStatus = in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true);
+
+        // Same block for every row in the batch; resolve it once.
+        if ($isLeaveStatus) {
+            try {
+                \App\Services\AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json(['status' => 422, 'message' => $e->getMessage()], 422);
+            }
+        }
 
         try {
             $resolvedAttendanceIds = [];
 
-            DB::transaction(function () use ($request, $dateStr, &$resolvedAttendanceIds) {
+            DB::transaction(function () use ($request, $dateStr, $status, $leaveTypeId, $isLeaveStatus, &$resolvedAttendanceIds) {
                 foreach ($request->attendance_ids as $id) {
                     $recordByAttendanceId = AttendanceProcessed::where('id', $id)
                         ->whereDate('date', $dateStr)
@@ -1331,7 +1437,7 @@ class AttendanceController extends Controller
                 // employee. Days already marked rest_day are skipped, and days
                 // accepted earlier in this same batch are carried forward so one
                 // request cannot push an employee past the cap.
-                if ($request->attendance_status === 'rest_day') {
+                if ($status === 'rest_day') {
                     $records = AttendanceProcessed::with('employee')
                         ->whereIn('id', $resolvedAttendanceIds)
                         ->get();
@@ -1361,26 +1467,58 @@ class AttendanceController extends Controller
                     }
                 }
 
-                if ($request->attendance_status === 'present') {
-                    $attendances = AttendanceProcessed::whereIn('id', $resolvedAttendanceIds)->get();
-                    foreach ($attendances as $attendance) {
-                        $hasLeave = Leave::where('employee_id', $attendance->employee_id)
-                            ->where('status', 'approved')
-                            ->whereDate('from_date', '<=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
-                            ->whereDate('to_date', '>=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
-                            ->exists();
+                $records = AttendanceProcessed::with('employee')
+                    ->whereIn('id', $resolvedAttendanceIds)
+                    ->get();
 
-                        if ($hasLeave) {
-                            throw new \Exception("Cannot mark attendance as Present. Approved leave exists for employee on " . \Carbon\Carbon::parse($attendance->date)->format('Y-m-d') . ".");
+                foreach ($records as $record) {
+                    $recordDate = \Carbon\Carbon::parse($record->date)->format('Y-m-d');
+                    $code = optional($record->employee)->employee_code;
+
+                    if ($isLeaveStatus) {
+                        // Quota / cap / clash gates — the same ones the Leave
+                        // apply form enforces, so a leave entered from attendance
+                        // cannot push a block past its entitlement.
+                        $syncType = \App\Services\AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
+                        $blockMessage = \App\Services\AttendanceLeaveSync::blockMessage(
+                            $record->employee_id,
+                            $recordDate,
+                            $syncType
+                        );
+
+                        if ($blockMessage) {
+                            throw new \Exception($code ? "{$code}: {$blockMessage}" : $blockMessage);
+                        }
+                    } else {
+                        // A worked/absent status must not silently bury a leave
+                        // someone filed by hand in Leave Management.
+                        $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($record->employee_id, $recordDate);
+
+                        if ($manualLeave) {
+                            throw new \Exception(
+                                ($code ? "{$code}: " : '')
+                                . "An approved leave in Leave Management covers {$recordDate}. Cancel it there first."
+                            );
                         }
                     }
                 }
 
                 AttendanceProcessed::whereIn('id', $resolvedAttendanceIds)->update([
-                    'attendance_status' => $request->attendance_status,
+                    'attendance_status' => $status,
                     'remarks' => $request->remarks,
                     'updated_at' => now()
                 ]);
+
+                // Keep each day's backing Leave row in step with the new status.
+                foreach ($records as $record) {
+                    $recordDate = \Carbon\Carbon::parse($record->date)->format('Y-m-d');
+
+                    if ($isLeaveStatus) {
+                        \App\Services\AttendanceLeaveSync::sync($record->employee_id, $recordDate, $status, $leaveTypeId);
+                    } else {
+                        \App\Services\AttendanceLeaveSync::clear($record->employee_id, $recordDate);
+                    }
+                }
             });
 
             return response()->json([

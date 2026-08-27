@@ -5,6 +5,8 @@ namespace App\Imports;
 use App\Models\AttendanceProcessed;
 use App\Models\Employee;
 use App\Models\EmployeePayroll;
+use App\Models\LeaveType;
+use App\Services\AttendanceLeaveSync;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -124,6 +126,70 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
             }
 
             $status = $statusMap[$status];
+
+            /*
+            |--------------------------------------------------------------------------
+            | LEAVE TYPE (only for 'Leave' rows)
+            |--------------------------------------------------------------------------
+            |
+            | A 'Leave' day has to be booked against a Form E block so the leave
+            | register and payroll can see it. The 'leave_type' column carries
+            | the block name; a blank or unknown value rejects the row rather
+            | than saving a day that counts toward nothing.
+            |
+            | 'Rest Day' as a status needs no column. 'Leave' + a Compensatory
+            | Rest type is accepted too and folded to a rest day — the two
+            | spellings mean the same thing.
+            */
+            $leaveTypeId = null;
+
+            if ($status === 'leave') {
+                $leaveTypeRaw = trim((string) ($row['leave_type'] ?? ''));
+
+                if ($leaveTypeRaw === '') {
+                    $errors["row_{$rowNumber}"][] =
+                        'Leave type is required for a Leave row. '
+                        . 'Use one of: ' . $this->leaveTypeNameList() . ', Compensatory Rest.';
+                    continue;
+                }
+
+                $leaveType = $this->resolveLeaveType($leaveTypeRaw);
+
+                if (!$leaveType) {
+                    $errors["row_{$rowNumber}"][] =
+                        "Unknown leave type \"{$leaveTypeRaw}\". Use one of: "
+                        . $this->leaveTypeNameList() . ', Compensatory Rest.';
+                    continue;
+                }
+
+                $leaveTypeId = $leaveType->id;
+            }
+
+            // 'Leave' + Compensatory Rest is really a rest day: store it as one,
+            // let it draw on the rest-day cap, and drop the leave type.
+            [$status, $leaveTypeId] = AttendanceLeaveSync::normalize($status, $leaveTypeId);
+
+            // Quota / cap / clash gates for anything that becomes a Leave row —
+            // the same checks the Leave apply form runs.
+            if (in_array($status, AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                try {
+                    $syncType = AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
+
+                    $blockMessage = AttendanceLeaveSync::blockMessage(
+                        $employee->id,
+                        $date->format('Y-m-d'),
+                        $syncType
+                    );
+
+                    if ($blockMessage) {
+                        $errors["row_{$rowNumber}"][] = $blockMessage;
+                        continue;
+                    }
+                } catch (\InvalidArgumentException $e) {
+                    $errors["row_{$rowNumber}"][] = $e->getMessage();
+                    continue;
+                }
+            }
 
             $checkInRaw = trim((string) ($row['check_in'] ?? ''));
             $checkOutRaw = trim((string) ($row['check_out'] ?? ''));
@@ -261,6 +327,7 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 'payroll' => $payroll,
                 'date' => $date,
                 'status' => $status,
+                'leave_type_id' => $leaveTypeId,
                 'check_in' => $checkInTime,
                 'check_out' => $checkOutTime,
                 'remarks' => $row['remarks'] ?? null,
@@ -315,7 +382,42 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 'attendance_status' => $attendanceStatus,
                 'remarks' => $item['remarks'],
             ]);
+
+            // A leave/rest_day row also gets its backing Leave record so the
+            // Form E register and payroll read one source.
+            if (in_array($attendanceStatus, AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                AttendanceLeaveSync::sync(
+                    $employee->id,
+                    $date->format('Y-m-d'),
+                    $attendanceStatus,
+                    $item['leave_type_id']
+                );
+            }
         }
+    }
+
+    /**
+     * Match a leave type named in the sheet to a Form E block. Accepts the block
+     * name ('Earned Leave'), the register_group key ('earned') or its label.
+     */
+    private function resolveLeaveType(string $raw): ?LeaveType
+    {
+        $needle = strtolower(trim($raw));
+
+        return LeaveType::onRegister()->get()->first(function (LeaveType $type) use ($needle) {
+            return $needle === strtolower((string) $type->name)
+                || $needle === strtolower((string) $type->register_group)
+                || $needle === strtolower((string) $type->register_group_label);
+        });
+    }
+
+    /** Human list of the leave blocks a sheet may name, for error messages. */
+    private function leaveTypeNameList(): string
+    {
+        return LeaveType::onRegister()
+            ->where('register_group', '!=', 'compensatory_rest')
+            ->pluck('name')
+            ->implode(', ');
     }
 
     public function rules(): array
@@ -326,6 +428,7 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
             '*.check_in' => ['nullable'],
             '*.check_out' => ['nullable'],
             '*.status' => ['nullable'],
+            '*.leave_type' => ['nullable'],
             '*.remarks' => ['nullable'],
         ];
     }
