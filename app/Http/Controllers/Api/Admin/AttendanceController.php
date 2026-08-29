@@ -1107,8 +1107,14 @@ class AttendanceController extends Controller
                     $totalDays += 0.5;
                 }
 
-                if ($record->place_of_work) {
-                    $placesWorked[$record->place_of_work] = true;
+                // Place of work is not captured when attendance is marked, so
+                // it reads through from the worker's standing assignment the
+                // way their name does. A value stored on the day - a correction
+                // recording where they actually were - still wins.
+                $dayPlace = $record->place_of_work ?: $employee->place_of_employment;
+
+                if ($dayPlace) {
+                    $placesWorked[$dayPlace] = true;
                 }
 
                 // Overtime is whatever was worked beyond the shift the employee
@@ -1131,7 +1137,7 @@ class AttendanceController extends Controller
                     'in' => $record->check_in ? Carbon::parse($record->check_in)->format('H:i') : null,
                     'out' => $record->check_out ? Carbon::parse($record->check_out)->format('H:i') : null,
                     'status' => $record->attendance_status,
-                    'place_of_work' => $record->place_of_work,
+                    'place_of_work' => $dayPlace,
                     'ot_hours' => $otHours,
                 ];
             }
@@ -1139,6 +1145,12 @@ class AttendanceController extends Controller
             // Column 4 is a single cell, so a worker moved between locations
             // during the month shows every location they were recorded at.
             $places = array_keys($placesWorked);
+
+            // A worker with no attendance at all this month still has a place:
+            // column 4 falls back to the employee record so it is never blank.
+            if (empty($places) && $employee->place_of_employment) {
+                $places = [$employee->place_of_employment];
+            }
 
             $rows[] = [
                 'serial_no' => $serial++,
