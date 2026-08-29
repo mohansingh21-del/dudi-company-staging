@@ -533,4 +533,73 @@ class LoanRecoveryService
             ])->all(),
         ];
     }
+
+    /**
+     * The gross a month's 25% cap is measured against: the employee's
+     * monthly pay plus overtime actually worked in that month.
+     */
+    public function grossSalaryFor(
+        \App\Models\Employee $employee,
+        int $month,
+        int $year
+    ): float {
+        $periodEnd = \Carbon\Carbon::create($year, $month, 1)->endOfMonth();
+
+        $overtimeHours = round(
+            app(\App\Services\WageRegisterService::class)
+                ->overtimeSummary([$employee->id], $month, $year)[$employee->id] ?? 0,
+            2
+        );
+
+        $rates = \App\Models\EmployeeWage::effectiveSet($periodEnd->toDateString());
+        $rate = isset($rates[$employee->skill_category]) && $rates[$employee->skill_category]
+            ? (float) $rates[$employee->skill_category]->overtime_rate
+            : 0.0;
+
+        return \App\Models\EmployeePayroll::monthlyPay($employee->activePayroll)
+            + round($overtimeHours * $rate, 2);
+    }
+
+    /**
+     * Work out the installment plan for an amount about to be saved.
+     *
+     * The caller may choose when recovery starts; how many installments
+     * it takes and when it ends are consequences of the 25% cap, not
+     * inputs, so they are always computed here rather than trusted from
+     * the request.
+     *
+     * Shared by the single-penalty form and the Excel import so both
+     * store the same schedule fields.
+     */
+    public function scheduleFor(
+        \App\Models\Employee $employee,
+        float $amount,
+        \Carbon\Carbon $penaltyDate,
+        ?int $firstMonth = null,
+        ?int $firstYear = null
+    ): array {
+        $startMonth = $firstMonth ?: $penaltyDate->month;
+        $startYear = $firstYear ?: $penaltyDate->year;
+
+        $projection = $this->projectSchedule(
+            $employee->id,
+            $this->grossSalaryFor($employee, $startMonth, $startYear),
+            $amount,
+            $penaltyDate->toDateString(),
+            $startMonth,
+            $startYear
+        );
+
+        return [
+            'installment_amount' => $projection['installment_amount'],
+            'number_of_installments' => $projection['number_of_installments'] ?: null,
+            // Recovery can begin later than requested when older
+            // recoveries are still consuming the monthly budget.
+            'first_month' => $projection['first_month'] ?? $startMonth,
+            'first_year' => $projection['first_year'] ?? $startYear,
+            'last_month' => $projection['last_month'],
+            'last_year' => $projection['last_year'],
+            'date_of_complete_recovery' => $projection['date_of_complete_recovery'],
+        ];
+    }
 }

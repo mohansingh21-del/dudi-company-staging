@@ -702,24 +702,13 @@ class PenaltyController extends Controller
     /**
      * The salary the 25% cap is measured against: basic + overtime for
      * the period, the same basis payroll uses.
+     *
+     * Lives in LoanRecoveryService so the Excel import can use it too.
      */
     private function grossSalaryFor(Employee $employee, int $month, int $year): float
     {
-        $periodEnd = Carbon::create($year, $month, 1)->endOfMonth();
-
-        $overtimeHours = round(
-            app(\App\Services\WageRegisterService::class)
-                ->overtimeSummary([$employee->id], $month, $year)[$employee->id] ?? 0,
-            2
-        );
-
-        $rates = \App\Models\EmployeeWage::effectiveSet($periodEnd->toDateString());
-        $rate = isset($rates[$employee->skill_category]) && $rates[$employee->skill_category]
-            ? (float) $rates[$employee->skill_category]->overtime_rate
-            : 0.0;
-
-        return \App\Models\EmployeePayroll::monthlyPay($employee->activePayroll)
-            + round($overtimeHours * $rate, 2);
+        return app(\App\Services\LoanRecoveryService::class)
+            ->grossSalaryFor($employee, $month, $year);
     }
 
     /**
@@ -737,30 +726,8 @@ class PenaltyController extends Controller
         ?int $firstMonth,
         ?int $firstYear
     ): array {
-        $startMonth = $firstMonth ?: $penaltyDate->month;
-        $startYear = $firstYear ?: $penaltyDate->year;
-
-        $projection = app(\App\Services\LoanRecoveryService::class)
-            ->projectSchedule(
-                $employee->id,
-                $this->grossSalaryFor($employee, $startMonth, $startYear),
-                $amount,
-                $penaltyDate->toDateString(),
-                $startMonth,
-                $startYear
-            );
-
-        return [
-            'installment_amount' => $projection['installment_amount'],
-            'number_of_installments' => $projection['number_of_installments'] ?: null,
-            // Recovery can begin later than requested when older
-            // recoveries are still consuming the monthly budget.
-            'first_month' => $projection['first_month'] ?? $startMonth,
-            'first_year' => $projection['first_year'] ?? $startYear,
-            'last_month' => $projection['last_month'],
-            'last_year' => $projection['last_year'],
-            'date_of_complete_recovery' => $projection['date_of_complete_recovery'],
-        ];
+        return app(\App\Services\LoanRecoveryService::class)
+            ->scheduleFor($employee, $amount, $penaltyDate, $firstMonth, $firstYear);
     }
 
     /**

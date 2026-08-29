@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use App\Rules\HasActivePayroll;
 use Carbon\Carbon;
 
 class StoreBulkPenaltyRequest extends FormRequest
@@ -18,7 +19,11 @@ class StoreBulkPenaltyRequest extends FormRequest
     {
         return [
             'employee_ids' => 'required|array|min:1',
-            'employee_ids.*' => 'required|exists:employees,id',
+            'employee_ids.*' => [
+                'required',
+                'exists:employees,id',
+                new HasActivePayroll(),
+            ],
             'penalty_date' => 'required|date',
             'reason' => 'required|string|min:1',
             'amount' => 'required|numeric|min:0.01',

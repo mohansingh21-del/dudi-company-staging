@@ -6,6 +6,7 @@ use App\Enums\RecoveryType;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use App\Rules\HasActivePayroll;
 use Illuminate\Validation\Rule;
 
 class StorePenaltyRequest extends FormRequest
@@ -21,6 +22,7 @@ class StorePenaltyRequest extends FormRequest
             'employee_id' => [
                 'required',
                 'exists:employees,id',
+                new HasActivePayroll(),
             ],
 
             'penalty_date' => [
