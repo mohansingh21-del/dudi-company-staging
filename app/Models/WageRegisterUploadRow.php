@@ -48,6 +48,31 @@ class WageRegisterUploadRow extends Model
         24 => ['remarks',            25, 'text'],
     ];
 
+    /**
+     * Columns 6-11: the earnings column 12 adds up.
+     *
+     * Kept beside COLUMNS because they describe the same sheet — the totals a
+     * submitted row is checked against are these columns and no others.
+     */
+    public const EARNING_PARTS = [
+        'basic', 'special_basic', 'dearness_allowance',
+        'overtime_payment', 'hra', 'other_earnings',
+    ];
+
+    /** Columns 13-19: the deductions column 20 adds up. */
+    public const DEDUCTION_PARTS = [
+        'pf_deduction', 'esic_deduction', 'society_deduction',
+        'income_tax', 'insurance', 'other_deductions', 'recoveries',
+    ];
+
+    /**
+     * The columns whose errors are a property of the whole row rather than of
+     * the cell itself, so they are recomputed from scratch on every edit: a
+     * mismatch on column 12 is usually fixed by correcting column 6, and the
+     * error has to clear from 12 when that happens.
+     */
+    public const ARITHMETIC_FIELDS = ['total_earnings', 'total_deductions', 'net_payment'];
+
     /** Printed column headings, for error messages the user will recognise. */
     public const COLUMN_LABELS = [
         'employee_code' => 'S. No. In Employee Register',
@@ -76,6 +101,35 @@ class WageRegisterUploadRow extends Model
         'payment_date' => 'Date of Payment',
         'remarks' => 'Remarks',
     ];
+
+    /**
+     * Names a caller may use for a column besides the column's own.
+     *
+     * Column 23 is headed "Receipt by Employee/Bank Transaction ID", so a
+     * client that calls it bank_txn_id is naming the same cell — it is folded
+     * into payment_reference rather than rejected as an unknown column.
+     *
+     * This is for the correction API only. The Excel import is positional and
+     * never sees a key at all.
+     */
+    public const FIELD_ALIASES = [
+        'bank_txn_id' => 'payment_reference',
+    ];
+
+    /** The column a submitted key names, resolving any accepted alias. */
+    public static function canonicalField(string $field): string
+    {
+        return self::FIELD_ALIASES[$field] ?? $field;
+    }
+
+    /** Every key the correction API will accept: real columns and aliases. */
+    public static function acceptedFields(): array
+    {
+        return array_merge(
+            array_column(self::COLUMNS, 0),
+            array_keys(self::FIELD_ALIASES)
+        );
+    }
 
     protected $fillable = [
         'upload_id', 'excel_row', 'employee_id', 'employee_code', 'employee_name',

@@ -115,10 +115,20 @@ class WageRegisterService
             // Unmarked days count as absent, matching PayrollController.
             $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $siteHolidays);
 
-            // Column 4. Absence is priced here by shortening the month rather
-            // than as a separate deduction line, so it must not also appear
-            // among columns 13-19 or it would be charged twice.
-            $daysWorked = round(max(0, $daysInMonth - ($effectiveAbsent + ($halfDays * 0.5))), 2);
+            // The days the month actually pays for. Absence is priced here by
+            // shortening the month rather than as a separate deduction line, so
+            // it must not also appear among columns 13-19 or it would be
+            // charged twice. Rest days are inside this figure — they are paid.
+            $payableDays = round(max(0, $daysInMonth - ($effectiveAbsent + ($halfDays * 0.5))), 2);
+
+            // Column 4 never prints a whole calendar month. The month's weekly
+            // rest days come off the count whether or not the employee marked
+            // any, so a fully-attended 31-day month shows 27, not 31.
+            //
+            // This is presentation only: the cap is not applied to
+            // $payableDays, so the rest days stay paid and the absence
+            // deduction below is unchanged.
+            $daysWorked = min($payableDays, (float) max(0, $daysInMonth - $restDayCap));
 
             $payroll = $employee->activePayroll;
             $wage = $wages[$employee->skill_category] ?? null;
@@ -141,7 +151,7 @@ class WageRegisterService
             // Days not worked are priced here and charged as a deduction below,
             // not by shrinking the gross. Column 12 shows the full monthly
             // entitlement; what the employee actually takes home is column 21.
-            $unworkedDays = max(0, $daysInMonth - $daysWorked);
+            $unworkedDays = max(0, $daysInMonth - $payableDays);
             $absence = round(($monthlyPay / $daysInMonth) * $unworkedDays, 2);
 
             // Column 3, the daily rate, is not calculated for now and prints

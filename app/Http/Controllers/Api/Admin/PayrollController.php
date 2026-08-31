@@ -20,6 +20,22 @@ class PayrollController extends Controller
      *
      * Filters: month, year, site_id, department_id, search (name/code)
      */
+    /**
+     * An amount as it leaves the API: a float carrying at most two decimals.
+     *
+     * Every money figure is passed through this on the way out. The columns
+     * behind them are decimal(12,2), so the paise were always meant to be
+     * there — they were being lost to whole-rupee rounding, which reported a
+     * leave deduction of 11.60 as 12.
+     *
+     * Rounding stays at the edge: the arithmetic above runs at full precision
+     * so a chain of deductions does not accumulate rounding error.
+     */
+    private function money($value): float
+    {
+        return round((float) $value, 2);
+    }
+
     public function index(Request $request)
     {
         try {
@@ -180,7 +196,7 @@ class PayrollController extends Controller
                 // Unmarked days count as absent: effective_absent = total - accounted days
                 $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
                 // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
-                $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+                $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 2);
                 $payableDays = max(0.0, (float) ($daysInMonth - ($effectiveAbsent + ($halfDays * 0.5))));
 
                 // Fixed deductions
@@ -194,7 +210,7 @@ class PayrollController extends Controller
 
                 // Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction)
                 $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
-                $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
+                $netSalary = max(0, round($grossSalary - $totalDeductions, 2));
 
                 $payroll = $existingPayrolls->get($employee->id);
 
@@ -219,22 +235,22 @@ class PayrollController extends Controller
                     'holidays' => $holidays,
                     'paid_leave_days' => $empLeave['paid'],
                     'unpaid_leave_days' => $unpaidLeaveDays,
-                    'payable_days' => $payableDays,
-                    'penalty_amount' => (float) $penaltyTotal,
-                    'recovery_limit' => $recoveryPlan['budget'],
-                    'recovery_carried_forward' => $recoveryPlan['carried'],
-                    'basic_salary' => $basicSalary,
-                    'shift_allowance' => $shiftAllowance,
-                    'incentives' => $incentives,
-                    'overtime_hours' => $overtimeHours,
-                    'overtime_payment' => $overtimePayment,
-                    'gross_salary' => $grossSalary,
-                    'leave_deduction' => $leaveDeduction,
-                    'pf_deduction' => $pfDeduction,
-                    'mess_deduction' => $messDeduction,
-                    'other_deduction' => $otherDeduction,
-                    'monthly_salary' => $grossSalary,
-                    'net_salary' => $netSalary,
+                    'payable_days' => round((float) $payableDays, 2),
+                    'penalty_amount' => $this->money($penaltyTotal),
+                    'recovery_limit' => $this->money($recoveryPlan['budget']),
+                    'recovery_carried_forward' => $this->money($recoveryPlan['carried']),
+                    'basic_salary' => $this->money($basicSalary),
+                    'shift_allowance' => $this->money($shiftAllowance),
+                    'incentives' => $this->money($incentives),
+                    'overtime_hours' => round((float) $overtimeHours, 2),
+                    'overtime_payment' => $this->money($overtimePayment),
+                    'gross_salary' => $this->money($grossSalary),
+                    'leave_deduction' => $this->money($leaveDeduction),
+                    'pf_deduction' => $this->money($pfDeduction),
+                    'mess_deduction' => $this->money($messDeduction),
+                    'other_deduction' => $this->money($otherDeduction),
+                    'monthly_salary' => $this->money($grossSalary),
+                    'net_salary' => $this->money($netSalary),
                     'created_at' => ($payroll && $payroll->created_at) ? $payroll->created_at->toDateTimeString() : $employee->created_at->toDateTimeString(),
                 ];
             });
@@ -392,7 +408,7 @@ class PayrollController extends Controller
                     // Unmarked days count as absent: effective_absent = total - accounted days
                     $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
                     // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
-                    $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+                    $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 2);
 
                     // ── Fixed Deductions ──
                     $pfApplicable = (bool) optional($activePayroll)->pf_applicable;
@@ -417,7 +433,7 @@ class PayrollController extends Controller
 
                     // ── Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction) ──
                     $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
-                    $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
+                    $netSalary = max(0, round($grossSalary - $totalDeductions, 2));
 
                     // ── Upsert payroll record ──
                     $payroll = Payroll::updateOrCreate(
@@ -590,7 +606,7 @@ class PayrollController extends Controller
             // Unmarked days count as absent: effective_absent = total - accounted days
             $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
             // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
-            $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+            $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 2);
             $payableDays = max(0.0, (float) ($daysInMonth - ($effectiveAbsent + ($halfDays * 0.5))));
 
             // Fixed deductions
@@ -604,7 +620,7 @@ class PayrollController extends Controller
 
             // Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction)
             $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
-            $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
+            $netSalary = max(0, round($grossSalary - $totalDeductions, 2));
 
             // ── Existing payroll record ──
             $existingPayroll = Payroll::where('employee_id', $employeeId)
@@ -670,31 +686,31 @@ class PayrollController extends Controller
                         'holidays' => $holidays,
                         'paid_leave_days' => $approvedPaidLeaves,
                         'unpaid_leave_days' => $unpaidLeaveDays,
-                        'payable_days' => $payableDays,
+                        'payable_days' => round((float) $payableDays, 2),
                     ],
                     'earnings' => [
-                        'basic_salary' => $basicSalary,
-                        'shift_allowance' => $shiftAllowance,
-                        'incentives' => $incentives,
-                        'overtime_hours' => $overtimeHours,
-                        'overtime_payment' => $overtimePayment,
-                        'gross_salary' => $grossSalary,
-                        'per_day_salary' => (float) round($perDaySalary, 0),
+                        'basic_salary' => $this->money($basicSalary),
+                        'shift_allowance' => $this->money($shiftAllowance),
+                        'incentives' => $this->money($incentives),
+                        'overtime_hours' => round((float) $overtimeHours, 2),
+                        'overtime_payment' => $this->money($overtimePayment),
+                        'gross_salary' => $this->money($grossSalary),
+                        'per_day_salary' => $this->money($perDaySalary),
                     ],
                     'deductions' => [
-                        'pf_deduction' => $pfDeduction,
-                        'mess_deduction' => $messDeduction,
-                        'leave_deduction' => $leaveDeduction,
-                        'other_deduction' => $otherDeduction,
-                        'penalty_amount' => (float) $penaltyTotal,
-                        'total_deductions' => $totalDeductions,
+                        'pf_deduction' => $this->money($pfDeduction),
+                        'mess_deduction' => $this->money($messDeduction),
+                        'leave_deduction' => $this->money($leaveDeduction),
+                        'other_deduction' => $this->money($otherDeduction),
+                        'penalty_amount' => $this->money($penaltyTotal),
+                        'total_deductions' => $this->money($totalDeductions),
                     ],
                     'penalties' => $penalties,
-                    'net_salary' => $netSalary,
+                    'net_salary' => $this->money($netSalary),
                     'payroll_record' => $payroll ? [
                         'id' => $payroll->id,
                         'status' => $payroll->status,
-                        'net_salary' => (float) $payroll->net_salary,
+                        'net_salary' => $this->money($payroll->net_salary),
                         'created_at' => $payroll->created_at->toDateTimeString(),
                     ] : null,
                 ],
@@ -895,8 +911,8 @@ class PayrollController extends Controller
                         'employee_code' => $employee->employee_code,
                     ],
                     'total_penalty' => (float) $recoveryPlan['total'],
-                    'recovery_limit' => $recoveryPlan['budget'],
-                    'recovery_carried_forward' => $recoveryPlan['carried'],
+                    'recovery_limit' => $this->money($recoveryPlan['budget']),
+                    'recovery_carried_forward' => $this->money($recoveryPlan['carried']),
                     'month_name' => $monthName,
                     'penalties' => $formattedPenalties,
                 ]

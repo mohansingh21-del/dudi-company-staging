@@ -1161,7 +1161,7 @@ class WageRegisterController extends Controller
      */
     public function updateImportRow(Request $request, $uploadId, $excelRow, WageRegisterImportService $importer)
     {
-        $fields = array_column(WageRegisterUploadRow::COLUMNS, 0);
+        $fields = WageRegisterUploadRow::acceptedFields();
 
         $validator = Validator::make($request->all(), [
             'values' => 'required|array|min:1',
@@ -1225,14 +1225,23 @@ class WageRegisterController extends Controller
 
             // Just the outcome: what was saved, whether the row is now clean, and
             // the batch counters the screen shows. The table itself is not resent.
+            //
+            // A saved row is not necessarily a correct one. Cross-column errors
+            // are recorded rather than refused — correcting a total often takes a
+            // second edit, so refusing the first would leave no way through — and
+            // the message has to say so, or a caller reading only the status line
+            // is told the sheet is fine when it still cannot be submitted.
             return response()->json([
                 'status' => 200,
-                'message' => "Row {$row->excel_row} updated successfully.",
+                'message' => $row->is_valid
+                    ? "Row {$row->excel_row} updated successfully."
+                    : "Row {$row->excel_row} was saved, but it still has errors and cannot be submitted.",
                 'data' => [
                     'excel_row' => $row->excel_row,
                     'updated' => $result['applied'],
                     'row_is_valid' => $row->is_valid,
-                    'remaining_errors' => array_keys($row->errors ?: []),
+                    'remaining_errors' => $row->errors ?: [],
+                    'error_columns' => WageRegisterUploadRow::columnNumbersFor(array_keys($row->errors ?: [])),
                     'valid_rows' => $upload->valid_rows,
                     'error_rows' => $upload->error_rows,
                     'status' => $upload->status,

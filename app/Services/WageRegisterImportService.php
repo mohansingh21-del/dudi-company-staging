@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Employee;
+use App\Models\EmployeePayroll;
 use App\Models\WageRegisterReport;
 use App\Models\WageRegisterReportRow;
 use App\Models\WageRegisterUpload;
@@ -24,6 +25,273 @@ class WageRegisterImportService
     public const HEADER_ROWS = 5;
 
     /**
+     * How far apart two money figures may be and still count as the same one.
+     * The sheet carries two decimals, so anything under a paisa is rounding,
+     * not a disagreement.
+     */
+    protected const MONEY_TOLERANCE = 0.01;
+
+    /** Expected figures by employee id, keyed by month. See expectedLines(). */
+    protected $lineCache = [];
+
+    /**
+     * Net payment as the register itself calculates it, by employee id.
+     *
+     * This is the same call the export makes, so a sheet that was downloaded
+     * and sent straight back is checked against exactly the figures it was
+     * printed from. Where they disagree, attendance or wages moved after the
+     * download — which is the case worth catching, because the sheet would
+     * otherwise file a stale net.
+     *
+     * Priced once for the whole month and held for the life of this service.
+     * The calculation costs the same whether it answers for one row or five
+     * hundred, so doing it per row would turn a single upload into hundreds of
+     * query batches.
+     */
+    protected function expectedLines(int $month, int $year): array
+    {
+        $key = "{$year}-{$month}";
+
+        if (!isset($this->lineCache[$key])) {
+            $register = app(WageRegisterService::class);
+            $employees = $register->registerEmployeeQuery($month, $year)->get();
+
+            $byId = $employees->keyBy('id');
+            $daysInMonth = Carbon::create($year, $month, 1)->daysInMonth;
+            $restDayCap = LeaveBalanceService::monthlyPaidRestDays();
+
+            $this->lineCache[$key] = [];
+
+            foreach ($register->linesFor($employees, $month, $year) as $id => $line) {
+                $this->lineCache[$key][$id] = $this->expectedFrom(
+                    $line,
+                    $byId->get($id),
+                    $daysInMonth,
+                    $restDayCap
+                );
+            }
+        }
+
+        return $this->lineCache[$key];
+    }
+
+    /** The figures a submitted row is measured against, from a register line. */
+    protected function expectedFrom(array $line, $employee, int $daysInMonth, int $restDayCap): array
+    {
+        $monthlyPay = $employee
+            ? EmployeePayroll::monthlyPay($employee->activePayroll)
+            : 0.0;
+
+        return [
+            'net' => (float) $line['net_payment'],
+            'absence' => (float) $line['absence_deduction'],
+            'earnings' => (float) $line['total_earnings'],
+            'deductions' => (float) $line['total_deductions'],
+
+            // Column 4 and what the month costs, so an edited day count can be
+            // priced. The daily rate is the one WageRegisterService prices
+            // absence at — monthly pay over the month's own length, not a flat
+            // 30 — so a corrected day count moves the money by exactly what the
+            // register would have charged for it.
+            'days_worked' => (float) $line['days_worked'],
+            'per_day' => $daysInMonth > 0 ? $monthlyPay / $daysInMonth : 0.0,
+
+            // Column 4 is capped at the month less its weekly rest days, so it
+            // can never print a whole month. Nothing above this is a day the
+            // register could have produced.
+            'max_days' => (float) max(0, $daysInMonth - $restDayCap),
+        ];
+    }
+
+    /**
+     * What the row should show for a given day count.
+     *
+     * Column 4 is not free text: it is what the month is priced on. A day taken
+     * off it is a day the employee is not paid for, and Form B charges that by
+     * shortening the month rather than as a deduction line — so the absence
+     * rises and the net falls by the daily rate, exactly as the register would
+     * have done had attendance said so in the first place.
+     *
+     * Measured as a change from the register's own figure rather than from the
+     * day count itself, because the two are not in a ratio: column 4 is capped
+     * at the month less its rest days, so an employee shown as working 27 of 31
+     * days may still be paid for all 31. The delta carries no such ambiguity.
+     */
+    protected function expectedForDays(array $expected, float $days): array
+    {
+        $shortfall = round($expected['days_worked'] - $days, 2);
+        $cost = round($expected['per_day'] * $shortfall, 2);
+
+        return [
+            'absence' => round($expected['absence'] + $cost, 2),
+
+            // Floored for the same reason the register floors it: nothing is
+            // ever recovered from an employee through this document.
+            'net' => round(max(0, $expected['net'] - $cost), 2),
+        ];
+    }
+
+    /**
+     * The expected net for a single employee.
+     *
+     * Correcting one cell does not justify pricing every employee on the
+     * register, so this runs the same calculation scoped to one row. The
+     * whole-month set is reused when the upload path has already built it.
+     */
+    protected function expectedLineFor(?int $employeeId, int $month, int $year): ?array
+    {
+        if (!$employeeId) {
+            return null;
+        }
+
+        $key = "{$year}-{$month}";
+
+        if (isset($this->lineCache[$key])) {
+            return $this->lineCache[$key][$employeeId] ?? null;
+        }
+
+        $employee = Employee::with(['activePayroll', 'department'])->find($employeeId);
+
+        if (!$employee) {
+            return null;
+        }
+
+        $line = app(WageRegisterService::class)
+            ->linesFor(collect([$employee]), $month, $year)[$employeeId] ?? null;
+
+        return $line ? $this->expectedFrom(
+            $line,
+            $employee,
+            Carbon::create($year, $month, 1)->daysInMonth,
+            LeaveBalanceService::monthlyPaidRestDays()
+        ) : null;
+    }
+
+    /** The sheet's amount columns, for telling a bad cell from a bad sum. */
+    protected function amountFields(): array
+    {
+        return array_column(
+            array_filter(WageRegisterUploadRow::COLUMNS, fn($c) => $c[2] === 'amount'),
+            0
+        );
+    }
+
+    /**
+     * The cross-column checks a submitted row has to pass.
+     *
+     * Net Payment is not the user's figure to set. It is what the register
+     * calculates from attendance, wages and deductions, and the sheet carries
+     * it so the reviewer can see it, not so it can be edited. The other two
+     * checks exist because of that: once the net is fixed, the columns either
+     * account for it or the sheet is wrong somewhere the user still has to
+     * find.
+     *
+     * @param  array<string,mixed>  $values    the row as it would be stored
+     * @param  array|null           $expected  the register's own figures, or
+     *                                         null when the employee is not on
+     *                                         this month's register and there
+     *                                         is nothing to check against
+     * @return array<string,string>  field => message
+     */
+    protected function checkArithmetic(array $values, ?array $expected): array
+    {
+        $errors = [];
+
+        $num = fn($field) => (float) ($values[$field] ?? 0);
+        $sum = fn(array $fields) => round(array_sum(array_map($num, $fields)), 2);
+        $rs = fn($amount) => number_format((float) $amount, 2);
+
+        $earnings = round($num('total_earnings'), 2);
+        $deductions = round($num('total_deductions'), 2);
+        $net = round($num('net_payment'), 2);
+
+        $earningParts = $sum(WageRegisterUploadRow::EARNING_PARTS);
+        $deductionParts = $sum(WageRegisterUploadRow::DEDUCTION_PARTS);
+
+        if (abs($earnings - $earningParts) > self::MONEY_TOLERANCE) {
+            $errors['total_earnings'] = "Columns 6 to 11 add up to {$rs($earningParts)}, but Total says {$rs($earnings)}.";
+        }
+
+        if (abs($deductions - $deductionParts) > self::MONEY_TOLERANCE) {
+            $errors['total_deductions'] = "Columns 13 to 19 add up to {$rs($deductionParts)}, but Total says {$rs($deductions)}.";
+        }
+
+        if ($expected === null) {
+            return $errors;
+        }
+
+        // Column 4 is what the month is priced on, so it is checked before any
+        // amount: every figure below is measured against the day count on the
+        // row, not against the one attendance produced. Editing it is allowed —
+        // the money simply has to follow it.
+        $days = round((float) ($values['days_worked'] ?? 0), 2);
+
+        if ($days > $expected['max_days'] + self::MONEY_TOLERANCE) {
+            $errors['days_worked'] = "No. of days worked cannot be more than "
+                . rtrim(rtrim(number_format($expected['max_days'], 2), '0'), '.')
+                . " this month — the rest days the month owes always come off the count.";
+
+            // An impossible day count cannot price anything, so the amounts are
+            // left alone rather than measured against a figure the register
+            // could never have produced.
+            return $errors;
+        }
+
+        $forDays = $this->expectedForDays($expected, $days);
+
+        if (abs($net - $forDays['net']) > self::MONEY_TOLERANCE) {
+            $errors['net_payment'] = "Net Payment is calculated by the register and cannot be changed. "
+                . "It should be {$rs($forDays['net'])}"
+                . (abs($days - $expected['days_worked']) > self::MONEY_TOLERANCE
+                    ? " for " . rtrim(rtrim(number_format($days, 2), '0'), '.') . " days worked"
+                    : '')
+                . ", not {$rs($net)}.";
+        }
+
+        // Form B has no absence column. What the sheet carries back is the net,
+        // and commit() reads the gap between (earnings - deductions) and the net
+        // as wages for days not worked — see absenceFrom(). So that gap is not
+        // free space to absorb an edit: it has to be the absence the register
+        // actually calculated.
+        //
+        // Checking only that the net fits inside the gap would let money be
+        // added to an earnings column and silently booked as a deduction the
+        // employee never incurred — the register would still add up, and the
+        // employee would still be paid the same net, with the difference filed
+        // against days they in fact worked.
+        //
+        // Skipped where the register's own net was floored at 0 because
+        // deductions outran earnings: absence and the written-off excess are
+        // then indistinguishable, and absenceFrom() does not claim to separate
+        // them either.
+        $identityHolds = abs(
+            ($expected['earnings'] - $expected['deductions'] - $expected['absence']) - $expected['net']
+        ) <= self::MONEY_TOLERANCE;
+
+        if ($identityHolds) {
+            $available = round($earnings - $deductions, 2);
+            $shouldLeave = round($forDays['net'] + $forDays['absence'], 2);
+            $drift = round($available - $shouldLeave, 2);
+
+            if (abs($drift) > self::MONEY_TOLERANCE) {
+                $message = "Earnings minus deductions leaves {$rs($available)}, but it should leave "
+                    . "{$rs($shouldLeave)} — Net Payment {$rs($forDays['net'])}"
+                    . ($forDays['absence'] > 0
+                        ? " plus {$rs($forDays['absence'])} withheld for days not worked"
+                        : ', and nothing is withheld for days not worked')
+                    . '. ' . ($drift > 0
+                        ? "{$rs($drift)} is unaccounted for: take it off an earnings column, or add it to a deduction column."
+                        : "{$rs(abs($drift))} is missing: add it to an earnings column, or take it off a deduction column.");
+
+                $errors['total_earnings'] = $errors['total_earnings'] ?? $message;
+                $errors['total_deductions'] = $errors['total_deductions'] ?? $message;
+            }
+        }
+
+        return $errors;
+    }
+
+    /**
      * Read, validate and stage a sheet. Replaces any existing staging batch for
      * the month, so a corrected re-upload supersedes the one before it.
      */
@@ -42,6 +310,11 @@ class WageRegisterImportService
         $parsed = [];
         $seenCodes = [];
 
+        // Priced once, before the sweep: every row is checked against the net
+        // the register calculates, and that calculation is a fixed set of
+        // grouped queries however many rows ask it.
+        $expectedLines = $this->expectedLines($month, $year);
+
         foreach ($sheet as $index => $line) {
             $excelRow = $index + 1;
 
@@ -54,7 +327,7 @@ class WageRegisterImportService
                 continue;
             }
 
-            $parsed[] = $this->parseLine($line, $excelRow, $employees, $seenCodes);
+            $parsed[] = $this->parseLine($line, $excelRow, $employees, $seenCodes, $expectedLines);
         }
 
         return DB::transaction(function () use ($parsed, $month, $year, $userId, $filename) {
@@ -277,6 +550,35 @@ class WageRegisterImportService
      */
     public function updateRow(WageRegisterUploadRow $row, array $values): array
     {
+        // Two names for one cell, both carrying a value, is not something to
+        // resolve by whichever happens to be applied last — one of them would
+        // be silently dropped.
+        foreach (WageRegisterUploadRow::FIELD_ALIASES as $alias => $field) {
+            if (array_key_exists($alias, $values) && array_key_exists($field, $values)
+                && (string) $values[$alias] !== (string) $values[$field]) {
+                $label = WageRegisterUploadRow::COLUMN_LABELS[$field] ?? $field;
+
+                return [
+                    'saved' => false,
+                    'errors' => [
+                        $field => "\"{$alias}\" and \"{$field}\" are the same column ({$label}), "
+                            . 'but different values were sent for each. Send one of them.',
+                    ],
+                    'applied' => [],
+                ];
+            }
+        }
+
+        // Folded to the column's own name here, so nothing below has to know
+        // an alias exists.
+        $canonical = [];
+
+        foreach ($values as $field => $value) {
+            $canonical[WageRegisterUploadRow::canonicalField($field)] = $value;
+        }
+
+        $values = $canonical;
+
         $types = [];
 
         foreach (WageRegisterUploadRow::COLUMNS as [$field, , $type]) {
@@ -329,6 +631,38 @@ class WageRegisterImportService
             return ['saved' => false, 'errors' => $rejected, 'applied' => []];
         }
 
+        $upload = $row->upload;
+        $expected = $this->expectedLineFor($row->employee_id, $upload->month, $upload->year);
+
+        // Net Payment is the register's own figure. A screen that resends the
+        // whole row unchanged is fine — only an attempt to move it is refused,
+        // and refused outright rather than saved and marked, because there is
+        // no second column the user could edit to make the new value correct.
+        //
+        // Priced against the day count in the same request where one was sent,
+        // so an edit that changes column 4 and the net together is judged as
+        // one change rather than the net being measured against the day count
+        // it is replacing.
+        if (array_key_exists('net_payment', $parsed) && $expected !== null) {
+            $days = array_key_exists('days_worked', $parsed)
+                ? (float) $parsed['days_worked']
+                : (float) $row->days_worked;
+
+            $target = $this->expectedForDays($expected, $days)['net'];
+
+            if (abs((float) $parsed['net_payment'] - $target) > self::MONEY_TOLERANCE) {
+                return [
+                    'saved' => false,
+                    'errors' => [
+                        'net_payment' => 'Net Payment is calculated by the register and cannot be changed. '
+                            . 'It is ' . number_format($target, 2) . ' for this employee at '
+                            . rtrim(rtrim(number_format($days, 2), '0'), '.') . ' days worked.',
+                    ],
+                    'applied' => [],
+                ];
+            }
+        }
+
         foreach ($parsed as $field => $value) {
             $row->{$field} = $value;
 
@@ -352,6 +686,20 @@ class WageRegisterImportService
         if ($contextual) {
             return ['saved' => false, 'errors' => $contextual, 'applied' => []];
         }
+
+        // Recomputed from scratch rather than patched: an error on column 12 is
+        // usually fixed by editing column 6, so it has to clear from 12 when
+        // that happens. Unlike a bad cell this is not a rejection — correcting
+        // a mismatch often takes a second edit, and refusing the first would
+        // leave the user no way to reach a consistent row.
+        foreach (WageRegisterUploadRow::ARITHMETIC_FIELDS as $field) {
+            unset($errors[$field]);
+        }
+
+        $errors = array_merge(
+            $errors,
+            $this->checkArithmetic($row->only($this->amountFields()), $expected)
+        );
 
         $row->raw_data = $raw;
         $row->errors = $errors;
@@ -501,7 +849,7 @@ class WageRegisterImportService
     /**
      * One spreadsheet line into a staging row, with per-cell errors.
      */
-    protected function parseLine(array $line, int $excelRow, $employees, array &$seenCodes): array
+    protected function parseLine(array $line, int $excelRow, $employees, array &$seenCodes, array $expectedLines = []): array
     {
         $errors = [];
         $raw = [];
@@ -558,6 +906,19 @@ class WageRegisterImportService
             if ($given !== '' && strcasecmp($given, $expected) !== 0) {
                 $errors['employee_name'] = "Name does not match employee {$employee->employee_code} ({$expected}).";
             }
+        }
+
+        // Checked once identity is settled, because the net a row is measured
+        // against belongs to whichever employee the code resolved to.
+        //
+        // Skipped when a cell did not parse: that cell is already reported, and
+        // a totals mismatch caused by the same cell reading as blank would only
+        // point the user at the wrong column.
+        if (!array_intersect_key($errors, array_flip($this->amountFields()))) {
+            $errors += $this->checkArithmetic(
+                $values,
+                $employee ? ($expectedLines[$employee->id] ?? null) : null
+            );
         }
 
         $values['excel_row'] = $excelRow;
