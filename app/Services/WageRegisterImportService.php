@@ -283,8 +283,23 @@ class WageRegisterImportService
                         ? "{$rs($drift)} is unaccounted for: take it off an earnings column, or add it to a deduction column."
                         : "{$rs(abs($drift))} is missing: add it to an earnings column, or take it off a deduction column.");
 
-                $errors['total_earnings'] = $errors['total_earnings'] ?? $message;
-                $errors['total_deductions'] = $errors['total_deductions'] ?? $message;
+                // Recorded against one column only. The row is what fails to
+                // balance, not either total on its own — both may be correct
+                // sums of their own parts — and the message names both remedies
+                // itself. Writing it under earnings and deductions alike marked
+                // a second cell at the cost of printing the same sentence twice
+                // to whoever reads the row's errors.
+                //
+                // Earnings carries it, unless its own sum is already wrong: a
+                // column that is being reported for a different reason is not
+                // the one to hang this on, and its message would win the ??
+                // anyway. Where both totals already fail their own sum, the
+                // drift is a consequence of that and adds nothing.
+                if (!isset($errors['total_earnings'])) {
+                    $errors['total_earnings'] = $message;
+                } elseif (!isset($errors['total_deductions'])) {
+                    $errors['total_deductions'] = $message;
+                }
             }
         }
 
