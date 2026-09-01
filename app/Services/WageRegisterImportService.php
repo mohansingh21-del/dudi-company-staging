@@ -938,7 +938,7 @@ class WageRegisterImportService
      */
     protected function parseAmount($value, string $field): array
     {
-        if ($value === null || $value === '' || (is_string($value) && trim($value) === '')) {
+        if ($this->isBlankValue($value)) {
             return [null, null];
         }
 
@@ -978,7 +978,7 @@ class WageRegisterImportService
      */
     protected function parseDate($value): array
     {
-        if ($value === null || $value === '' || (is_string($value) && trim($value) === '')) {
+        if ($this->isBlankValue($value)) {
             return [null, null];
         }
 
@@ -1001,15 +1001,46 @@ class WageRegisterImportService
         }
     }
 
-    protected function trimOrNull($value): ?string
+    /**
+     * How a sheet writes "nothing here". A register printed for signature
+     * carries these in the columns that do not apply to an employee, and they
+     * come back on the upload and from the correction screen, so they are read
+     * as an empty cell rather than as a value that failed to parse.
+     *
+     * Only the cell is blanked — a column that is required is still required,
+     * and reports itself missing rather than accepting the placeholder.
+     */
+    protected const BLANK_PLACEHOLDERS = [
+        'n/a', 'n.a.', 'na', '#n/a', 'nil', 'null', 'none', '-', '--', '---',
+        "\u{2013}", "\u{2014}",
+    ];
+
+    /** True for an empty cell, or for a placeholder standing in for one. */
+    protected function isBlankValue($value): bool
     {
         if ($value === null) {
+            return true;
+        }
+
+        // A number is never a placeholder, and casting one to a string here
+        // would let a stray format make it look like one.
+        if (!is_string($value)) {
+            return false;
+        }
+
+        $trimmed = trim($value);
+
+        return $trimmed === ''
+            || in_array(mb_strtolower($trimmed), self::BLANK_PLACEHOLDERS, true);
+    }
+
+    protected function trimOrNull($value): ?string
+    {
+        if ($this->isBlankValue($value)) {
             return null;
         }
 
-        $trimmed = trim((string) $value);
-
-        return $trimmed === '' ? null : $trimmed;
+        return trim((string) $value);
     }
 
     /**
