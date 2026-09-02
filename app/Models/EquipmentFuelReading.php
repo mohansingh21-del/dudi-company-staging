@@ -185,4 +185,27 @@ class EquipmentFuelReading extends Model
             ->orderByRaw('ABS(TIMESTAMPDIFF(SECOND, reported_at, ?))', [$at->toDateTimeString()])
             ->first();
     }
+
+    /**
+     * The most recently fetched reading for every chassis - the fleet's current
+     * state, and the basis for the telematics dashboard.
+     *
+     * Keyed on MAX(id) rather than MAX(reported_at) because rows are
+     * insert-only, so the highest id is always the latest fetch, and it stays
+     * correct even for a vehicle whose clock or feed briefly runs backwards.
+     *
+     * The column is table-qualified because callers join this against the
+     * vehicle master, which also has an id - MySQL rejects the subquery as
+     * ambiguous otherwise.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder
+     */
+    public static function latestPerChassis()
+    {
+        return static::whereIn('equipment_fuel_readings.id', function ($query) {
+            $query->selectRaw('MAX(id)')
+                ->from('equipment_fuel_readings')
+                ->groupBy('chassis_number');
+        });
+    }
 }

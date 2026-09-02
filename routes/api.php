@@ -58,6 +58,7 @@ use App\Http\Controllers\Api\Admin\SitePointController;
 use App\Http\Controllers\Api\Admin\DispatchTripController;
 use App\Http\Controllers\Api\Admin\ShiftClosureController;
 use App\Http\Controllers\Api\Admin\DashboardController;
+use App\Http\Controllers\Api\Admin\FleetTelematicsDashboardController;
 use App\Http\Controllers\Api\Admin\ServiceRecordController;
 
 use App\Http\Controllers\RecoveryUploadController;
@@ -161,6 +162,24 @@ Route::prefix('v1')->group(function () {
             Route::get('delay/critical-delays', [DashboardController::class, 'criticalDelays']);
             Route::get('delay/recent-delays', [DashboardController::class, 'recentDelays']);
             Route::get('dispatch/recent-trips', [DashboardController::class, 'recentTrips']);
+
+            /*
+            | Live fleet telematics (VECV rFMS).
+            |
+            | The three GETs read stored readings only and never call VECV, so
+            | they are cheap to poll. refresh() is the button: it calls the
+            | vendor, stores the snapshot and returns the rebuilt summary.
+            | Throttled because VECV allows one request per minute per key -
+            | the sync itself degrades to a 429 beyond that, this just keeps
+            | pointless calls off the wire.
+            */
+            Route::prefix('fleet')->group(function () {
+                Route::get('summary', [FleetTelematicsDashboardController::class, 'summary']);
+                Route::get('vehicles', [FleetTelematicsDashboardController::class, 'vehicles']);
+                Route::get('lowest-fuel', [FleetTelematicsDashboardController::class, 'lowestFuel']);
+                Route::post('refresh', [FleetTelematicsDashboardController::class, 'refresh'])
+                    ->middleware('throttle:20,1');
+            });
         });
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);

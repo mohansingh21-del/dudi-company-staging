@@ -33,6 +33,18 @@ return [
         // datalake and behaves differently: no clientId, date-ranged, and the
         // records it returns are mutable rather than point-in-time.
         'service_history' => '/service-gateway/datalake/serviceHistory/getServiceHistory',
+
+        // Driving-behaviour, fuel and predictive-uptime alerts - the only VECV
+        // source for harsh braking/acceleration, over-speeding and the like,
+        // none of which appear on the fuel or location feeds.
+        //
+        // Vendor spells this "getGetAlertLogs", with the doubled Get. Verified,
+        // not a typo on our side: this path rate-limits (429), while the
+        // sensibly spelled getAlertLogs returns 401.
+        //
+        // Takes chassisNo + startDate/endDate and no clientId, so - like
+        // service history - the fleet cannot be fetched in one call.
+        'alerts' => '/service-gateway/alertLog/getGetAlertLogs',
     ],
 
     /*
@@ -96,11 +108,31 @@ return [
 
     'service_history_sync_cron' => env('VECV_SERVICE_HISTORY_SYNC_CRON', '10 3 * * *'),
 
-    // How far back each nightly run looks. Job cards are amended after opening
-    // (an invoice is attached once the work is billed), so the window has to
-    // be wide enough to re-read and update records that have already been
-    // stored, not just catch new ones.
-    'service_history_lookback_days' => (int) env('VECV_SERVICE_HISTORY_LOOKBACK_DAYS', 90),
+    // How far back each run looks. Job cards are amended after opening (an
+    // invoice is attached once the work is billed), so a wider window re-reads
+    // and updates records already stored rather than only catching new ones.
+    //
+    // Kept at the vendor's per-request maximum so a routine run costs a single
+    // request. Anything larger is split into windows of
+    // service_history_max_range_days and each window costs its own
+    // rate-limit slot - a 90 day backfill is 45 minutes of wall clock, so ask
+    // for it deliberately with --from/--to rather than making it the default.
+    'service_history_lookback_days' => (int) env('VECV_SERVICE_HISTORY_LOOKBACK_DAYS', 2),
+
+    // Hard vendor limit, discovered 2026-09-02: a wider range is rejected with
+    // "The date range should not exceed 2 days (48 hours)". The default
+    // lookback was 90 days until then, which meant this sync had never once
+    // succeeded - it failed identically on every run and the error was only
+    // visible in the log.
+    'service_history_max_range_days' => (int) env('VECV_SERVICE_HISTORY_MAX_RANGE_DAYS', 2),
+
+    // A second, separate vendor limit found the same day: "Dates should not
+    // exceed 30 days (720 hours) from today's date". So 30 days is ALL the
+    // history this endpoint will ever give up - a job card older than that is
+    // unreachable no matter how the range is split. Anything needing a longer
+    // record has to be accumulated locally by syncing regularly, which is the
+    // one thing an on-demand-only setup does not do.
+    'service_history_max_age_days' => (int) env('VECV_SERVICE_HISTORY_MAX_AGE_DAYS', 30),
 
     // Chassis numbers per request. The vendor documents no cap on the list, so
     // this is a self-imposed limit to keep request bodies sane; it also bounds
@@ -120,4 +152,32 @@ return [
     */
 
     'stale_after_minutes' => (int) env('VECV_STALE_AFTER_MINUTES', 30),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Fleet dashboard
+    |--------------------------------------------------------------------------
+    |
+    | Fuel bucket boundaries, as a percentage of tank. Kept here so the donut,
+    | the "lowest fuel" list and the per-vehicle status badge all read the same
+    | numbers - the mock-up they came from disagreed with itself, labelling 22%
+    | Critical in one panel and Low in another.
+    |
+    | Read as: Normal is above normal_min; Low is normal_min down to and
+    | including critical_max; Critical is below critical_max. The boundaries
+    | themselves (40 and 20) therefore both fall in Low, leaving no gap and no
+    | overlap.
+    |
+    */
+
+    'fuel_buckets' => [
+        'normal_min'   => (float) env('VECV_FUEL_NORMAL_MIN', 40),
+        'critical_max' => (float) env('VECV_FUEL_CRITICAL_MAX', 20),
+    ],
+
+    /*
+    | Rows returned by the "lowest fuel" panel.
+    */
+
+    'lowest_fuel_limit' => (int) env('VECV_LOWEST_FUEL_LIMIT', 5),
 ];

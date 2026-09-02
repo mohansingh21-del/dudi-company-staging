@@ -55,8 +55,11 @@ class VecvServiceHistorySyncService extends VecvSyncService
         $machineMap = $this->machineMap();
         $chunkSize  = max(1, (int) config('vecv.service_history_chunk'));
 
+        $windows = $this->windows($start, $end);
+
         $summary = [
             'requested'      => count($chassis),
+            'windows'        => count($windows),
             'batches'        => 0,
             'received'       => 0,
             'created'        => 0,
@@ -68,25 +71,27 @@ class VecvServiceHistorySyncService extends VecvSyncService
             'to'             => $end,
         ];
 
-        foreach (array_chunk($chassis, $chunkSize) as $batch) {
-            $summary['batches']++;
+        foreach ($windows as $window) {
+            foreach (array_chunk($chassis, $chunkSize) as $batch) {
+                $summary['batches']++;
 
-            $body = $this->client->post('service_history', [
-                'chassisNo' => array_values($batch),
-                'startDate' => $start . ' 00:00:00',
-                'endDate'   => $end . ' 23:59:59',
-            ]);
+                $body = $this->client->post('service_history', [
+                    'chassisNo' => array_values($batch),
+                    'startDate' => $window[0] . ' 00:00:00',
+                    'endDate'   => $window[1] . ' 23:59:59',
+                ]);
 
-            $rows = Arr::get($body, 'serviceHistory');
+                $rows = Arr::get($body, 'serviceHistory');
 
-            if (! is_array($rows)) {
-                throw new VecvApiException($this->missingRowsMessage($body));
-            }
+                if (! is_array($rows)) {
+                    throw new VecvApiException($this->missingRowsMessage($body));
+                }
 
-            $summary['received'] += count($rows);
+                $summary['received'] += count($rows);
 
-            foreach ($rows as $row) {
-                $this->store($row, $machineMap, $summary);
+                foreach ($rows as $row) {
+                    $this->store($row, $machineMap, $summary);
+                }
             }
         }
 
@@ -286,7 +291,66 @@ class VecvServiceHistorySyncService extends VecvSyncService
             );
         }
 
+        // The vendor refuses any date more than 30 days old with "Dates should
+        // not exceed 30 days (720 hours) from today's date". Caught here so an
+        // impossible range fails immediately with a message that says why,
+        // instead of burning a rate-limit slot to be told the same thing in
+        // vendor wording.
+        $oldest = Carbon::today()->subDays(max(1, (int) config('vecv.service_history_max_age_days')));
+
+        if ($start->lessThan($oldest)) {
+            throw new VecvApiException(
+                'Service history start date (' . $start->toDateString() . ') is older than the '
+                . config('vecv.service_history_max_age_days') . ' days VECV allows. The earliest '
+                . 'reachable date is ' . $oldest->toDateString() . '. Older job cards can only come '
+                . 'from what has already been stored locally.'
+            );
+        }
+
         return [$start->toDateString(), $end->toDateString()];
+    }
+
+    /**
+     * Split a date range into windows the vendor will accept.
+     *
+     * VECV rejects any request wider than 48 hours with "The date range should
+     * not exceed 2 days (48 hours)" - a plain error, not a truncation, so an
+     * over-wide request returns nothing at all rather than a partial result.
+     *
+     * Each window is a separate request and therefore a separate rate-limit
+     * slot: at one request per minute per key, a 90 day backfill is 45 windows
+     * and three quarters of an hour. Routine runs stay inside one window by
+     * keeping service_history_lookback_days at the maximum.
+     *
+     * Both ends are inclusive, matching how they are sent (00:00:00 to
+     * 23:59:59), so a 2 day maximum spans start .. start+1.
+     *
+     * @param  string  $start  Y-m-d
+     * @param  string  $end    Y-m-d
+     * @return array   List of [from, to] pairs, oldest first
+     */
+    protected function windows($start, $end)
+    {
+        $maxDays = max(1, (int) config('vecv.service_history_max_range_days'));
+
+        $cursor = Carbon::parse($start);
+        $last   = Carbon::parse($end);
+
+        $windows = [];
+
+        while ($cursor->lessThanOrEqualTo($last)) {
+            $windowEnd = $cursor->copy()->addDays($maxDays - 1);
+
+            if ($windowEnd->greaterThan($last)) {
+                $windowEnd = $last->copy();
+            }
+
+            $windows[] = [$cursor->toDateString(), $windowEnd->toDateString()];
+
+            $cursor = $windowEnd->copy()->addDay();
+        }
+
+        return $windows;
     }
 
     /**
