@@ -73,6 +73,20 @@ class VecvServiceHistorySyncService extends VecvSyncService
 
         foreach ($windows as $window) {
             foreach (array_chunk($chassis, $chunkSize) as $batch) {
+                // Space every request after the first. This is the only sync
+                // that can need more than one call - a wide date range splits
+                // into windows, and a large fleet into chunks - and VECV
+                // refuses a second request inside the same minute, so firing
+                // them back to back guarantees everything past the first is
+                // rate limited.
+                //
+                // A run is therefore minutes long when the range is wide. That
+                // is acceptable because this only ever runs from a background
+                // pass or the console, never inside an HTTP request.
+                if ($summary['batches'] > 0) {
+                    sleep(max(0, (int) config('vecv.service_history_request_gap_seconds')));
+                }
+
                 $summary['batches']++;
 
                 $body = $this->client->post('service_history', [

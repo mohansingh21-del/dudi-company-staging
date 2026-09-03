@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Models\EquipmentFuelReading;
+use App\Models\TruckConnectReading;
+use App\Services\FleetRefreshRunner;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 
@@ -26,13 +28,13 @@ class FleetTelematicsDashboardService
      *
      * @return array
      */
-    public function summary()
+    public function summary(array $filters = [])
     {
-        $fleet = $this->fleet();
+        $fleet = $this->fleet($filters);
 
         $online = $fleet->where('is_stale', false);
 
-        $states  = $this->stateCounts($online);
+        $states  = $this->stateCounts($fleet);
         $avgFuel = $this->averageFuel($fleet);
 
         return [
@@ -61,12 +63,17 @@ class FleetTelematicsDashboardService
                 // "we do not know" must never be reported as "switched off".
                 'unknown_vehicles'    => $states['unknown'],
 
+                // Same number as offline_vehicles above, repeated here so the
+                // four operational tiles can be read as one set that sums to
+                // the fleet.
+                'data_unavailable'    => $states['offline'],
+
                 'average_fuel_level'  => $avgFuel,
 
                 // Requires the VECV alert log endpoint, which is not yet
                 // returning data. Null means "not available", not "zero
                 // events" - the UI must show a dash, never a 0.
-                'safety_events'       => null,
+                'safety_events'       => $this->safetyEvents($filters)['total'],
 
                 // Feed chassis with no row in the machine master. 6.1 asks for
                 // the master to be reconciled against API receipts; this is
@@ -74,12 +81,13 @@ class FleetTelematicsDashboardService
                 'unmatched_vehicles'  => $fleet->whereStrict('machine_id', null)->count(),
             ],
 
-            // Operational state is counted over ONLINE vehicles only. The API
-            // has no staleness marker and returns the last known reading
-            // forever: one vehicle in the current feed last reported 2.5 days
-            // ago and still comes back as MOVING. Counting those would report
-            // parked machines as working.
-            'operational' => $this->operational($online, $fleet->count()),
+            // Counted across the whole fleet, with "offline" as one of the
+            // categories. The API has no staleness marker and returns the last
+            // known reading forever - one vehicle in the current feed last
+            // reported days ago and still comes back as MOVING - so a stale
+            // machine is counted as offline rather than as whatever it was
+            // doing when it last spoke.
+            'operational' => $this->operational($fleet),
 
             // Fuel, by contrast, is counted over the WHOLE fleet. A parked
             // machine's tank level is still its real tank level, whereas its
@@ -87,14 +95,24 @@ class FleetTelematicsDashboardService
             // returned alongside so the UI can qualify the figure.
             'fuel' => $this->fuel($fleet),
 
-            // Not available on this feed. VECV publishes no harsh
-            // acceleration/braking/cornering counters on either the fuel or
-            // the location endpoint, so the mock-up's "Safety Events" card
-            // cannot be built from VECV at all - it needs the Truck Connect
-            // feed, which does carry them.
-            'safety_events' => null,
+            'safety_events' => $this->safetyEvents($filters),
 
+            // When this response was computed. Not the same as when the data
+            // was fetched - the GETs never call VECV, so a page refreshed at
+            // 4pm can be showing telemetry pulled at 11am.
             'generated_at' => Carbon::now()->toDateTimeString(),
+
+            // When someone last pressed the refresh button. This is the one to
+            // show as "Last refreshed" - the GETs never call VECV, so a page
+            // opened at 4pm can be showing telemetry pulled at 11am, and only
+            // this says which.
+            //
+            // Null until the button has been pressed at least once. Note a
+            // refresh does not guarantee new readings: a feed can be fetched
+            // successfully and store nothing because no vehicle has reported
+            // since. Per-vehicle freshness is age_minutes on each row.
+            'last_refreshed_at' => FleetRefreshRunner::lastPressedAt(),
+
             'stale_after_minutes' => (int) config('vecv.stale_after_minutes'),
         ];
     }
@@ -107,20 +125,7 @@ class FleetTelematicsDashboardService
      */
     public function vehicles(array $filters = [])
     {
-        $rows = $this->fleet();
-
-        $search = isset($filters['search']) ? trim((string) $filters['search']) : '';
-
-        if ($search !== '') {
-            $rows = $rows->filter(function ($row) use ($search) {
-                return stripos($row['chassis_number'], $search) !== false
-                    || ($row['dumper_no'] !== null && stripos($row['dumper_no'], $search) !== false);
-            });
-        }
-
-        if (isset($filters['status']) && in_array($filters['status'], ['online', 'offline'], true)) {
-            $rows = $rows->where('is_stale', $filters['status'] === 'offline');
-        }
+        $rows = $this->fleet($filters);
 
         // Offline first: a vehicle that has stopped reporting is the row an
         // operator needs to act on, and it is the one that sorts last by every
@@ -131,7 +136,235 @@ class FleetTelematicsDashboardService
             ['chassis_number', 'asc'],
         ])->values();
 
-        return $rows->all();
+        return $this->paginate($rows, $filters);
+    }
+
+    /**
+     * Slice a fleet collection into a page.
+     *
+     * Paginated here rather than in the database because the fleet is assembled
+     * in memory from two vendors' feeds - there is no single query to put a
+     * LIMIT on. The whole fleet is a few dozen rows, so the cost of sorting it
+     * all and slicing is nothing.
+     *
+     * Passing no limit returns every row, matching how the rest of this API
+     * behaves, and still carries a pagination block so a caller never has to
+     * branch on whether one is present.
+     *
+     * @param  \Illuminate\Support\Collection  $rows
+     * @param  array  $filters
+     * @return array
+     */
+    protected function paginate(Collection $rows, array $filters)
+    {
+        $total = $rows->count();
+
+        $limit = isset($filters['limit']) ? (int) $filters['limit'] : 0;
+
+        // No limit asked for: one page holding everything. last_page is 1, not
+        // the row count - passing the total there says there are 39 more pages
+        // to fetch and hands the caller a next_page_url that returns nothing.
+        if ($limit < 1) {
+            return [
+                'data'       => $rows->all(),
+                'pagination' => $this->pagination($total, $total ?: 1, 1, 1),
+            ];
+        }
+
+        $lastPage = max(1, (int) ceil($total / $limit));
+
+        // Clamped rather than trusted. A page beyond the end would otherwise
+        // return an empty list that looks like "no vehicles" instead of "you
+        // asked past the end".
+        $page = isset($filters['page']) ? max(1, (int) $filters['page']) : 1;
+        $page = min($page, $lastPage);
+
+        return [
+            'data'       => $rows->forPage($page, $limit)->values()->all(),
+            'pagination' => $this->pagination($total, $limit, $page, $lastPage),
+        ];
+    }
+
+    /**
+     * The pagination block, in the shape the rest of this API uses.
+     *
+     * @param  int  $total
+     * @param  int  $perPage
+     * @param  int  $page
+     * @param  int  $lastPage
+     * @return array
+     */
+    protected function pagination($total, $perPage, $page, $lastPage)
+    {
+        $from = $total === 0 ? 0 : (($page - 1) * $perPage) + 1;
+        $to   = $total === 0 ? 0 : min($page * $perPage, $total);
+
+        // Carry the whole query string forward, not just page and limit -
+        // following a next link must not silently drop the filters the caller
+        // is looking at and hand back a different fleet.
+        $query = request() ? request()->query() : [];
+
+        $url = function ($target) use ($perPage, $query) {
+            return url()->current() . '?' . http_build_query(
+                array_merge($query, ['page' => $target, 'limit' => $perPage])
+            );
+        };
+
+        return [
+            'total'              => $total,
+            'current_page'       => $page,
+            'per_page'           => $perPage,
+            'last_page'          => $lastPage,
+            'from'               => $from,
+            'to'                 => $to,
+            'next_page_url'      => $page < $lastPage ? $url($page + 1) : null,
+            'previous_page_url'  => $page > 1 ? $url($page - 1) : null,
+        ];
+    }
+
+    /**
+     * The operations row: the operational split and today's safety events.
+     *
+     * @return array
+     */
+    public function operations(array $filters = [])
+    {
+        return [
+            'operational'   => $this->operational($this->fleet($filters)),
+            'safety_events' => $this->safetyEvents($filters),
+        ];
+    }
+
+    /**
+     * Today's harsh-driving events, from the Truck Connect feed.
+     *
+     * VECV publishes no harsh acceleration/braking/cornering counters on any of
+     * its endpoints - they exist only on its alert log, which is still not
+     * returning data - so every event here comes from Truck Connect machines.
+     *
+     * IMPORTANT, and unresolved: the three counters have read 0 on every
+     * machine observed so far, including ones plainly driving, which points to
+     * them being per-message flags rather than running totals. This sums them
+     * across the day's readings, which is correct for flags and WRONG for
+     * cumulative counters - summing a running total would multiply it by the
+     * number of polls.
+     *
+     * If a value is ever seen climbing steadily on one machine, they are
+     * cumulative, and a day's figure becomes the difference between the first
+     * and last reading of the day instead of a sum. Nothing here will fail
+     * loudly if that happens; the number will simply be far too large.
+     *
+     * Either reading needs readings captured through the day, which an
+     * on-demand-only refresh does not provide - events landing between two
+     * presses of the button are never seen at all.
+     *
+     * @return array
+     */
+    public function safetyEvents(array $filters = [])
+    {
+        // Follows the date filter, so the card matches the day the rest of the
+        // dashboard is showing rather than always reporting today.
+        $today = $this->date($filters) ?: Carbon::today();
+
+        $fleet = $this->fleet($filters);
+
+        $readings = TruckConnectReading::query()
+            ->leftJoin('equipment_names', function ($join) {
+                $join->on('equipment_names.chassis_number', '=', 'truck_connect_readings.vin')
+                    ->whereNotNull('equipment_names.chassis_number');
+            })
+            ->whereDate('truck_connect_readings.reported_at', $today)
+            ->when(! empty($filters['machine_id']), function ($q) use ($filters) {
+                $q->where('equipment_names.id', (int) $filters['machine_id']);
+            })
+            ->select(
+                'truck_connect_readings.vin',
+                'truck_connect_readings.harsh_braking',
+                'truck_connect_readings.harsh_acceleration',
+                'truck_connect_readings.harsh_cornering',
+                'equipment_names.equipment_name'
+            )
+            ->get();
+
+        $counts = [
+            'harsh_braking'      => (int) $readings->sum('harsh_braking'),
+            'harsh_acceleration' => (int) $readings->sum('harsh_acceleration'),
+            'harsh_cornering'    => (int) $readings->sum('harsh_cornering'),
+        ];
+
+        // "Events by Dumper (Top 5)". Machines with no events are left out
+        // rather than listed at zero - the panel is for the ones to look at.
+        $byVehicle = $readings
+            ->groupBy('vin')
+            ->map(function ($rows, $vin) {
+                return [
+                    'chassis_number' => $vin,
+                    'display_name'   => $rows->first()->equipment_name ?: $vin,
+                    'harsh_braking'      => (int) $rows->sum('harsh_braking'),
+                    'harsh_acceleration' => (int) $rows->sum('harsh_acceleration'),
+                    'harsh_cornering'    => (int) $rows->sum('harsh_cornering'),
+                    'total' => (int) ($rows->sum('harsh_braking')
+                        + $rows->sum('harsh_acceleration')
+                        + $rows->sum('harsh_cornering')),
+                ];
+            })
+            ->filter(function ($row) {
+                return $row['total'] > 0;
+            })
+            // Chassis is the tie-break so machines on the same count do not
+            // swap places between refreshes.
+            ->sortBy([
+                ['total', 'desc'],
+                ['chassis_number', 'asc'],
+            ])
+            ->take(5)
+            ->values()
+            ->all();
+
+        return [
+            // True once there is a feed publishing these at all - which there
+            // now is. It does not promise the numbers are non-zero.
+            'available' => true,
+
+            'date'   => $today->toDateString(),
+            'counts' => $counts,
+            'total'  => array_sum($counts),
+
+            'by_vehicle' => $byVehicle,
+
+            // Only Truck Connect machines can contribute. Stated so a reader
+            // does not take a quiet day as fleet-wide - the VECV machines are
+            // not being measured for this at all.
+            //
+            // Both counts respect the active filters, so scoping the dashboard
+            // to one machine does not leave this claiming the whole fleet was
+            // measured.
+            'basis'         => 'truck_connect',
+            'basis_count'   => $fleet->where('source', 'truck_connect')->count(),
+            'fleet_count'   => $fleet->count(),
+
+            // How many readings the day's figure was built from. One reading
+            // per machine means almost nothing was captured: events landing
+            // between refreshes are lost, so a low number here means the total
+            // understates reality rather than the fleet having behaved.
+            'readings_today' => $readings->count(),
+        ];
+    }
+
+    /**
+     * Everything the fuel panel needs: the donut, the fleet average and the
+     * vehicles running lowest.
+     *
+     * One entry point because the donut and the "lowest fuel" list are one
+     * panel on screen and must never disagree. Served separately they would be
+     * computed from two snapshots taken moments apart, and a vehicle could sit
+     * in the Critical slice of one while the other still called it Low.
+     *
+     * @return array
+     */
+    public function fuelStatus(array $filters = [])
+    {
+        return $this->fuel($this->fleet($filters));
     }
 
     /**
@@ -140,17 +373,31 @@ class FleetTelematicsDashboardService
      * @param  int|null  $limit
      * @return array
      */
-    public function lowestFuel($limit = null)
+    public function lowestFuel($limit = null, array $filters = [])
+    {
+        return $this->lowestFrom($this->fleet($filters), $limit);
+    }
+
+    /**
+     * The lowest-fuel rows out of an already-loaded fleet snapshot.
+     *
+     * Takes the snapshot rather than fetching its own so the fuel panel builds
+     * its donut and its list from the same rows in a single query.
+     *
+     * @param  \Illuminate\Support\Collection  $fleet
+     * @param  int|null  $limit
+     * @return array
+     */
+    protected function lowestFrom(Collection $fleet, $limit = null)
     {
         $limit = $limit ?: (int) config('vecv.lowest_fuel_limit');
 
-        return $this->fleet()
-            // A vehicle with no fuel reading is not "low on fuel", it is
-            // unknown. Left in, it would sort to the top of an ascending list
-            // and fill the panel with vehicles that have no data at all.
-            ->filter(function ($row) {
-                return $row['fuel_level_pct'] !== null;
-            })
+        // Reuses the donut's validity rule - present and inside 0-100 - so a
+        // vehicle can never appear in the list under a bucket the donut did
+        // not count it in. A missing or impossible reading is not "low on
+        // fuel", it is unknown; left in, nulls sort to the top of an ascending
+        // list and fill the panel with vehicles that have no data at all.
+        return $this->withValidFuel($fleet)
             // Chassis is the tie-break so two vehicles on the same level do
             // not swap places between refreshes.
             ->sortBy([
@@ -174,16 +421,98 @@ class FleetTelematicsDashboardService
      *
      * @return \Illuminate\Support\Collection
      */
-    protected function fleet()
+    protected function fleet(array $filters = [])
     {
-        return EquipmentFuelReading::latestPerChassis()
-            // Left join, not a constraint: VECV is the source of truth for
-            // which vehicles exist. A chassis missing from the machine master
+        $asOf = $this->asOf($filters);
+        $date = $this->date($filters);
+
+        $rows = $this->vecvFleet($asOf, $date)->concat($this->truckConnectFleet($asOf, $date));
+
+        // A machine can in principle be fitted with both vendors' units. Key on
+        // the chassis and keep whichever reading is newer, so it is counted
+        // once and shown at its freshest rather than appearing twice in the
+        // fleet total.
+        return $rows
+            ->groupBy(function ($row) {
+                return strtoupper($row['chassis_number']);
+            })
+            ->map(function ($group) {
+                return $group->sortByDesc(function ($row) {
+                    // A row with no resolvable timestamp loses to one that has
+                    // any timestamp at all.
+                    return $row['last_reported_at'] ?: '';
+                })->first();
+            })
+            ->values()
+            ->pipe(function ($rows) use ($filters) {
+                return $this->applyFilters($rows, $filters);
+            });
+    }
+
+    /**
+     * The instant staleness is measured against.
+     *
+     * "Now" for today or no date at all. For a past date it is the end of that
+     * day, because measuring a historical reading against the present moment
+     * would mark every machine offline and make the whole view useless - the
+     * question being asked is "who was reporting that day", not "who is
+     * reporting now".
+     *
+     * @param  array  $filters
+     * @return \Carbon\Carbon
+     */
+    protected function asOf(array $filters)
+    {
+        $date = $this->date($filters);
+
+        if ($date === null || $date->isToday()) {
+            return Carbon::now();
+        }
+
+        return $date->copy()->endOfDay();
+    }
+
+    /**
+     * The requested day, or null for "current state".
+     *
+     * @param  array  $filters
+     * @return \Carbon\Carbon|null
+     */
+    protected function date(array $filters)
+    {
+        if (empty($filters['date'])) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($filters['date'])->startOfDay();
+        } catch (\Throwable $e) {
+            // An unparseable date falls back to the live view rather than
+            // returning an empty fleet that looks like a data problem.
+            return null;
+        }
+    }
+
+    /**
+     * Current state of every VECV machine.
+     *
+     * Reads the fuel feed only: it is a superset of the location feed for
+     * everything shown here - fuel, position, speed, odometer, engine hours and
+     * status in one row - so using it alone avoids merging two feeds whose
+     * readings were taken a minute apart and disagree slightly.
+     *
+     * @return \Illuminate\Support\Collection
+     */
+    protected function vecvFleet(Carbon $asOf, $date = null)
+    {
+        return EquipmentFuelReading::latestPerChassis($date)
+            // Left join, not a constraint: the feed is the source of truth for
+            // which machines exist. A chassis missing from the machine master
             // still appears here, with a null dumper number, rather than
             // vanishing from the fleet count.
             //
-            // Joined live rather than reading the stored equipment_name_id,
-            // so registering a machine fixes the whole dashboard immediately
+            // Joined live rather than reading the stored equipment_name_id, so
+            // registering a machine fixes the whole dashboard immediately
             // instead of only affecting readings ingested afterwards.
             ->leftJoin('equipment_names', function ($join) {
                 $join->on('equipment_names.chassis_number', '=', 'equipment_fuel_readings.chassis_number')
@@ -195,60 +524,80 @@ class FleetTelematicsDashboardService
                 'equipment_names.equipment_name'
             )
             ->get()
-            ->map(function ($reading) {
-                return $this->presentRow($reading);
+            ->map(function ($reading) use ($asOf) {
+                return $this->presentVecvRow($reading, $asOf);
             });
     }
 
     /**
-     * Shape one reading for the dashboard.
+     * Current state of every Truck Connect machine.
+     *
+     * @return \Illuminate\Support\Collection
+     */
+    protected function truckConnectFleet(Carbon $asOf, $date = null)
+    {
+        return TruckConnectReading::latestPerVin($date)
+            ->leftJoin('equipment_names', function ($join) {
+                $join->on('equipment_names.chassis_number', '=', 'truck_connect_readings.vin')
+                    ->whereNotNull('equipment_names.chassis_number');
+            })
+            ->select(
+                'truck_connect_readings.*',
+                'equipment_names.id as machine_id',
+                'equipment_names.equipment_name'
+            )
+            ->get()
+            ->map(function ($reading) use ($asOf) {
+                return $this->presentTruckConnectRow($reading, $asOf);
+            });
+    }
+
+    /**
+     * Shape one VECV reading.
      *
      * Live values are blanked on a stale reading rather than shown as-is. The
      * feed keeps returning the last known speed and status indefinitely, so
      * displaying them would state that a machine parked since Sunday is doing
-     * 12 km/h. Fuel, odometer and engine hours survive staleness - they are
-     * the last known true values and do not drift while a machine sits - so
-     * they are kept, with age exposed so the UI can qualify them.
+     * 12 km/h. Fuel, odometer and engine hours survive staleness - they are the
+     * last known true values and do not drift while a machine sits - so they
+     * are kept, with age exposed so the UI can qualify them.
      *
      * @param  \App\Models\EquipmentFuelReading  $reading
      * @return array
      */
-    protected function presentRow(EquipmentFuelReading $reading)
+    protected function presentVecvRow(EquipmentFuelReading $reading, Carbon $asOf)
     {
-        $isStale = (bool) $reading->is_stale;
+        [$age, $isStale] = $this->freshness(
+            $reading->reported_at,
+            (int) config('vecv.stale_after_minutes'),
+            $asOf
+        );
+
+        $speed   = $this->speed($reading->vehicle_speed);
         $fuelPct = $reading->fuel_level_pct === null ? null : (float) $reading->fuel_level_pct;
 
-        return [
+        return $this->row([
+            'source'         => 'vecv',
             'chassis_number' => $reading->chassis_number,
-
-            // equipment_names.id - the machine this chassis is registered as.
             'machine_id'     => $reading->machine_id,
+            'machine_name'   => $reading->equipment_name,
 
-            // Falls back to the chassis so the table is never blank in the
-            // column an operator identifies the machine by. Register the
-            // chassis on equipment_names to replace it with the machine name.
-            'dumper_no'      => $reading->equipment_name,
-            'display_name'   => $reading->equipment_name ?: $reading->chassis_number,
-
-            'connectivity'   => $isStale ? 'offline' : 'online',
             'is_stale'       => $isStale,
-            'age_minutes'    => $reading->age_minutes,
+            'age_minutes'    => $age,
+            'last_reported_at' => $reading->reported_at ? $reading->reported_at->toDateTimeString() : null,
 
-            // VECV vocabulary: MOVING / IDLING / STOPPED. Suppressed when
-            // stale for the reason above.
-            'vehicle_status' => $isStale ? null : $reading->vehicle_status,
-            'vehicle_speed'  => $isStale ? null : $this->speed($reading->vehicle_speed),
+            // VECV vocabulary: MOVING / IDLING / STOPPED.
+            'vehicle_status' => $reading->vehicle_status,
+            'vehicle_speed'  => $speed,
 
-            // Single classification used by the tiles, the operational split
-            // and the table badge, so they cannot disagree. Null when stale.
-            'operational_state' => $isStale
-                ? null
-                : $this->state($this->speed($reading->vehicle_speed), $reading->vehicle_status),
+            // No ignition flag anywhere on this feed, so IDLING and STOPPED
+            // stand in for it - see state().
+            'ignition'       => null,
+            'engine_rpm'     => null,
 
             'fuel_level_pct' => $fuelPct,
             'fuel_level_ltr' => $this->float($reading->fuel_level_ltr),
-            'fuel_status'    => $this->bucket($fuelPct),
-
+            'adblue_pct'     => null,
             'def_level_ltr'  => $this->float($reading->def_level_ltr),
 
             // Whole kilometres on this feed.
@@ -260,40 +609,257 @@ class FleetTelematicsDashboardService
 
             'latitude'       => $this->float($reading->latitude),
             'longitude'      => $this->float($reading->longitude),
+        ]);
+    }
 
+    /**
+     * Shape one Truck Connect reading into the same row as a VECV one.
+     *
+     * @param  \App\Models\TruckConnectReading  $reading
+     * @return array
+     */
+    protected function presentTruckConnectRow(TruckConnectReading $reading, Carbon $asOf)
+    {
+        [$age, $isStale] = $this->freshness(
+            $reading->reported_at,
+            (int) config('truckconnect.stale_after_minutes'),
+            $asOf
+        );
+
+        $speed = $this->speed($reading->vehicle_speed);
+
+        return $this->row([
+            'source'         => 'truck_connect',
+            'chassis_number' => $reading->vin,
+            'machine_id'     => $reading->machine_id,
+            'machine_name'   => $reading->equipment_name,
+
+            'is_stale'       => $isStale,
+            'age_minutes'    => $age,
             'last_reported_at' => $reading->reported_at ? $reading->reported_at->toDateTimeString() : null,
 
-            // Columns the mock-up shows that VECV simply does not publish.
-            // Returned explicitly as null so the front end renders "-" rather
-            // than silently dropping the column and looking complete.
-            'ignition'   => null,
-            'engine_rpm' => null,
+            // Its own vocabulary: RUNNING / IDLE / OFFLINE, which measurement
+            // shows means the same three things as VECV's MOVING / IDLING /
+            // STOPPED. Not used to decide connectivity: "OFFLINE" here means
+            // the engine is off, not that the unit has stopped reporting.
+            'vehicle_status' => $reading->vehicle_status,
+            'vehicle_speed'  => $speed,
+
+            // A real ignition flag, which VECV never publishes. state() prefers
+            // it, so these rows classify by the rule as written rather than by
+            // a status word standing in for it.
+            'ignition'       => $reading->ignition,
+            'engine_rpm'     => $this->float($reading->engine_rpm),
+
+            // Interpreted from the raw vendor value against config - null while
+            // a unit is unconfirmed rather than a guess.
+            'fuel_level_pct' => $reading->fuel_level_pct,
+            'fuel_level_ltr' => null,
+            'adblue_pct'     => $reading->adblue_level_pct,
+            'def_level_ltr'  => null,
+
+            'odometer_km'    => $reading->odometer_km,
+
+            // Not published on this feed.
+            'engine_hours'   => null,
+
+            'latitude'       => $this->float($reading->latitude),
+            'longitude'      => $this->float($reading->longitude),
+        ]);
+    }
+
+    /**
+     * Age in minutes and whether that counts as stale, against a reference
+     * instant.
+     *
+     * Computed here rather than read off the model's is_stale accessor, because
+     * that accessor always measures against "now". When the dashboard is
+     * pointed at a past date the reference is the end of that day instead, and
+     * a model that only knows about now would report every historical machine
+     * as offline.
+     *
+     * Each vendor keeps its own threshold, so the two feeds can be judged by
+     * how often they actually report rather than by one shared number.
+     *
+     * @param  \Carbon\Carbon|null  $reportedAt
+     * @param  int  $thresholdMinutes
+     * @param  \Carbon\Carbon  $asOf
+     * @return array  [age|null, isStale]
+     */
+    protected function freshness($reportedAt, $thresholdMinutes, Carbon $asOf)
+    {
+        if (! $reportedAt) {
+            // No usable timestamp counts as stale: showing an unverifiable
+            // reading as current is the failure worth avoiding.
+            return [null, true];
+        }
+
+        $age = $reportedAt->diffInMinutes($asOf);
+
+        return [$age, $age > $thresholdMinutes];
+    }
+
+    /**
+     * Narrow a fleet to what the dashboard filters asked for.
+     *
+     * Applied after the rows are built, because connectivity, operational state
+     * and fuel bucket are all derived - none of them is a column to put in a
+     * WHERE clause.
+     *
+     * Every panel takes the same filters, so a filtered dashboard is internally
+     * consistent: filtering to Critical fuel makes the donut read 100%
+     * critical, which is the honest answer to "show me only the critical ones"
+     * rather than a mixed view that contradicts the table beneath it.
+     *
+     * @param  \Illuminate\Support\Collection  $rows
+     * @param  array  $filters
+     * @return \Illuminate\Support\Collection
+     */
+    protected function applyFilters(Collection $rows, array $filters)
+    {
+        // The dumper dropdown. Machine id, not chassis - the same value the
+        // machine list endpoint returns.
+        if (! empty($filters['machine_id'])) {
+            $rows = $rows->where('machine_id', (int) $filters['machine_id']);
+        }
+
+        if (! empty($filters['connectivity']) && in_array($filters['connectivity'], ['online', 'offline'], true)) {
+            $rows = $rows->where('connectivity', $filters['connectivity']);
+        }
+
+        if (! empty($filters['operational_status'])) {
+            $rows = $rows->where('operational_state', $filters['operational_status']);
+        }
+
+        if (! empty($filters['fuel_status'])) {
+            $rows = $rows->where('fuel_status', $filters['fuel_status']);
+        }
+
+        if (! empty($filters['source'])) {
+            $rows = $rows->where('source', $filters['source']);
+        }
+
+        $search = isset($filters['search']) ? trim((string) $filters['search']) : '';
+
+        if ($search !== '') {
+            $rows = $rows->filter(function ($row) use ($search) {
+                return stripos($row['chassis_number'], $search) !== false
+                    || ($row['dumper_no'] !== null && stripos($row['dumper_no'], $search) !== false);
+            });
+        }
+
+        return $rows->values();
+    }
+
+    /**
+     * Assemble a fleet row from the fields a feed could supply.
+     *
+     * Both vendors go through here so every row carries the same keys in the
+     * same shape. A field one feed does not publish is present and null rather
+     * than absent, so the front end renders a dash instead of silently dropping
+     * a column and looking complete.
+     *
+     * @param  array  $data
+     * @return array
+     */
+    protected function row(array $data)
+    {
+        $isStale = (bool) $data['is_stale'];
+
+        return [
+            'source'         => $data['source'],
+            'chassis_number' => $data['chassis_number'],
+            'machine_id'     => $data['machine_id'],
+
+            // Falls back to the chassis so the table is never blank in the
+            // column an operator identifies the machine by. Register the
+            // chassis on equipment_names to replace it with the machine name.
+            'dumper_no'      => $data['machine_name'],
+            'display_name'   => $data['machine_name'] ?: $data['chassis_number'],
+
+            'connectivity'   => $isStale ? 'offline' : 'online',
+            'is_stale'       => $isStale,
+            'age_minutes'    => $data['age_minutes'],
+            'last_reported_at' => $data['last_reported_at'],
+
+            // The vendor's own status word, passed through unchanged and NOT
+            // used to decide connectivity above.
+            //
+            // Named "vendor_" because Truck Connect's value reads as a
+            // contradiction otherwise: "OFFLINE" beside connectivity "online".
+            // It is not about the connection. Measured across fresh readings on
+            // 2026-09-03 it tracks the ignition flag exactly - RUNNING and IDLE
+            // on every ignition-on machine, OFFLINE on every ignition-off one -
+            // so it describes the machine's power state, and the two feeds turn
+            // out to mean the same three things:
+            //
+            //     RUNNING ~ MOVING    (ignition on, travelling)
+            //     IDLE    ~ IDLING    (ignition on, stopped)
+            //     OFFLINE ~ STOPPED   (ignition off)
+            //
+            // Do not read it as connectivity. A machine parked with its engine
+            // off reports "OFFLINE" while sending fuel, odometer and GPS every
+            // few minutes; treating that as "no data" would drop it from the
+            // fleet counts and out of the low-fuel list.
+            'vendor_status'  => $isStale ? null : $data['vehicle_status'],
+
+            // Suppressed when stale: the feeds keep returning the last known
+            // speed and status forever, so showing them would report a machine
+            // parked since Sunday as doing 12 km/h.
+            'vehicle_speed'  => $isStale ? null : $data['vehicle_speed'],
+            'engine_rpm'     => $isStale ? null : $data['engine_rpm'],
+            'ignition'       => $isStale ? null : $data['ignition'],
+
+            // Single classification used by the tiles, the operational split
+            // and the table badge, so they cannot disagree.
+            //
+            // A stale row is 'offline' rather than null: not knowing what a
+            // machine is doing is itself a state worth counting, and it is the
+            // one an operator acts on.
+            'operational_state' => $isStale
+                ? 'offline'
+                : $this->state($data['vehicle_speed'], $data['vehicle_status'], $data['ignition']),
+
+            // These survive staleness - a parked machine's tank level and
+            // odometer are still its real ones - so they are kept, with
+            // age_minutes exposed so the UI can qualify them.
+            'fuel_level_pct' => $data['fuel_level_pct'],
+            'fuel_level_ltr' => $data['fuel_level_ltr'],
+            'fuel_status'    => $this->bucket($data['fuel_level_pct']),
+            'adblue_pct'     => $data['adblue_pct'],
+            'def_level_ltr'  => $data['def_level_ltr'],
+
+            'odometer_km'    => $data['odometer_km'],
+            'engine_hours'   => $data['engine_hours'],
+
+            'latitude'       => $data['latitude'],
+            'longitude'      => $data['longitude'],
         ];
     }
 
     /**
-     * Moving / idling / stopped counts over the online vehicles.
+     * The operational split across the whole fleet.
      *
-     * Classification lives in state(); this only tallies it.
+     * Classification lives in state() and presentRow(); this only tallies it.
      *
-     * @param  \Illuminate\Support\Collection  $online
-     * @param  int  $fleetTotal
+     * @param  \Illuminate\Support\Collection  $fleet
      * @return array
      */
-    protected function operational(Collection $online, $fleetTotal)
+    protected function operational(Collection $fleet)
     {
-        $counts = $this->stateCounts($online);
+        $counts = $this->stateCounts($fleet);
 
         return [
             'counts'      => $counts,
-            'percentages' => $this->distribute($counts, $online->count()),
+            'percentages' => $this->distribute($counts, $fleet->count()),
 
-            // Denominator, stated. Every operational percentage is a share of
-            // the online vehicles, not of the whole fleet - without this the
-            // numbers look like they should add up to the fleet size.
-            'basis'       => 'online',
-            'basis_count' => $online->count(),
-            'fleet_count' => $fleetTotal,
+            // Denominator is the whole fleet, and "offline" is one of the
+            // categories rather than an exclusion. That is what makes the bars
+            // add up to the fleet size and the percentages to 100 - counting
+            // only the online vehicles leaves a reader wondering where the
+            // rest went.
+            'basis'       => 'all vehicles',
+            'basis_count' => $fleet->count(),
         ];
     }
 
@@ -340,6 +906,10 @@ class FleetTelematicsDashboardService
                 'normal_min'   => (float) config('vecv.fuel_buckets.normal_min'),
                 'critical_max' => (float) config('vecv.fuel_buckets.critical_max'),
             ],
+
+            // The "lowest fuel" panel, from the same snapshot and the same
+            // bucketing as the donut above.
+            'lowest' => $this->lowestFrom($fleet),
         ];
     }
 
@@ -358,19 +928,22 @@ class FleetTelematicsDashboardService
      *   4. speed = 0 and engine off         -> engine_off
      *   5. anything else                    -> unknown
      *
-     * Steps 3 and 4 are where VECV departs from the written definition, which
-     * keys them on an ignition flag. VECV publishes no ignition field at all,
-     * on any endpoint. IDLING and STOPPED carry exactly that meaning in its
-     * vocabulary - engine running but not travelling, versus shut down - so
-     * they stand in for it. An unrecognised status falls to unknown rather
-     * than engine_off, honouring the rule that a missing ignition reading must
-     * never be reported as "switched off".
+     * Steps 3 and 4 key on the ignition flag where there is one. Truck Connect
+     * publishes it, so those rows classify by the rule exactly as written. VECV
+     * publishes no ignition field on any endpoint, so IDLING and STOPPED stand
+     * in for it - they carry precisely that meaning in its vocabulary, engine
+     * running but not travelling, versus shut down.
      *
-     * @param  float|null  $speed   Already validated by speed()
-     * @param  string|null $status
+     * Anything unrecognised falls to unknown rather than engine_off, honouring
+     * the rule that a missing ignition reading must never be reported as
+     * "switched off".
+     *
+     * @param  float|null   $speed     Already validated by speed()
+     * @param  string|null  $status
+     * @param  bool|null    $ignition  Null on feeds that do not publish it
      * @return string
      */
-    protected function state($speed, $status)
+    protected function state($speed, $status, $ignition = null)
     {
         if ($speed === null) {
             return 'unknown';
@@ -378,6 +951,12 @@ class FleetTelematicsDashboardService
 
         if ($speed > 0) {
             return 'moving';
+        }
+
+        // Preferred when present: it is the actual signal the definition asks
+        // for, rather than a status word standing in for it.
+        if ($ignition !== null) {
+            return $ignition ? 'stationary' : 'engine_off';
         }
 
         if (strcasecmp((string) $status, 'IDLING') === 0) {
@@ -401,7 +980,13 @@ class FleetTelematicsDashboardService
      */
     protected function stateCounts(Collection $rows)
     {
-        $counts = ['moving' => 0, 'stationary' => 0, 'engine_off' => 0, 'unknown' => 0];
+        $counts = [
+            'moving'     => 0,
+            'stationary' => 0,
+            'engine_off' => 0,
+            'offline'    => 0,
+            'unknown'    => 0,
+        ];
 
         foreach ($rows as $row) {
             $state = $row['operational_state'];

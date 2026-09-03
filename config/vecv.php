@@ -117,7 +117,19 @@ return [
     // service_history_max_range_days and each window costs its own
     // rate-limit slot - a 90 day backfill is 45 minutes of wall clock, so ask
     // for it deliberately with --from/--to rather than making it the default.
-    'service_history_lookback_days' => (int) env('VECV_SERVICE_HISTORY_LOOKBACK_DAYS', 2),
+    // Default 1, not 2: the range is inclusive at both ends, so a lookback of 1
+    // spans today and yesterday - exactly the vendor's 2 day maximum, and
+    // exactly ONE request. A lookback of 2 spans three calendar days, which
+    // splits into two windows and therefore two calls, and the second is
+    // guaranteed to be rate limited.
+    'service_history_lookback_days' => (int) env('VECV_SERVICE_HISTORY_LOOKBACK_DAYS', 1),
+
+    // Pause between successive service history requests within one sync. This
+    // endpoint is the only one that can need more than a single call - a wide
+    // range splits into windows, and many chassis split into chunks - and
+    // without spacing the second call is refused before the first has even
+    // been processed.
+    'service_history_request_gap_seconds' => (int) env('VECV_SERVICE_HISTORY_REQUEST_GAP', 60),
 
     // Hard vendor limit, discovered 2026-09-02: a wider range is rejected with
     // "The date range should not exceed 2 days (48 hours)". The default
@@ -152,6 +164,56 @@ return [
     */
 
     'stale_after_minutes' => (int) env('VECV_STALE_AFTER_MINUTES', 30),
+
+    /*
+    |--------------------------------------------------------------------------
+    | On-demand refresh
+    |--------------------------------------------------------------------------
+    |
+    | The dashboard refresh button walks every feed one call at a time, because
+    | VECV throttles by API key: a successful call is followed by a 429 on the
+    | next endpoint whatever it is. Four feeds therefore need four windows, and
+    | no single HTTP request should be held open that long.
+    |
+    | So one POST runs one feed and reports what is left. The caller polls until
+    | nothing is pending. A feed that is rate limited stays pending and is
+    | retried on a later call - never skipped, because a skipped feed is a
+    | silent hole in the data that nothing downstream would reveal.
+    |
+    */
+
+    // The refresh button now spans both telematics vendors, so this list is
+    // wider than the VECV feeds it sits beside. Order matters: the two that
+    // the dashboard actually renders from come first, so the screen is correct
+    // within seconds and everything after it only adds detail.
+    'refresh_feeds' => ['truck_connect', 'fuel', 'location', 'service_history', 'alerts'],
+
+    // Feeds that do NOT share the VECV rate-limit budget and so need no
+    // cooldown before or after them. Truck Connect is a different vendor, a
+    // different key and a different host, and its own documentation asks for a
+    // call every minute - waiting a VECV window before it would add a minute
+    // to every pass for no reason at all.
+    'refresh_unthrottled_feeds' => ['truck_connect'],
+
+    // Minimum gap between two outbound calls. Held on our side so a too-early
+    // click is answered instantly instead of spending a rate-limit slot to be
+    // told no.
+    'refresh_cooldown_seconds' => (int) env('VECV_REFRESH_COOLDOWN', 60),
+
+    // Attempts per feed before a cycle gives up on it and moves on. Without a
+    // cap, a feed that is genuinely unavailable - the alert log, currently -
+    // would hold a cycle open indefinitely.
+    'refresh_max_attempts' => (int) env('VECV_REFRESH_MAX_ATTEMPTS', 3),
+
+    // A cycle left untouched this long is treated as abandoned, so a new click
+    // starts fresh rather than resuming something from hours ago.
+    'refresh_cycle_ttl_minutes' => (int) env('VECV_REFRESH_CYCLE_TTL', 30),
+
+    // PHP binary used to launch the background pass. PHP_BINARY is the CLI
+    // binary on the command line but the FPM one under a web request, which
+    // cannot always run artisan - so it is overridable. Set VECV_PHP_BINARY to
+    // an absolute path if the refresh button reports that it could not start.
+    'php_binary' => env('VECV_PHP_BINARY', PHP_BINARY),
 
     /*
     |--------------------------------------------------------------------------

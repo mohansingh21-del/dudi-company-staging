@@ -176,9 +176,19 @@ Route::prefix('v1')->group(function () {
             Route::prefix('fleet')->group(function () {
                 Route::get('summary', [FleetTelematicsDashboardController::class, 'summary']);
                 Route::get('vehicles', [FleetTelematicsDashboardController::class, 'vehicles']);
+                // The whole fuel panel - donut plus lowest-fuel list - from one
+                // snapshot, so the two halves cannot disagree.
+                Route::get('fuel', [FleetTelematicsDashboardController::class, 'fuel']);
+
+                // The operations row - operational split plus safety events.
+                Route::get('operations', [FleetTelematicsDashboardController::class, 'operations']);
                 Route::get('lowest-fuel', [FleetTelematicsDashboardController::class, 'lowestFuel']);
+                // One feed per call - the caller loops until data.complete is
+                // true, waiting data.next_in_seconds between calls. See the
+                // controller for why it cannot be done in a single request.
                 Route::post('refresh', [FleetTelematicsDashboardController::class, 'refresh'])
                     ->middleware('throttle:20,1');
+                Route::get('refresh-status', [FleetTelematicsDashboardController::class, 'refreshStatus']);
             });
         });
         Route::get('/me', [AuthController::class, 'me']);

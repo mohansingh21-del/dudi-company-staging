@@ -17,15 +17,35 @@ return [
     |
     */
 
-    'base_url' => rtrim(trim(env('TRUCKCONNECT_BASE_URL', '')), '/'),
+    'base_url' => rtrim(trim(env('TRUCKCONNECT_BASE_URL', 'https://daas.truckonnect.bharatbenz.com')), '/'),
 
+    'endpoints' => [
+        // GET, not POST. Returns the whole subscribed fleet in one call - there
+        // is no per-VIN request and no chassis list to send, which is why this
+        // can be polled far more freely than the VECV feeds.
+        'daas' => '/cds/cdsapi/daas',
+    ],
+
+    // Sent as the "subscription-key" header. The vendor calls it the primary
+    // key.
     'api_key' => trim(env('TRUCKCONNECT_API_KEY', '')),
+
+    // Sent as a query parameter. Identifies which signal subscription to
+    // serve - it decides which of the 21 standard signals come back, so a
+    // wrong or missing one yields a valid-looking response with fields absent.
+    'profile_key' => trim(env('TRUCKCONNECT_PROFILE_KEY', '')),
 
     'timeout' => (int) env('TRUCKCONNECT_TIMEOUT', 30),
 
     // Response envelope. Rows arrive under "daas"; success is signalled by
     // responseStatus 200 with the reason in responseMessage.
     'rows_key' => 'daas',
+
+    // The vendor states this endpoint is meant to be called every minute, and
+    // documents no rate limit - unlike VECV, which throttles to one request a
+    // minute across the whole key. Polling here is therefore cheap, and the
+    // 21 signals arrive for every subscribed truck at once.
+    'poll_interval_seconds' => (int) env('TRUCKCONNECT_POLL_INTERVAL', 60),
 
     /*
     |--------------------------------------------------------------------------

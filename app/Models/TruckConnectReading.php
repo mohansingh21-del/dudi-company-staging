@@ -26,7 +26,7 @@ class TruckConnectReading extends Model
 
     protected $fillable = [
         'vin',
-        'vehicle_id',
+        'equipment_name_id',
         'registration_id',
         'device_imei',
         'ignition',
@@ -51,7 +51,7 @@ class TruckConnectReading extends Model
     ];
 
     protected $casts = [
-        'vehicle_id'         => 'integer',
+        'equipment_name_id'  => 'integer',
         'ignition'           => 'boolean',
         'latitude'           => 'decimal:7',
         'longitude'          => 'decimal:7',
@@ -86,15 +86,16 @@ class TruckConnectReading extends Model
     */
 
     /**
-     * The vehicle this reading belongs to, when the VIN has been matched.
+     * The machine this reading belongs to, when the VIN has been matched.
      *
-     * Linked to vehicles rather than equipment_names: the VIN corresponds to
-     * vehicles.chassis_number, and the dumper number shown on screen is
-     * vehicles.vehicle_number.
+     * equipment_names, not vehicles - the same master the VECV feeds resolve
+     * against, and what the rest of the system counts a machine by. Two masters
+     * for the same question would let a machine be registered for one feed and
+     * invisible to the other, silently.
      */
-    public function vehicle()
+    public function machine()
     {
-        return $this->belongsTo(Vehicle::class, 'vehicle_id');
+        return $this->belongsTo(EquipmentName::class, 'equipment_name_id');
     }
 
     /*
@@ -249,11 +250,28 @@ class TruckConnectReading extends Model
     */
 
     /**
+     * Whether this vehicle is currently reporting.
+     *
+     * Derived from the age of the reading, NOT from vehicle_status - the same
+     * rule the VECV feed uses, so the two vendors can be counted together.
+     *
+     * The vendor's own fields looked like they should answer this and do not.
+     * Observed 2026-09-03 across 28 live vehicles:
+     *
+     *   - vehicle_status "OFFLINE" appears on a vehicle that reported four
+     *     minutes ago, and on others still showing road speed. It reflects the
+     *     unit's own connectivity notion, not whether data is arriving.
+     *   - message_status "H" looked like a history/live marker, but "H" turns
+     *     up on a 7 minute old reading while "L" turns up on one 39 hours old.
+     *
+     * Both are still stored, because they may mean something once the vendor
+     * documents them. Neither is trusted for this.
+     *
      * @return bool
      */
     public function getIsOnlineAttribute()
     {
-        return strcasecmp((string) $this->vehicle_status, 'OFFLINE') !== 0;
+        return ! $this->is_stale;
     }
 
     /**
@@ -298,9 +316,9 @@ class TruckConnectReading extends Model
         return $query->where('vin', trim($vin));
     }
 
-    public function scopeForVehicle($query, $vehicleId)
+    public function scopeForMachine($query, $equipmentNameId)
     {
-        return $query->where('vehicle_id', $vehicleId);
+        return $query->where('equipment_name_id', $equipmentNameId);
     }
 
     /**
@@ -330,13 +348,22 @@ class TruckConnectReading extends Model
      * vehicle master, which also has an id - MySQL rejects the subquery as
      * ambiguous otherwise.
      *
+     * Passing $onDate narrows it to the last reading of that day, which is what
+     * a dashboard viewing a past date needs - the latest reading overall would
+     * show today's state under yesterday's heading.
+     *
+     * @param  \Carbon\Carbon|string|null  $onDate
      * @return \Illuminate\Database\Eloquent\Builder
      */
-    public static function latestPerVin()
+    public static function latestPerVin($onDate = null)
     {
-        return static::whereIn('truck_connect_readings.id', function ($query) {
+        return static::whereIn('truck_connect_readings.id', function ($query) use ($onDate) {
             $query->selectRaw('MAX(id)')
                 ->from('truck_connect_readings')
+                ->when($onDate, function ($q) use ($onDate) {
+                    // The last reading of that day, not the last overall.
+                    $q->whereDate('reported_at', $onDate);
+                })
                 ->groupBy('vin');
         });
     }
