@@ -262,9 +262,11 @@ class FleetTelematicsDashboardService
      */
     public function safetyEvents(array $filters = [])
     {
-        // Follows the date filter, so the card matches the day the rest of the
-        // dashboard is showing rather than always reporting today.
-        $today = $this->date($filters) ?: Carbon::today();
+        // Follows the date filter, so the card covers the same window as the
+        // rest of the dashboard rather than always reporting today. Events are
+        // summed across the whole window, which is what "Last 7 Days" means -
+        // unlike the state panels, which show a point in time.
+        $range = $this->range($filters) ?: [Carbon::today(), Carbon::today()->endOfDay()];
 
         $fleet = $this->fleet($filters);
 
@@ -273,7 +275,7 @@ class FleetTelematicsDashboardService
                 $join->on('equipment_names.chassis_number', '=', 'truck_connect_readings.vin')
                     ->whereNotNull('equipment_names.chassis_number');
             })
-            ->whereDate('truck_connect_readings.reported_at', $today)
+            ->whereBetween('truck_connect_readings.reported_at', [$range[0], $range[1]])
             ->when(! empty($filters['machine_id']), function ($q) use ($filters) {
                 $q->where('equipment_names.id', (int) $filters['machine_id']);
             })
@@ -326,7 +328,9 @@ class FleetTelematicsDashboardService
             // now is. It does not promise the numbers are non-zero.
             'available' => true,
 
-            'date'   => $today->toDateString(),
+            // The window these figures cover. from equals to for a single day.
+            'from'   => $range[0]->toDateString(),
+            'to'     => $range[1]->toDateString(),
             'counts' => $counts,
             'total'  => array_sum($counts),
 
@@ -343,11 +347,11 @@ class FleetTelematicsDashboardService
             'basis_count'   => $fleet->where('source', 'truck_connect')->count(),
             'fleet_count'   => $fleet->count(),
 
-            // How many readings the day's figure was built from. One reading
-            // per machine means almost nothing was captured: events landing
-            // between refreshes are lost, so a low number here means the total
+            // How many readings the figure was built from. One reading per
+            // machine means almost nothing was captured: events landing between
+            // refreshes are lost, so a low number here means the total
             // understates reality rather than the fleet having behaved.
-            'readings_today' => $readings->count(),
+            'readings_in_range' => $readings->count(),
         ];
     }
 
@@ -423,10 +427,10 @@ class FleetTelematicsDashboardService
      */
     protected function fleet(array $filters = [])
     {
-        $asOf = $this->asOf($filters);
-        $date = $this->date($filters);
+        $asOf  = $this->asOf($filters);
+        $range = $this->range($filters);
 
-        $rows = $this->vecvFleet($asOf, $date)->concat($this->truckConnectFleet($asOf, $date));
+        $rows = $this->vecvFleet($asOf, $range)->concat($this->truckConnectFleet($asOf, $range));
 
         // A machine can in principle be fitted with both vendors' units. Key on
         // the chassis and keep whichever reading is newer, so it is counted
@@ -452,45 +456,68 @@ class FleetTelematicsDashboardService
     /**
      * The instant staleness is measured against.
      *
-     * "Now" for today or no date at all. For a past date it is the end of that
-     * day, because measuring a historical reading against the present moment
-     * would mark every machine offline and make the whole view useless - the
-     * question being asked is "who was reporting that day", not "who is
-     * reporting now".
+     * "Now" when the window ends today, or when there is no window at all. For
+     * a window that ended in the past it is the end of that window, because
+     * measuring a historical reading against the present moment would mark
+     * every machine offline and make the view useless - the question being
+     * asked is "who was reporting then", not "who is reporting now".
      *
      * @param  array  $filters
      * @return \Carbon\Carbon
      */
     protected function asOf(array $filters)
     {
-        $date = $this->date($filters);
+        $range = $this->range($filters);
 
-        if ($date === null || $date->isToday()) {
+        if ($range === null || $range[1]->isToday()) {
             return Carbon::now();
         }
 
-        return $date->copy()->endOfDay();
+        return $range[1]->copy();
     }
 
     /**
-     * The requested day, or null for "current state".
+     * The requested window as [start, end], or null for "current state".
+     *
+     * Accepts either a range - from/to, which is what the date picker's Today,
+     * Yesterday, Last 7 Days and Custom Range all reduce to - or a single date
+     * as shorthand for a one-day window.
+     *
+     * Both ends are inclusive: "to" is stretched to the end of its day, so a
+     * range ending today includes everything reported so far today rather than
+     * stopping at midnight this morning.
      *
      * @param  array  $filters
-     * @return \Carbon\Carbon|null
+     * @return array|null  [\Carbon\Carbon, \Carbon\Carbon]
      */
-    protected function date(array $filters)
+    protected function range(array $filters)
     {
-        if (empty($filters['date'])) {
+        $from = $filters['from'] ?? $filters['date'] ?? null;
+        $to   = $filters['to']   ?? $filters['date'] ?? null;
+
+        // One end alone is ambiguous - "everything since Monday" and
+        // "everything up to Monday" are different questions and the UI sends
+        // neither - so it falls back to the live view rather than guessing.
+        if (empty($from) || empty($to)) {
             return null;
         }
 
         try {
-            return Carbon::parse($filters['date'])->startOfDay();
+            $start = Carbon::parse($from)->startOfDay();
+            $end   = Carbon::parse($to)->endOfDay();
         } catch (\Throwable $e) {
             // An unparseable date falls back to the live view rather than
-            // returning an empty fleet that looks like a data problem.
+            // returning an empty fleet that reads as a data problem.
             return null;
         }
+
+        // Reversed by mistake: read it the way it was plainly meant rather
+        // than returning nothing.
+        if ($start->greaterThan($end)) {
+            return [$end->copy()->startOfDay(), $start->copy()->endOfDay()];
+        }
+
+        return [$start, $end];
     }
 
     /**
@@ -503,9 +530,9 @@ class FleetTelematicsDashboardService
      *
      * @return \Illuminate\Support\Collection
      */
-    protected function vecvFleet(Carbon $asOf, $date = null)
+    protected function vecvFleet(Carbon $asOf, $range = null)
     {
-        return EquipmentFuelReading::latestPerChassis($date)
+        return EquipmentFuelReading::latestPerChassis($range[0] ?? null, $range[1] ?? null)
             // Left join, not a constraint: the feed is the source of truth for
             // which machines exist. A chassis missing from the machine master
             // still appears here, with a null dumper number, rather than
@@ -534,9 +561,9 @@ class FleetTelematicsDashboardService
      *
      * @return \Illuminate\Support\Collection
      */
-    protected function truckConnectFleet(Carbon $asOf, $date = null)
+    protected function truckConnectFleet(Carbon $asOf, $range = null)
     {
-        return TruckConnectReading::latestPerVin($date)
+        return TruckConnectReading::latestPerVin($range[0] ?? null, $range[1] ?? null)
             ->leftJoin('equipment_names', function ($join) {
                 $join->on('equipment_names.chassis_number', '=', 'truck_connect_readings.vin')
                     ->whereNotNull('equipment_names.chassis_number');

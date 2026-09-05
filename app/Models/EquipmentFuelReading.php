@@ -198,21 +198,24 @@ class EquipmentFuelReading extends Model
      * vehicle master, which also has an id - MySQL rejects the subquery as
      * ambiguous otherwise.
      *
-     * Passing $onDate narrows it to the last reading of that day, which is what
-     * a dashboard viewing a past date needs - the latest reading overall would
-     * show today's state under yesterday's heading.
+     * Passing a window narrows it to the last reading inside that window, which
+     * is what a dashboard viewing a past date or range needs - the latest
+     * reading overall would show today's state under last week's heading.
      *
-     * @param  \Carbon\Carbon|string|null  $onDate
+     * Both ends are required together; either alone is ignored.
+     *
+     * @param  \Carbon\Carbon|string|null  $from  Inclusive start
+     * @param  \Carbon\Carbon|string|null  $to    Inclusive end
      * @return \Illuminate\Database\Eloquent\Builder
      */
-    public static function latestPerChassis($onDate = null)
+    public static function latestPerChassis($from = null, $to = null)
     {
-        return static::whereIn('equipment_fuel_readings.id', function ($query) use ($onDate) {
+        return static::whereIn('equipment_fuel_readings.id', function ($query) use ($from, $to) {
             $query->selectRaw('MAX(id)')
                 ->from('equipment_fuel_readings')
-                ->when($onDate, function ($q) use ($onDate) {
-                    // The last reading of that day, not the last overall.
-                    $q->whereDate('reported_at', $onDate);
+                ->when($from && $to, function ($q) use ($from, $to) {
+                    // The last reading inside the window, not the last overall.
+                    $q->whereBetween('reported_at', [$from, $to]);
                 })
                 ->groupBy('chassis_number');
         });

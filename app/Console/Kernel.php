@@ -18,6 +18,7 @@ class Kernel extends ConsoleKernel
         \App\Console\Commands\SyncVecvAllCommand::class,
         \App\Console\Commands\SyncTruckConnectCommand::class,
         \App\Console\Commands\RelinkTelematicsReadingsCommand::class,
+        \App\Console\Commands\AdvanceTelematicsRefreshCommand::class,
         \App\Console\Commands\RegisterTelematicsChassisCommand::class,
     ];
     /**
@@ -31,6 +32,22 @@ class Kernel extends ConsoleKernel
         // $schedule->command('inspire')->hourly();
         $schedule->command('roster:rotate')->sundays()->at('00:00');
         $schedule->command('borrowed:cleanup')->everyMinute();
+
+        // Carries an in-progress fleet refresh to its next feed.
+        //
+        // A full refresh spans minutes because VECV throttles by API key, so
+        // something has to move the cycle between windows. Where exec is
+        // available the refresh button launches its own detached pass and this
+        // does nothing; on shared hosting, where exec is disabled, this is what
+        // keeps "press once and poll" working instead of making the browser
+        // post once per feed.
+        //
+        // Idle runs cost nothing - with no cycle in progress it returns without
+        // touching the network. It also records the heartbeat the API uses to
+        // tell whether a waiting cycle will move on its own.
+        $schedule->command('telematics:advance-refresh')
+            ->everyMinute()
+            ->withoutOverlapping();
 
         /*
         | Register any newly seen telematics chassis as a Dumper machine in
