@@ -33,9 +33,12 @@ class FleetTelematicsDashboardController extends Controller
      * endpoint so the panels on screen can never disagree about what is being
      * shown.
      *
-     *   date               Y-m-d. Omitted means live. A past date shows the last
-     *                      reading of that day, with staleness measured against
-     *                      the end of it rather than against now.
+     *   from, to           Y-m-d, both inclusive. Omitted means live. A window
+     *                      shows each machine's last reading inside it, with
+     *                      staleness measured against the end of the window
+     *                      rather than against now. Safety events are summed
+     *                      across the whole window.
+     *   date               Y-m-d shorthand for a one-day window.
      *   machine_id         The dumper dropdown - equipment_names.id.
      *   connectivity       online | offline
      *   operational_status moving | stationary | engine_off | offline | unknown
@@ -49,6 +52,11 @@ class FleetTelematicsDashboardController extends Controller
     protected function filters(Request $request): array
     {
         return [
+            // The date picker sends a range. Today, Yesterday, Last 7 Days and
+            // Custom Range all reduce to from/to; "date" stays accepted as
+            // shorthand for a single day.
+            'from'               => $request->input('from'),
+            'to'                 => $request->input('to'),
             'date'               => $request->input('date'),
             'machine_id'         => $request->input('machine_id'),
             'connectivity'       => $request->input('connectivity'),
@@ -208,31 +216,74 @@ class FleetTelematicsDashboardController extends Controller
     /**
      * POST /api/v1/dashboard/fleet/refresh
      *
-     * Start a full refresh - every feed - and return immediately.
+     * Pull fresh telemetry from every feed. Write only - it returns sync
+     * progress, never dashboard content, so the GETs stay the single way to
+     * read the dashboard and a first page load and a post-refresh reload cannot
+     * disagree.
      *
-     * All four feeds cannot be fetched in one request. VECV throttles by API
-     * key rather than by endpoint, so a successful call is followed by a 429 on
-     * whatever comes next; the feeds have to be spaced a minute apart and a
-     * full pass takes minutes. No HTTP request should be held open for that.
+     * All the feeds cannot be fetched in one request: VECV throttles by API key
+     * rather than by endpoint, so a successful call is followed by a 429 on
+     * whatever comes next, and a full pass therefore spans minutes. It runs one
+     * of two ways depending on what the host allows, and the response says
+     * which in "mode":
      *
-     * So one press launches a detached artisan pass that walks every feed,
-     * waiting out the limit between each and retrying anything rate limited
-     * rather than skipping it. This returns 202 straight away, and the caller
-     * polls refresh-status until running is false.
+     *   background - a detached artisan pass walks every feed on its own. Poll
+     *                GET refresh-status until running is false.
+     *   stepwise   - shared hosting with exec disabled. This call fetched every
+     *                feed that needed no wait; sleep next_in_seconds and POST
+     *                again until complete.
      *
-     * Write only: it never returns dashboard content, so the three GETs remain
-     * the single way to read the dashboard and a first page load and a
-     * post-refresh reload cannot disagree.
+     * Either way a rate-limited feed stays pending and is retried rather than
+     * skipped: a skipped feed is a silent gap that nothing downstream reveals.
      *
      * @return JsonResponse
      */
     public function refresh(FleetRefreshRunner $runner): JsonResponse
     {
+        $userId = optional(request()->user())->id;
+
         try {
-            $started = $runner->startBackgroundPass();
+            // Preferred: hand the whole pass to a detached process so the admin
+            // presses once and walks away.
+            if ($runner->canRunInBackground()) {
+                $started = $runner->startBackgroundPass();
+
+                Log::channel('vecv')->info(
+                    $started ? 'Refresh started (background)' : 'Refresh already running',
+                    ['user_id' => $userId]
+                );
+
+                return response()->json([
+                    'status'  => true,
+                    'mode'    => 'background',
+                    'message' => $started
+                        ? 'Refreshing all telematics feeds. This takes a few minutes.'
+                        : 'A refresh is already running.',
+                    'data'    => $runner->status(),
+                ], 202);
+            }
+
+            // Fallback for hosts with exec disabled: driven by the caller, one
+            // round trip per rate-limit window. Every feed that can go right
+            // now goes now - Truck Connect is on its own budget, so the first
+            // press also gets the VECV fuel call in, which is what the
+            // dashboard renders from.
+            $state = $runner->runReady();
+
+            Log::channel('vecv')->info('Refresh step (stepwise)', [
+                'user_id' => $userId,
+                'ran'     => $state['ran'],
+            ]);
+
+            return response()->json([
+                'status'  => true,
+                'mode'    => 'stepwise',
+                'message' => $this->stepMessage($state),
+                'data'    => $state,
+            ], 200);
         } catch (\Throwable $th) {
-            Log::channel('vecv')->error('Refresh could not be started', [
-                'user_id' => optional(request()->user())->id,
+            Log::channel('vecv')->error('Refresh failed', [
+                'user_id' => $userId,
                 'message' => $th->getMessage(),
             ]);
 
@@ -242,18 +293,39 @@ class FleetTelematicsDashboardController extends Controller
                 'error'   => $th->getMessage(),
             ], 500);
         }
+    }
 
-        Log::channel('vecv')->info($started ? 'Refresh started' : 'Refresh already running', [
-            'user_id' => optional(request()->user())->id,
-        ]);
+    /**
+     * What the last stepwise call did, for the UI to show as-is.
+     *
+     * @param  array  $state
+     * @return string
+     */
+    protected function stepMessage(array $state)
+    {
+        if ($state['complete']) {
+            return empty($state['failed'])
+                ? 'All telematics feeds refreshed successfully.'
+                : 'Refresh finished. Could not fetch: '
+                    . implode(', ', array_map(function ($feed) {
+                        return str_replace('_', ' ', $feed);
+                    }, $state['failed'])) . '.';
+        }
 
-        return response()->json([
-            'status'  => true,
-            'message' => $started
-                ? 'Refreshing all telematics feeds. This takes a few minutes.'
-                : 'A refresh is already running.',
-            'data'    => $runner->status(),
-        ], 202);
+        if ($state['ran'] !== null) {
+            $label     = str_replace('_', ' ', $state['ran']);
+            $remaining = count($state['pending']) . ' feed(s) remaining.';
+
+            // result is null when the attempt did not succeed. Saying
+            // "Refreshed X" for a rate-limited attempt would report a fetch
+            // that never happened - the feed is still pending and will be
+            // retried, and the message has to say so.
+            return $state['result'] === null
+                ? 'Could not fetch ' . $label . ' yet - will retry. ' . $remaining
+                : 'Refreshed ' . $label . '. ' . $remaining;
+        }
+
+        return 'Waiting ' . $state['next_in_seconds'] . 's for the next rate-limit window.';
     }
 
     /**
@@ -295,6 +367,17 @@ class FleetTelematicsDashboardController extends Controller
                 . '.';
         }
 
+        // Nothing is working on it and it is not finished: the caller has to
+        // post again. Said plainly, because the feeds otherwise sit at
+        // "pending, attempts 0" and read as a stall.
+        if (! empty($state['awaiting_caller'])) {
+            return $state['progress'] . ' done. POST refresh again'
+                . ($state['next_in_seconds'] > 0
+                    ? ' in ' . $state['next_in_seconds'] . 's'
+                    : ' now')
+                . ' to continue - ' . count($state['pending']) . ' feed(s) left.';
+        }
+
         if ($state['complete']) {
             // A pass that never ran reports complete with nothing done, which
             // is not the same as a pass that finished - say so plainly rather
@@ -309,6 +392,15 @@ class FleetTelematicsDashboardController extends Controller
                     . implode(', ', array_map(function ($feed) {
                         return str_replace('_', ' ', $feed);
                     }, $state['failed'])) . '.';
+        }
+
+        // Not finished, nobody waiting on the caller: the scheduler is carrying
+        // it. Saying "stopped" here would send someone chasing a fault that is
+        // not there.
+        if (($state['mode'] ?? null) === 'scheduled') {
+            return 'Refreshing telematics feeds - ' . $state['progress'] . ' done'
+                . ($state['pending'] ? ', ' . str_replace('_', ' ', $state['pending'][0]) . ' next' : '')
+                . '. This continues on its own.';
         }
 
         return 'Refresh stopped before finishing - ' . $state['progress'] . ' done.';

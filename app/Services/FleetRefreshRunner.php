@@ -47,6 +47,16 @@ class FleetRefreshRunner
     const LAST_PRESSED_KEY = 'vecv.refresh.last_pressed_at';
 
     /**
+     * Last time the scheduled advancer ran.
+     *
+     * Its only job is to prove cron is alive, so the API can say honestly
+     * whether a waiting cycle will move on its own or the caller has to post
+     * again. Without it there is no way to tell a host with a working
+     * scheduler from one without.
+     */
+    const SCHEDULER_HEARTBEAT_KEY = 'vecv.refresh.scheduler_heartbeat';
+
+    /**
      * Run the next feed that still needs fetching.
      *
      * @return array
@@ -115,6 +125,50 @@ class FleetRefreshRunner
         ]);
 
         return $this->present($cycle, $next, $summary);
+    }
+
+    /**
+     * Run every feed that can go right now, and stop at the first that must
+     * wait.
+     *
+     * One press should get as far as it can. Truck Connect is on its own
+     * budget, so the moment it finishes the VECV fuel call is already allowed -
+     * returning after a single feed would make the caller post again for a
+     * window that was never spent, and leave the dashboard empty until it did.
+     * Fuel is what the dashboard renders from, so draining the free feeds gets
+     * the screen correct on the first press.
+     *
+     * Bounded by the rate limit itself: as soon as a feed reports a wait, this
+     * returns. There is no risk of holding the request open, because a feed
+     * that can run takes well under a second.
+     *
+     * @return array
+     */
+    public function runReady()
+    {
+        // One iteration per feed at most. A feed that runs is removed from
+        // pending, and one that must wait ends the loop, so this cap is only a
+        // guard against a state machine bug rather than a real limit.
+        $maxSteps = count((array) config('vecv.refresh_feeds'));
+
+        $state = null;
+
+        for ($step = 0; $step < $maxSteps; $step++) {
+            $state = $this->run();
+
+            // Finished the cycle, or the next feed needs a rate-limit window.
+            if ($state['complete'] || $state['next_in_seconds'] > 0) {
+                return $state;
+            }
+
+            // Nothing ran and nothing to wait for - should not happen, but
+            // returning beats spinning.
+            if ($state['ran'] === null) {
+                return $state;
+            }
+        }
+
+        return $state;
     }
 
     /**
@@ -187,6 +241,81 @@ class FleetRefreshRunner
     }
 
     /**
+     * Whether a refresh cycle actually exists.
+     *
+     * status() reports an empty cycle - every feed pending - when nothing has
+     * been started, which is right for display but indistinguishable from a
+     * cycle in progress. Anything that decides whether to DO work has to check
+     * this instead, or it will treat "nobody has asked for a refresh" as "a
+     * refresh is waiting to be carried forward" and start one on its own.
+     *
+     * @return bool
+     */
+    public function hasCycle()
+    {
+        return is_array(Cache::get(self::CACHE_KEY));
+    }
+
+    /**
+     * Record that the scheduled advancer ran.
+     *
+     * @return void
+     */
+    public function recordSchedulerHeartbeat()
+    {
+        Cache::put(self::SCHEDULER_HEARTBEAT_KEY, Carbon::now()->toDateTimeString(), now()->addMinutes(15));
+    }
+
+    /**
+     * Whether the scheduler has run recently enough to be trusted to carry a
+     * cycle forward.
+     *
+     * The window is generous - the advancer is scheduled every minute, so
+     * anything inside five means cron is running. Being wrong in the strict
+     * direction is the safe way round: the caller is told to post, which always
+     * works, rather than told to wait for something that is not coming.
+     *
+     * @return bool
+     */
+    public function schedulerIsRunning()
+    {
+        $beat = Cache::get(self::SCHEDULER_HEARTBEAT_KEY);
+
+        if (empty($beat)) {
+            return false;
+        }
+
+        try {
+            return Carbon::parse($beat)->greaterThan(Carbon::now()->subMinutes(5));
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Whether this host will let us launch a detached process.
+     *
+     * Shared hosting routinely disables exec and escapeshellarg through
+     * disable_functions, and calling one then is a fatal, not a false - so it
+     * has to be checked rather than attempted. When they are unavailable the
+     * refresh falls back to running one feed per request instead.
+     *
+     * @return bool
+     */
+    public function canRunInBackground()
+    {
+        $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+
+        foreach (['exec', 'escapeshellarg'] as $function) {
+            if (! function_exists($function) || in_array($function, $disabled, true)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Start a full pass in a detached process and return immediately.
      *
      * A pass takes minutes; an HTTP request must not. So the button launches
@@ -197,11 +326,12 @@ class FleetRefreshRunner
      * would otherwise start a second pass, and the two would spend each other's
      * rate-limit windows and each conclude the feeds were throttled.
      *
-     * @return bool  False when a pass is already in flight
+     * @return bool  False when a pass is already in flight, or when this host
+     *               cannot launch one
      */
     public function startBackgroundPass()
     {
-        if ($this->isRunning()) {
+        if (! $this->canRunInBackground() || $this->isRunning()) {
             return false;
         }
 
@@ -594,9 +724,39 @@ class FleetRefreshRunner
 
             'progress' => count($done) + count($failed) . '/' . count($cycle['feeds']),
 
-            // True while a background pass is still working through the
-            // feeds. The caller polls refresh-status until this clears.
+            // True while a background pass is still working through the feeds.
             'running' => $this->isRunning(),
+
+            // How this host runs a refresh, and therefore what the caller has
+            // to do next.
+            //
+            //   background - a detached process is walking the feeds. Poll
+            //                refresh-status until running turns false.
+            //   stepwise   - exec is disabled here, so NOTHING advances the
+            //                cycle on its own. Every feed needs its own POST
+            //                to refresh. Polling status alone leaves the
+            //                remaining feeds pending forever, with attempts 0,
+            //                which reads as a stall rather than as "your move".
+            //   scheduled  - exec is disabled, but cron is running the advancer
+            //                every minute, so a waiting cycle moves on its own.
+            //                Poll refresh-status, same as background.
+            'mode' => $this->canRunInBackground()
+                ? 'background'
+                : ($this->schedulerIsRunning() ? 'scheduled' : 'stepwise'),
+
+            // True only when the cycle is unfinished and genuinely nothing is
+            // coming to move it - no detached pass, no scheduler. Then the
+            // caller must POST refresh again or it sits here indefinitely.
+            'awaiting_caller' => $this->hasCycle()
+                && ! $complete
+                && ! $this->isRunning()
+                && ! $this->canRunInBackground()
+                && ! $this->schedulerIsRunning(),
+
+            // False until someone presses refresh. Without it a caller cannot
+            // tell "no refresh has been asked for" from "a refresh is under
+            // way", because both report every feed pending.
+            'started' => $this->hasCycle(),
 
             'cycle_started_at' => $cycle['started_at'],
             'feeds'            => $cycle['feeds'],
