@@ -17,6 +17,7 @@ class Kernel extends ConsoleKernel
         \App\Console\Commands\ProbeVecvAlertsCommand::class,
         \App\Console\Commands\SyncVecvAllCommand::class,
         \App\Console\Commands\SyncTruckConnectCommand::class,
+        \App\Console\Commands\RelinkTelematicsReadingsCommand::class,
         \App\Console\Commands\RegisterTelematicsChassisCommand::class,
     ];
     /**

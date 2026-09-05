@@ -422,8 +422,18 @@ class EquipmentNameController extends Controller
             if ($request->filled('search')) {
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
-                    $q->where('equipment_name', 'LIKE', "%{$search}%");
+                    $q->where('equipment_name', 'LIKE', "%{$search}%")
+                        ->orWhere('chassis_number', 'LIKE', "%{$search}%");
                 });
+            }
+
+            // Only machines a telematics feed reports on. For the fleet
+            // dashboard's dumper filter: without it the dropdown also lists
+            // machines with no chassis - a dozer, a pump - and picking one
+            // returns an empty dashboard that reads as a fault rather than as
+            // "this machine has no telemetry".
+            if ($request->boolean('has_telematics')) {
+                $query->whereNotNull('chassis_number');
             }
 
             $query->orderBy('equipment_name', 'asc');
@@ -432,6 +442,12 @@ class EquipmentNameController extends Controller
                 return [
                     'id' => $machine->id,
                     'equipment_name' => $machine->equipment_name,
+
+                    // Null on machines no telematics feed covers. Also what the
+                    // fleet dashboard falls back to when equipment_name is
+                    // still the raw chassis.
+                    'chassis_number' => $machine->chassis_number,
+
                     'equipment_id' => $machine->equipment_id,
                     'equipment_category_name' => $machine->equipment ? $machine->equipment->name : null,
                     'is_active' => $machine->is_active,
