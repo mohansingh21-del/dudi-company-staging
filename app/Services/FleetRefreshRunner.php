@@ -39,12 +39,23 @@ class FleetRefreshRunner
     const RUNNING_KEY = 'vecv.refresh.running';
 
     /**
-     * When the refresh button was last pressed.
+     * When a refresh cycle last finished with data in hand.
      *
-     * Recorded on the press itself, not on a console run, so it answers
-     * exactly "when did someone last refresh this dashboard".
+     * Written when the final feed of a cycle resolves, not when the button is
+     * pressed, so it answers "how old is what I am looking at" rather than
+     * "when did someone ask". A press that is still walking the feeds has not
+     * refreshed anything yet, and a pass takes minutes.
+     *
+     * Every path that can finish a cycle - the detached pass, the stepwise
+     * POSTs, the scheduled advancer - goes through run(), so stamping there
+     * covers all three. Stamping it on the press covered only one, which is
+     * why the field read null on every host with exec disabled.
+     *
+     * Kept forever: it is the one thing the dashboard shows about freshness,
+     * and an expiry would blank it out while the data it describes is still on
+     * screen.
      */
-    const LAST_PRESSED_KEY = 'vecv.refresh.last_pressed_at';
+    const LAST_FINISHED_KEY = 'vecv.refresh.last_finished_at';
 
     /**
      * Last time the scheduled advancer ran.
@@ -104,11 +115,13 @@ class FleetRefreshRunner
         } catch (VecvApiException $e) {
             $cycle = $this->recordFailure($cycle, $next, $e->getMessage(), $e->isRateLimited());
             $this->store($cycle);
+            $this->recordFinish($cycle);
 
             return $this->present($cycle, $next, null);
         } catch (\Throwable $th) {
             $cycle = $this->recordFailure($cycle, $next, $th->getMessage(), false);
             $this->store($cycle);
+            $this->recordFinish($cycle);
 
             return $this->present($cycle, $next, null);
         }
@@ -118,6 +131,7 @@ class FleetRefreshRunner
         $cycle['feeds'][$next]['at']     = Carbon::now()->toDateTimeString();
 
         $this->store($cycle);
+        $this->recordFinish($cycle);
 
         Log::channel('vecv')->info('Refresh cycle feed completed', [
             'feed'    => $next,
@@ -337,8 +351,6 @@ class FleetRefreshRunner
 
         $this->markRunning();
 
-        Cache::forever(self::LAST_PRESSED_KEY, Carbon::now()->toDateTimeString());
-
         // Clear the previous cycle now so the very first status poll shows an
         // empty pass in progress rather than the last one's finished results.
         Cache::forget(self::CACHE_KEY);
@@ -376,13 +388,13 @@ class FleetRefreshRunner
     }
 
     /**
-     * When the refresh button was last pressed, or null if never.
+     * When a refresh cycle last finished, or null if none ever has.
      *
      * @return string|null
      */
-    public static function lastPressedAt()
+    public static function lastFinishedAt()
     {
-        return Cache::get(self::LAST_PRESSED_KEY);
+        return Cache::get(self::LAST_FINISHED_KEY);
     }
 
     /**
@@ -489,6 +501,45 @@ class FleetRefreshRunner
         Cache::put(self::CACHE_KEY, $cycle, now()->addMinutes(
             max(1, (int) config('vecv.refresh_cycle_ttl_minutes'))
         ));
+    }
+
+    /**
+     * Stamp the finish time, if this call was the one that finished the cycle.
+     *
+     * Called after every write, and returns early unless nothing is pending -
+     * so the timestamp moves exactly once per cycle, on the feed that resolved
+     * the last of them, whichever path was driving.
+     *
+     * A cycle where every single feed failed is not a refresh: nothing was
+     * fetched, so the previous timestamp is still the truthful answer and the
+     * dashboard should keep showing it rather than claim data it never got.
+     *
+     * @param  array  $cycle
+     * @return void
+     */
+    protected function recordFinish(array $cycle)
+    {
+        $anyOk = false;
+
+        foreach ($cycle['feeds'] as $state) {
+            if ($state['status'] === 'pending') {
+                return;
+            }
+
+            $anyOk = $anyOk || $state['status'] === 'ok';
+        }
+
+        if (! $anyOk) {
+            Log::channel('vecv')->warning('Refresh cycle finished with every feed failed - not stamping last_refreshed_at');
+
+            return;
+        }
+
+        Cache::forever(self::LAST_FINISHED_KEY, Carbon::now()->toDateTimeString());
+
+        Log::channel('vecv')->info('Refresh cycle finished', [
+            'finished_at' => Cache::get(self::LAST_FINISHED_KEY),
+        ]);
     }
 
     /**

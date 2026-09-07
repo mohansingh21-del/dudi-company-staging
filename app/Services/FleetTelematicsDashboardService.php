@@ -102,16 +102,21 @@ class FleetTelematicsDashboardService
             // 4pm can be showing telemetry pulled at 11am.
             'generated_at' => Carbon::now()->toDateTimeString(),
 
-            // When someone last pressed the refresh button. This is the one to
-            // show as "Last refreshed" - the GETs never call VECV, so a page
-            // opened at 4pm can be showing telemetry pulled at 11am, and only
-            // this says which.
+            // When the last refresh actually FINISHED pulling from the feeds.
+            // This is the one to show as "Last refreshed" - the GETs never call
+            // VECV, so a page opened at 4pm can be showing telemetry pulled at
+            // 11am, and only this says which.
             //
-            // Null until the button has been pressed at least once. Note a
+            // The finish, not the press: a pass takes minutes, so a press that
+            // is still walking the feeds has refreshed nothing yet. It holds
+            // the previous value until the new pass completes, so the field is
+            // never briefly wrong.
+            //
+            // Null only until the first refresh completes anywhere. Note a
             // refresh does not guarantee new readings: a feed can be fetched
             // successfully and store nothing because no vehicle has reported
             // since. Per-vehicle freshness is age_minutes on each row.
-            'last_refreshed_at' => FleetRefreshRunner::lastPressedAt(),
+            'last_refreshed_at' => FleetRefreshRunner::lastFinishedAt(),
 
             'stale_after_minutes' => (int) config('vecv.stale_after_minutes'),
         ];
