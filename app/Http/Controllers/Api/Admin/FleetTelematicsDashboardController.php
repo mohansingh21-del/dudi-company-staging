@@ -160,6 +160,41 @@ class FleetTelematicsDashboardController extends Controller
     }
 
     /**
+     * GET /api/v1/dashboard/fleet/alerts
+     *
+     * The alerts panel: severity tiles, a breakdown by type and sub-type, the
+     * worst machines, and the Recent Alerts list.
+     *
+     * Takes the same filters as the rest of the dashboard, plus alert_type and
+     * severity (critical|warning|info). limit and page page the Recent Alerts
+     * list; the tiles and breakdowns always cover every matching alert, so the
+     * counts do not shift as the reader turns pages.
+     *
+     * @return JsonResponse
+     */
+    public function alerts(Request $request): JsonResponse
+    {
+        try {
+            return response()->json([
+                'status'  => true,
+                'message' => 'Fleet alerts retrieved successfully.',
+                'data'    => $this->dashboard->alerts($this->filters($request) + [
+                    'alert_type' => $request->input('alert_type'),
+                    'severity'   => $request->input('severity'),
+                    'limit'      => $request->input('limit'),
+                    'page'       => $request->input('page'),
+                ]),
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'Failed to retrieve fleet alerts.',
+                'error'   => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * GET /api/v1/dashboard/fleet/fuel
      *
      * The whole fuel panel in one response: the Normal/Low/Critical donut, the

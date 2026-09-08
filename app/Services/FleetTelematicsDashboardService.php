@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\EquipmentFuelReading;
 use App\Models\TruckConnectReading;
+use App\Models\VecvAlert;
 use App\Services\FleetRefreshRunner;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
@@ -241,40 +242,80 @@ class FleetTelematicsDashboardService
     }
 
     /**
-     * Today's harsh-driving events, from the Truck Connect feed.
+     * Driving-behaviour events over the window.
      *
-     * VECV publishes no harsh acceleration/braking/cornering counters on any of
-     * its endpoints - they exist only on its alert log, which is still not
-     * returning data - so every event here comes from Truck Connect machines.
+     * Comes from the VECV alert log, which publishes discrete events - so these
+     * are real counts, not something differenced out of snapshots, and events
+     * landing between two refreshes are not lost. That is why this reads alerts
+     * rather than the Truck Connect harsh counters, which are per-message flags
+     * and have measured 0 on every machine so far; those are still reported
+     * alongside, so a change in them is visible.
      *
-     * IMPORTANT, and unresolved: the three counters have read 0 on every
-     * machine observed so far, including ones plainly driving, which points to
-     * them being per-message flags rather than running totals. This sums them
-     * across the day's readings, which is correct for flags and WRONG for
-     * cumulative counters - summing a running total would multiply it by the
-     * number of polls.
-     *
-     * If a value is ever seen climbing steadily on one machine, they are
-     * cumulative, and a day's figure becomes the difference between the first
-     * and last reading of the day instead of a sum. Nothing here will fail
-     * loudly if that happens; the number will simply be far too large.
-     *
-     * Either reading needs readings captured through the day, which an
-     * on-demand-only refresh does not provide - events landing between two
-     * presses of the button are never seen at all.
-     *
+     * @param  array  $filters
      * @return array
      */
     public function safetyEvents(array $filters = [])
     {
-        // Follows the date filter, so the card covers the same window as the
-        // rest of the dashboard rather than always reporting today. Events are
-        // summed across the whole window, which is what "Last 7 Days" means -
-        // unlike the state panels, which show a point in time.
         $range = $this->range($filters) ?: [Carbon::today(), Carbon::today()->endOfDay()];
+
+        $query = VecvAlert::query()
+            ->with('machine')
+            ->whereBetween('alerted_at', [$range[0], $range[1]])
+            ->where('alert_type', 'Driving Behaviour');
+
+        if (! empty($filters['machine_id'])) {
+            $query->where('equipment_name_id', (int) $filters['machine_id']);
+        }
+
+        $events = $query->get();
 
         $fleet = $this->fleet($filters);
 
+        return [
+            // True because there is now a feed publishing these. It does not
+            // promise the numbers are non-zero.
+            'available' => true,
+
+            'from' => $range[0]->toDateString(),
+            'to'   => $range[1]->toDateString(),
+
+            // Keyed by the vendor's own sub-type ids, so a category the account
+            // subscribes to later appears here without a code change rather
+            // than being silently dropped.
+            'counts' => $events->countBy('alert_sub_type_id')->all(),
+
+            // Named breakdown for display, largest first.
+            'breakdown' => $this->alertSubTypeBreakdown($events),
+
+            'total' => $events->count(),
+
+            // "Events by Dumper (Top 5)".
+            'by_vehicle' => $this->alertsByMachine($events),
+
+            // Only VECV machines raise these. Stated so a quiet card is not
+            // read as a quiet fleet when most of it is not being watched.
+            'basis'       => 'vecv',
+            'basis_count' => $fleet->where('source', 'vecv')->count(),
+            'fleet_count' => $fleet->count(),
+
+            // The Truck Connect signal for the same idea, kept visible. These
+            // are per-message flags rather than counters, so they are summed
+            // across the window - correct for flags, and wrong if they ever
+            // turn out cumulative, which would show as an implausibly large
+            // number rather than an error.
+            'truck_connect_harsh' => $this->truckConnectHarsh($range, $filters),
+        ];
+    }
+
+    /**
+     * Harsh-event flags from the Truck Connect feed over the window.
+     *
+     * @param  array  $range
+     * @param  array  $filters
+     * @return array
+     */
+    protected function truckConnectHarsh(array $range, array $filters)
+    {
         $readings = TruckConnectReading::query()
             ->leftJoin('equipment_names', function ($join) {
                 $join->on('equipment_names.chassis_number', '=', 'truck_connect_readings.vin')
@@ -285,79 +326,210 @@ class FleetTelematicsDashboardService
                 $q->where('equipment_names.id', (int) $filters['machine_id']);
             })
             ->select(
-                'truck_connect_readings.vin',
                 'truck_connect_readings.harsh_braking',
                 'truck_connect_readings.harsh_acceleration',
-                'truck_connect_readings.harsh_cornering',
-                'equipment_names.equipment_name'
+                'truck_connect_readings.harsh_cornering'
             )
             ->get();
 
-        $counts = [
+        return [
             'harsh_braking'      => (int) $readings->sum('harsh_braking'),
             'harsh_acceleration' => (int) $readings->sum('harsh_acceleration'),
             'harsh_cornering'    => (int) $readings->sum('harsh_cornering'),
-        ];
 
-        // "Events by Dumper (Top 5)". Machines with no events are left out
-        // rather than listed at zero - the panel is for the ones to look at.
-        $byVehicle = $readings
-            ->groupBy('vin')
-            ->map(function ($rows, $vin) {
+            // How many readings the figure was built from. Roughly one per
+            // machine means almost nothing was captured between refreshes, so
+            // the total understates reality rather than the fleet behaving.
+            'readings_in_range'  => $readings->count(),
+        ];
+    }
+
+    /**
+     * The alerts panel: counts by severity and type, the worst machines, and
+     * the Recent Alerts list.
+     *
+     * Backed by the VECV alert log, which unlike the telemetry feeds carries
+     * discrete events - so a count over a window is a real count rather than
+     * something differenced out of snapshots, and events between refreshes are
+     * not lost. Truck Connect machines contribute nothing here; its harsh
+     * counters are a separate, and so far always-zero, signal.
+     *
+     * @param  array  $filters
+     * @return array
+     */
+    public function alerts(array $filters = [])
+    {
+        $range = $this->range($filters) ?: [Carbon::today(), Carbon::today()->endOfDay()];
+
+        $query = VecvAlert::query()
+            ->with('machine')
+            ->whereBetween('alerted_at', [$range[0], $range[1]]);
+
+        if (! empty($filters['machine_id'])) {
+            $query->where('equipment_name_id', (int) $filters['machine_id']);
+        }
+
+        if (! empty($filters['alert_type'])) {
+            $query->where('alert_type', $filters['alert_type']);
+        }
+
+        $search = isset($filters['search']) ? trim((string) $filters['search']) : '';
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search) {
+                $q->where('chassis_number', 'like', '%' . $search . '%')
+                    ->orWhereHas('machine', function ($m) use ($search) {
+                        $m->where('equipment_name', 'like', '%' . $search . '%');
+                    });
+            });
+        }
+
+        $alerts = $query->orderByDesc('alerted_at')->get();
+
+        // Severity is ours, not the vendor's - applied in the model so the
+        // list, the tiles and any badge cannot disagree about it.
+        if (! empty($filters['severity'])) {
+            $alerts = $alerts->where('severity', $filters['severity'])->values();
+        }
+
+        // Page size for the Recent Alerts list. Always paginated - an unpaged
+        // window can hold hundreds of alerts, and nothing on screen shows them
+        // all at once.
+        $perPage = isset($filters['limit']) && (int) $filters['limit'] > 0
+            ? (int) $filters['limit']
+            : (int) config('vecv.recent_alerts_limit');
+
+        // Only the list is paged. The tiles and breakdowns below are computed
+        // over every matching alert, so "Showing 1 to 5 of 24" stays true and
+        // the counts do not change as the reader turns pages.
+        $page = $this->paginate($alerts, ['limit' => $perPage, 'page' => $filters['page'] ?? null]);
+
+        return [
+            'totals' => [
+                'total'    => $alerts->count(),
+                'critical' => $alerts->where('severity', 'critical')->count(),
+                'warning'  => $alerts->where('severity', 'warning')->count(),
+                'info'     => $alerts->where('severity', 'info')->count(),
+
+                // How many machines raised anything at all. A high alert count
+                // from one machine is a different problem from the same count
+                // spread across the fleet.
+                'machines_affected' => $alerts->pluck('equipment_name_id')->filter()->unique()->count(),
+            ],
+
+            'by_type'     => $this->countBy($alerts, 'alert_type'),
+            'by_sub_type' => $this->alertSubTypeBreakdown($alerts),
+            'by_machine'  => $this->alertsByMachine($alerts),
+
+            // The Recent Alerts list, newest first. Paged - see 'pagination'.
+            'recent' => collect($page['data'])->map(function ($alert) {
                 return [
-                    'chassis_number' => $vin,
-                    'display_name'   => $rows->first()->equipment_name ?: $vin,
-                    'harsh_braking'      => (int) $rows->sum('harsh_braking'),
-                    'harsh_acceleration' => (int) $rows->sum('harsh_acceleration'),
-                    'harsh_cornering'    => (int) $rows->sum('harsh_cornering'),
-                    'total' => (int) ($rows->sum('harsh_braking')
-                        + $rows->sum('harsh_acceleration')
-                        + $rows->sum('harsh_cornering')),
+                    'id'          => $alert->id,
+                    'title'       => $alert->alert_sub_type,
+                    'description' => $alert->description,
+                    'severity'    => $alert->severity,
+                    'type'        => $alert->alert_type,
+
+                    'machine_id'  => $alert->equipment_name_id,
+                    // Falls back to the chassis so the column an operator
+                    // identifies the machine by is never blank.
+                    'dumper_no'   => optional($alert->machine)->equipment_name ?: $alert->chassis_number,
+                    'chassis_number' => $alert->chassis_number,
+
+                    'value'       => $alert->alert_value === null ? null : (float) $alert->alert_value,
+                    'unit'        => $alert->alert_unit,
+
+                    'alerted_at'  => optional($alert->alerted_at)->toDateTimeString(),
+                    'latitude'    => $this->float($alert->latitude),
+                    'longitude'   => $this->float($alert->longitude),
+                ];
+            })->values()->all(),
+
+            // Describes 'recent' only, not the totals above.
+            'pagination' => $page['pagination'],
+
+            'from' => $range[0]->toDateString(),
+            'to'   => $range[1]->toDateString(),
+
+            // VECV only. Stated so a quiet panel is not read as a quiet fleet
+            // when most of the fleet is not being watched for this at all.
+            'basis'       => 'vecv',
+            'basis_count' => $this->fleet($filters)->where('source', 'vecv')->count(),
+            'fleet_count' => $this->fleet($filters)->count(),
+        ];
+    }
+
+    /**
+     * Counts per value of one attribute, largest first.
+     *
+     * @param  \Illuminate\Support\Collection  $alerts
+     * @param  string  $attribute
+     * @return array
+     */
+    protected function countBy(Collection $alerts, $attribute)
+    {
+        return $alerts->countBy($attribute)
+            ->sortDesc()
+            ->map(function ($count, $value) {
+                return ['name' => $value, 'count' => $count];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Sub-type breakdown, carrying the parent type and severity so the UI does
+     * not have to look either up.
+     *
+     * @param  \Illuminate\Support\Collection  $alerts
+     * @return array
+     */
+    protected function alertSubTypeBreakdown(Collection $alerts)
+    {
+        return $alerts->groupBy('alert_sub_type_id')
+            ->map(function ($group, $subTypeId) {
+                $first = $group->first();
+
+                return [
+                    'sub_type_id' => $subTypeId,
+                    'name'        => $first->alert_sub_type,
+                    'type'        => $first->alert_type,
+                    'severity'    => $first->severity,
+                    'count'       => $group->count(),
                 ];
             })
-            ->filter(function ($row) {
-                return $row['total'] > 0;
+            ->sortByDesc('count')
+            ->values()
+            ->all();
+    }
+
+    /**
+     * "Events by Dumper", worst first.
+     *
+     * @param  \Illuminate\Support\Collection  $alerts
+     * @return array
+     */
+    protected function alertsByMachine(Collection $alerts)
+    {
+        return $alerts->groupBy('chassis_number')
+            ->map(function ($group, $chassis) {
+                $first = $group->first();
+
+                return [
+                    'machine_id'     => $first->equipment_name_id,
+                    'chassis_number' => $chassis,
+                    'dumper_no'      => optional($first->machine)->equipment_name ?: $chassis,
+                    'count'          => $group->count(),
+                    'critical'       => $group->where('severity', 'critical')->count(),
+                    'warning'        => $group->where('severity', 'warning')->count(),
+                ];
             })
             // Chassis is the tie-break so machines on the same count do not
             // swap places between refreshes.
-            ->sortBy([
-                ['total', 'desc'],
-                ['chassis_number', 'asc'],
-            ])
-            ->take(5)
+            ->sortBy([['count', 'desc'], ['chassis_number', 'asc']])
+            ->take((int) config('vecv.alerts_by_machine_limit'))
             ->values()
             ->all();
-
-        return [
-            // True once there is a feed publishing these at all - which there
-            // now is. It does not promise the numbers are non-zero.
-            'available' => true,
-
-            // The window these figures cover. from equals to for a single day.
-            'from'   => $range[0]->toDateString(),
-            'to'     => $range[1]->toDateString(),
-            'counts' => $counts,
-            'total'  => array_sum($counts),
-
-            'by_vehicle' => $byVehicle,
-
-            // Only Truck Connect machines can contribute. Stated so a reader
-            // does not take a quiet day as fleet-wide - the VECV machines are
-            // not being measured for this at all.
-            //
-            // Both counts respect the active filters, so scoping the dashboard
-            // to one machine does not leave this claiming the whole fleet was
-            // measured.
-            'basis'         => 'truck_connect',
-            'basis_count'   => $fleet->where('source', 'truck_connect')->count(),
-            'fleet_count'   => $fleet->count(),
-
-            // How many readings the figure was built from. One reading per
-            // machine means almost nothing was captured: events landing between
-            // refreshes are lost, so a low number here means the total
-            // understates reality rather than the fleet having behaved.
-            'readings_in_range' => $readings->count(),
-        ];
     }
 
     /**

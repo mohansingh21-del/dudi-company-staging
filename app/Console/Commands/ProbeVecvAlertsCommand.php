@@ -67,8 +67,8 @@ class ProbeVecvAlertsCommand extends Command
         try {
             $body = $client->post('alerts', [
                 'chassisNo' => [$chassis],
-                'startDate' => $start->toDateTimeString(),
-                'endDate'   => $end->toDateTimeString(),
+                'eventStartDate' => $start->toDateTimeString(),
+                'eventEndDate'   => $end->toDateTimeString(),
             ]);
         } catch (VecvApiException $e) {
             if ($e->isRateLimited()) {

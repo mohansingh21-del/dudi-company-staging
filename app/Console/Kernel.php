@@ -14,6 +14,7 @@ class Kernel extends ConsoleKernel
         \App\Console\Commands\SyncVecvFuelCommand::class,
         \App\Console\Commands\SyncVecvLocationCommand::class,
         \App\Console\Commands\SyncVecvServiceHistoryCommand::class,
+        \App\Console\Commands\SyncVecvAlertsCommand::class,
         \App\Console\Commands\ProbeVecvAlertsCommand::class,
         \App\Console\Commands\SyncVecvAllCommand::class,
         \App\Console\Commands\SyncTruckConnectCommand::class,

@@ -167,6 +167,46 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Alerts
+    |--------------------------------------------------------------------------
+    |
+    | Driving-behaviour, fuel, device and predictive-uptime events. The only
+    | VECV source for over-speeding, harsh braking, fuel drain and the like -
+    | none of them appear on the fuel or location feeds.
+    |
+    | The request body uses eventStartDate / eventEndDate. NOT startDate /
+    | endDate, which every other dated VECV endpoint uses: sending those returns
+    | HTTP 200 with a generic "service not responding" 500 body, which reads as
+    | a vendor outage rather than as a rejected request. That mistake cost days.
+    |
+    */
+
+    // Same 48-hour cap as service history, and enforced the same way: a wider
+    // range comes back HTTP 200 with an EMPTY alertLog and the reason in
+    // errorMessage. It looks exactly like "no alerts", so errorMessage has to
+    // be read on every call.
+    'alerts_max_range_days' => (int) env('VECV_ALERTS_MAX_RANGE_DAYS', 2),
+
+    // How far back a routine sync looks. Kept inside the per-request cap so one
+    // run costs a single request.
+    'alerts_lookback_days' => (int) env('VECV_ALERTS_LOOKBACK_DAYS', 1),
+
+    // Chassis per request. The endpoint accepts the whole fleet in one call -
+    // verified with 11 - so this only bounds how much is lost if one batch is
+    // rejected.
+    'alerts_chunk' => (int) env('VECV_ALERTS_CHUNK', 25),
+
+    // Pause between successive alert requests within one sync, for the same
+    // reason service history needs one: a second call inside the same minute is
+    // refused before the first has been processed.
+    'alerts_request_gap_seconds' => (int) env('VECV_ALERTS_REQUEST_GAP', 60),
+
+    // Rows in the Recent Alerts list, and in "events by dumper".
+    'recent_alerts_limit'     => (int) env('VECV_RECENT_ALERTS_LIMIT', 10),
+    'alerts_by_machine_limit' => (int) env('VECV_ALERTS_BY_MACHINE_LIMIT', 5),
+
+    /*
+    |--------------------------------------------------------------------------
     | On-demand refresh
     |--------------------------------------------------------------------------
     |

@@ -182,6 +182,10 @@ Route::prefix('v1')->group(function () {
 
                 // The operations row - operational split plus safety events.
                 Route::get('operations', [FleetTelematicsDashboardController::class, 'operations']);
+
+                // Alerts panel - severity tiles, breakdowns and the Recent
+                // Alerts list, from the VECV alert log.
+                Route::get('alerts', [FleetTelematicsDashboardController::class, 'alerts']);
                 Route::get('lowest-fuel', [FleetTelematicsDashboardController::class, 'lowestFuel']);
                 // One feed per call - the caller loops until data.complete is
                 // true, waiting data.next_in_seconds between calls. See the

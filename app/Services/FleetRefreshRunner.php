@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\VecvApiException;
 use App\Models\EquipmentFuelReading;
 use App\Services\TruckConnectSyncService;
+use App\Services\VecvAlertSyncService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -666,13 +667,11 @@ class FleetRefreshRunner
     }
 
     /**
-     * Call the alert log endpoint.
+     * Fetch and store alerts.
      *
-     * Nothing is stored: this endpoint has never returned a successful
-     * response, so its payload shape is unknown and no table or mapping exists
-     * for it. The call is still made every cycle - the day VECV fixes the
-     * service, the log records the shape, which is the signal to build the
-     * ingest against something real rather than a guess.
+     * Kept as its own step rather than folded into a telemetry sync because it
+     * is date-ranged and chassis-enumerated, and so behaves like service
+     * history rather than like a live feed.
      *
      * @return array
      *
@@ -680,46 +679,7 @@ class FleetRefreshRunner
      */
     protected function fetchAlerts()
     {
-        $chassis = EquipmentFuelReading::query()
-            ->distinct()
-            ->pluck('chassis_number')
-            ->filter()
-            ->values()
-            ->all();
-
-        if (empty($chassis)) {
-            throw new VecvApiException('No chassis known yet - the fuel feed has to run first.');
-        }
-
-        $end   = Carbon::now();
-        $start = $end->copy()->subDays(max(1, (int) config('vecv.service_history_lookback_days')));
-
-        $body = app(VecvClient::class)->post('alerts', [
-            'chassisNo' => $chassis,
-            'startDate' => $start->toDateTimeString(),
-            'endDate'   => $end->toDateTimeString(),
-        ]);
-
-        // The gateway reports service failures inside a 200 response, so the
-        // body decides the outcome, not the HTTP status.
-        if (array_key_exists('success', $body) && ! $body['success']) {
-            throw new VecvApiException('alert endpoint: ' . (string) ($body['message'] ?? 'unknown error'));
-        }
-
-        $shape = [];
-
-        foreach ($body as $key => $value) {
-            if (is_array($value)) {
-                $shape[$key] = count($value);
-                if (! empty($value) && is_array(reset($value))) {
-                    $shape[$key . '_row_keys'] = array_keys(reset($value));
-                }
-            }
-        }
-
-        Log::channel('vecv')->info('ALERT ENDPOINT RESPONDED - shape observed', $shape);
-
-        return ['stored' => 0, 'note' => 'shape logged; ingest not built yet', 'shape' => $shape];
+        return app(VecvAlertSyncService::class)->sync();
     }
 
     /*
