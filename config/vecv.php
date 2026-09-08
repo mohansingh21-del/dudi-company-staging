@@ -226,7 +226,26 @@ return [
     // wider than the VECV feeds it sits beside. Order matters: the two that
     // the dashboard actually renders from come first, so the screen is correct
     // within seconds and everything after it only adds detail.
-    'refresh_feeds' => ['truck_connect', 'fuel', 'location', 'service_history', 'alerts'],
+    // location and service_history are deliberately NOT here.
+    //
+    // Nothing on the dashboard reads either of them: every panel is built from
+    // equipment_fuel_readings, truck_connect_readings and vecv_alerts. The fuel
+    // feed already carries position, speed and odometer, so the location feed
+    // adds only vehicle_direction, which no screen shows; and service history
+    // is workshop job cards, which change over days rather than minutes and
+    // have no place behind a button at all.
+    //
+    // Each feed costs its own rate-limit window, so dropping the two takes a
+    // full pass from roughly four minutes to about one.
+    //
+    // Keep syncing them on a schedule rather than abandoning them:
+    //   php artisan vecv:sync-location
+    //   php artisan vecv:sync-service-history
+    //
+    // Service history especially - VECV serves only the last 30 days, so a job
+    // card that is never fetched inside that window becomes unreachable for
+    // good. Add either back to this list to put it behind the button again.
+    'refresh_feeds' => ['truck_connect', 'fuel', 'alerts'],
 
     // Feeds that do NOT share the VECV rate-limit budget and so need no
     // cooldown before or after them. Truck Connect is a different vendor, a
