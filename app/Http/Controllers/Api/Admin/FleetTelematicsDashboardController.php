@@ -39,6 +39,11 @@ class FleetTelematicsDashboardController extends Controller
      *                      rather than against now. Safety events are summed
      *                      across the whole window.
      *   date               Y-m-d shorthand for a one-day window.
+     *   range              today | yesterday | last_7_days | last_30_days |
+     *                      this_month | last_month. A named shorthand the
+     *                      picker's preset buttons can send instead of
+     *                      computing from/to themselves. Ignored when from/to
+     *                      (or date) are also sent - explicit dates win.
      *   machine_id         The dumper dropdown - equipment_names.id.
      *   connectivity       online | offline
      *   operational_status moving | stationary | engine_off | offline | unknown
@@ -58,6 +63,7 @@ class FleetTelematicsDashboardController extends Controller
             'from'               => $request->input('from'),
             'to'                 => $request->input('to'),
             'date'               => $request->input('date'),
+            'range'              => $request->input('range'),
             'machine_id'         => $request->input('machine_id'),
             'connectivity'       => $request->input('connectivity'),
             'operational_status' => $request->input('operational_status'),

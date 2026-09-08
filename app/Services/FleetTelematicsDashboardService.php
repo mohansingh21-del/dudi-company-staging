@@ -486,7 +486,10 @@ class FleetTelematicsDashboardService
      *
      * Accepts either a range - from/to, which is what the date picker's Today,
      * Yesterday, Last 7 Days and Custom Range all reduce to - or a single date
-     * as shorthand for a one-day window.
+     * as shorthand for a one-day window. A named "range" preset (see
+     * presetRange()) is a third option, for a caller that would rather send a
+     * key than compute dates itself; it only fills in what from/to/date left
+     * empty, so explicit dates always win over a preset sent alongside them.
      *
      * Both ends are inclusive: "to" is stretched to the end of its day, so a
      * range ending today includes everything reported so far today rather than
@@ -499,6 +502,17 @@ class FleetTelematicsDashboardService
     {
         $from = $filters['from'] ?? $filters['date'] ?? null;
         $to   = $filters['to']   ?? $filters['date'] ?? null;
+
+        if ((empty($from) || empty($to)) && ! empty($filters['range'])) {
+            $preset = $this->presetRange($filters['range']);
+
+            // An unrecognised key falls through to the "one end alone"
+            // handling below rather than erroring - same reasoning as an
+            // unparseable date: fall back to the live view, not a 500.
+            if ($preset !== null) {
+                return $preset;
+            }
+        }
 
         // One end alone is ambiguous - "everything since Monday" and
         // "everything up to Monday" are different questions and the UI sends
@@ -523,6 +537,49 @@ class FleetTelematicsDashboardService
         }
 
         return [$start, $end];
+    }
+
+    /**
+     * A named date-range preset as [start, end], both already stretched to
+     * the edges of their day - or null when the key isn't one of these.
+     *
+     * The same reduction the date picker's buttons do client-side, done here
+     * so a caller can send the key instead of computing dates. "Last N days"
+     * counts today as one of the N, matching what the picker's own buttons
+     * mean by the label.
+     *
+     * @param  string  $key
+     * @return array|null  [\Carbon\Carbon, \Carbon\Carbon]
+     */
+    protected function presetRange($key)
+    {
+        $today = Carbon::today();
+        $key   = strtolower(trim($key));
+
+        switch ($key) {
+            case 'today':
+                return [$today->copy(), $today->copy()->endOfDay()];
+
+            case 'yesterday':
+                $yesterday = $today->copy()->subDay();
+                return [$yesterday, $yesterday->copy()->endOfDay()];
+
+            case 'last_7_days':
+                return [$today->copy()->subDays(6), $today->copy()->endOfDay()];
+
+            case 'last_30_days':
+                return [$today->copy()->subDays(29), $today->copy()->endOfDay()];
+
+            case 'this_month':
+                return [$today->copy()->startOfMonth(), $today->copy()->endOfDay()];
+
+            case 'last_month':
+                $lastMonth = $today->copy()->subMonthNoOverflow();
+                return [$lastMonth->copy()->startOfMonth(), $lastMonth->copy()->endOfMonth()];
+
+            default:
+                return null;
+        }
     }
 
     /**
