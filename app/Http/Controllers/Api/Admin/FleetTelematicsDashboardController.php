@@ -140,6 +140,12 @@ class FleetTelematicsDashboardController extends Controller
      * Fetched separately they would also be built from two snapshots taken
      * moments apart, and the counts could disagree about the same machine.
      *
+     * limit sizes data.safety_events.by_vehicle only - the "Events by Dumper"
+     * list, the one short list on this response - and is what its View All
+     * link uses: omitted it stays the top few, limit=all (or limit=0) returns
+     * every machine that raised an event in the window. The operational split
+     * and the event totals always cover the whole fleet regardless.
+     *
      * @return JsonResponse
      */
     public function operations(Request $request): JsonResponse
@@ -148,7 +154,9 @@ class FleetTelematicsDashboardController extends Controller
             return response()->json([
                 'status'  => true,
                 'message' => 'Fleet operations retrieved successfully.',
-                'data'    => $this->dashboard->operations($this->filters($request)),
+                'data'    => $this->dashboard->operations($this->filters($request) + [
+                    'limit' => $request->input('limit'),
+                ]),
             ], 200);
         } catch (\Throwable $th) {
             return response()->json([
@@ -205,6 +213,12 @@ class FleetTelematicsDashboardController extends Controller
      * could sit in the Critical slice of the donut while the list beside it
      * still called it Low.
      *
+     * limit sizes data.lowest only, and is what the panel's View All link
+     * uses: omitted it stays the short default list, limit=all (or limit=0)
+     * returns every vehicle with a usable reading - data.basis_count of them.
+     * The donut, the average and the totals are unaffected, so opening View
+     * All cannot change the numbers the reader was just looking at.
+     *
      * @return JsonResponse
      */
     public function fuel(Request $request): JsonResponse
@@ -213,7 +227,9 @@ class FleetTelematicsDashboardController extends Controller
             return response()->json([
                 'status'  => true,
                 'message' => 'Fuel status retrieved successfully.',
-                'data'    => $this->dashboard->fuelStatus($this->filters($request)),
+                'data'    => $this->dashboard->fuelStatus($this->filters($request) + [
+                    'limit' => $request->input('limit'),
+                ]),
             ], 200);
         } catch (\Throwable $th) {
             return response()->json([
@@ -231,6 +247,9 @@ class FleetTelematicsDashboardController extends Controller
      * dashboard's fuel panel should use the fuel endpoint above, which returns
      * this list and the donut from one snapshot.
      *
+     * limit means what it means there: omitted is the default list, "all" or 0
+     * is every vehicle with a usable reading.
+     *
      * @param  Request  $request
      * @return JsonResponse
      */
@@ -241,7 +260,7 @@ class FleetTelematicsDashboardController extends Controller
                 'status'  => true,
                 'message' => 'Lowest fuel vehicles retrieved successfully.',
                 'data'    => $this->dashboard->lowestFuel(
-                    (int) $request->input('limit', 0),
+                    $request->input('limit'),
                     $this->filters($request)
                 ),
             ], 200);

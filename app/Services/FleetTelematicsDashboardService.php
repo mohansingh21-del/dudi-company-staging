@@ -8,6 +8,7 @@ use App\Models\VecvAlert;
 use App\Services\FleetRefreshRunner;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Builds the live fleet dashboard from VECV telemetry.
@@ -287,10 +288,21 @@ class FleetTelematicsDashboardService
             // Named breakdown for display, largest first.
             'breakdown' => $this->alertSubTypeBreakdown($events),
 
+            // VECV alerts only, matching 'counts' and 'breakdown' above.
+            // by_vehicle below spans both vendors, so its rows sum to this
+            // only while the Truck Connect counters stay at zero.
             'total' => $events->count(),
 
-            // "Events by Dumper (Top 5)".
-            'by_vehicle' => $this->alertsByMachine($events),
+            // "Events by Dumper (Top 5)" by default; View All asks for the
+            // whole fleet. Both vendors, each row carrying its 'source' - the
+            // counts above are VECV-only, so without the Truck Connect rows
+            // here the panel would silently be about a quarter of the fleet.
+            'by_vehicle' => $this->safetyEventsByMachine(
+                $events,
+                $range,
+                $filters,
+                isset($filters['limit']) ? $filters['limit'] : null
+            ),
 
             // Only VECV machines raise these. Stated so a quiet card is not
             // read as a quiet fleet when most of it is not being watched.
@@ -419,6 +431,9 @@ class FleetTelematicsDashboardService
 
             'by_type'     => $this->countBy($alerts, 'alert_type'),
             'by_sub_type' => $this->alertSubTypeBreakdown($alerts),
+            // No limit passed through: on this endpoint 'limit' already pages
+            // the Recent Alerts list below, so it must not silently resize
+            // this one too.
             'by_machine'  => $this->alertsByMachine($alerts),
 
             // The Recent Alerts list, newest first. Paged - see 'pagination'.
@@ -504,12 +519,54 @@ class FleetTelematicsDashboardService
     }
 
     /**
-     * "Events by Dumper", worst first.
+     * "Events by Dumper", worst first. VECV machines only - see
+     * safetyEventsByMachine() for the whole-fleet version.
      *
      * @param  \Illuminate\Support\Collection  $alerts
+     * @param  int|string|null  $limit  Null is the panel's short default,
+     *                                  "all" or 0 every machine that raised an
+     *                                  event in the window.
      * @return array
      */
-    protected function alertsByMachine(Collection $alerts)
+    protected function alertsByMachine(Collection $alerts, $limit = null)
+    {
+        return $this->rankMachineRows($this->alertMachineRows($alerts), $limit);
+    }
+
+    /**
+     * "Events by Dumper" across both vendors.
+     *
+     * Truck Connect machines are listed alongside the VECV ones so the panel's
+     * View All is the fleet, not the half of it one vendor happens to cover.
+     * They carry their harsh-event count like any other row - which is zero on
+     * every reading so far, and a zero here is a real answer: the machine is
+     * being watched and reported nothing. Absent from the list it would be
+     * indistinguishable from a machine nobody is watching at all.
+     *
+     * Sorted by count, so those zero rows sit at the bottom and the short
+     * default list is unchanged - it still shows the worst offenders.
+     *
+     * @param  \Illuminate\Support\Collection  $events  VECV driving-behaviour alerts
+     * @param  array  $range
+     * @param  array  $filters
+     * @param  int|string|null  $limit
+     * @return array
+     */
+    protected function safetyEventsByMachine(Collection $events, array $range, array $filters, $limit = null)
+    {
+        return $this->rankMachineRows(
+            $this->alertMachineRows($events)->concat($this->truckConnectMachineRows($range, $filters)),
+            $limit
+        );
+    }
+
+    /**
+     * One row per machine that raised a VECV alert in the set.
+     *
+     * @param  \Illuminate\Support\Collection  $alerts
+     * @return \Illuminate\Support\Collection
+     */
+    protected function alertMachineRows(Collection $alerts)
     {
         return $alerts->groupBy('chassis_number')
             ->map(function ($group, $chassis) {
@@ -522,14 +579,93 @@ class FleetTelematicsDashboardService
                     'count'          => $group->count(),
                     'critical'       => $group->where('severity', 'critical')->count(),
                     'warning'        => $group->where('severity', 'warning')->count(),
+                    'source'         => 'vecv',
                 ];
             })
-            // Chassis is the tie-break so machines on the same count do not
-            // swap places between refreshes.
-            ->sortBy([['count', 'desc'], ['chassis_number', 'asc']])
-            ->take((int) config('vecv.alerts_by_machine_limit'))
-            ->values()
-            ->all();
+            ->values();
+    }
+
+    /**
+     * One row per Truck Connect machine reporting in the window, in the same
+     * shape as the VECV rows so the two can be listed together.
+     *
+     * count is the harsh braking, acceleration and cornering flags summed -
+     * the same figure truck_connect_harsh reports fleet-wide, split by machine.
+     * critical and warning are zero rather than null because this feed
+     * publishes no severity at all; there is nothing to grade.
+     *
+     * @param  array  $range
+     * @param  array  $filters
+     * @return \Illuminate\Support\Collection
+     */
+    protected function truckConnectMachineRows(array $range, array $filters)
+    {
+        return TruckConnectReading::query()
+            ->leftJoin('equipment_names', function ($join) {
+                $join->on('equipment_names.chassis_number', '=', 'truck_connect_readings.vin')
+                    ->whereNotNull('equipment_names.chassis_number');
+            })
+            ->whereBetween('truck_connect_readings.reported_at', [$range[0], $range[1]])
+            ->when(! empty($filters['machine_id']), function ($q) use ($filters) {
+                $q->where('equipment_names.id', (int) $filters['machine_id']);
+            })
+            // Grouped in the database rather than by pulling every reading:
+            // this is one row per machine either way, and the window can hold
+            // thousands of readings.
+            ->groupBy(
+                'truck_connect_readings.vin',
+                'equipment_names.id',
+                'equipment_names.equipment_name'
+            )
+            ->select([
+                'truck_connect_readings.vin',
+                'equipment_names.id as machine_id',
+                'equipment_names.equipment_name as dumper_no',
+                DB::raw('SUM(truck_connect_readings.harsh_braking) as harsh_braking'),
+                DB::raw('SUM(truck_connect_readings.harsh_acceleration) as harsh_acceleration'),
+                DB::raw('SUM(truck_connect_readings.harsh_cornering) as harsh_cornering'),
+            ])
+            ->get()
+            ->map(function ($row) {
+                return [
+                    'machine_id'     => $row->machine_id === null ? null : (int) $row->machine_id,
+                    'chassis_number' => $row->vin,
+                    // Falls back to the VIN so the column an operator
+                    // identifies the machine by is never blank.
+                    'dumper_no'      => $row->dumper_no ?: $row->vin,
+                    'count'          => (int) $row->harsh_braking
+                                      + (int) $row->harsh_acceleration
+                                      + (int) $row->harsh_cornering,
+                    'critical'       => 0,
+                    'warning'        => 0,
+                    'source'         => 'truck_connect',
+                ];
+            });
+    }
+
+    /**
+     * Order machine rows worst-first and cut them to the panel's length.
+     *
+     * @param  \Illuminate\Support\Collection  $rows
+     * @param  int|string|null  $limit
+     * @return array
+     */
+    protected function rankMachineRows(Collection $rows, $limit = null)
+    {
+        $limit = $this->panelLimit($limit, (int) config('vecv.alerts_by_machine_limit'));
+
+        // Chassis is the tie-break so machines on the same count do not swap
+        // places between refreshes - which matters most for the Truck Connect
+        // rows, where every count is currently zero.
+        $rows = $rows->sortBy([['count', 'desc'], ['chassis_number', 'asc']]);
+
+        // View All: no slice rather than a very large one, so the list cannot
+        // be quietly capped again as the fleet grows.
+        if ($limit !== null) {
+            $rows = $rows->take($limit);
+        }
+
+        return $rows->values()->all();
     }
 
     /**
@@ -545,13 +681,16 @@ class FleetTelematicsDashboardService
      */
     public function fuelStatus(array $filters = [])
     {
-        return $this->fuel($this->fleet($filters));
+        return $this->fuel(
+            $this->fleet($filters),
+            isset($filters['limit']) ? $filters['limit'] : null
+        );
     }
 
     /**
      * The vehicles running lowest on fuel.
      *
-     * @param  int|null  $limit
+     * @param  int|string|null  $limit
      * @return array
      */
     public function lowestFuel($limit = null, array $filters = [])
@@ -566,28 +705,58 @@ class FleetTelematicsDashboardService
      * its donut and its list from the same rows in a single query.
      *
      * @param  \Illuminate\Support\Collection  $fleet
-     * @param  int|null  $limit
+     * @param  int|string|null  $limit
      * @return array
      */
     protected function lowestFrom(Collection $fleet, $limit = null)
     {
-        $limit = $limit ?: (int) config('vecv.lowest_fuel_limit');
+        $limit = $this->panelLimit($limit, (int) config('vecv.lowest_fuel_limit'));
 
         // Reuses the donut's validity rule - present and inside 0-100 - so a
         // vehicle can never appear in the list under a bucket the donut did
         // not count it in. A missing or impossible reading is not "low on
         // fuel", it is unknown; left in, nulls sort to the top of an ascending
         // list and fill the panel with vehicles that have no data at all.
-        return $this->withValidFuel($fleet)
+        $rows = $this->withValidFuel($fleet)
             // Chassis is the tie-break so two vehicles on the same level do
             // not swap places between refreshes.
             ->sortBy([
                 ['fuel_level_pct', 'asc'],
                 ['chassis_number', 'asc'],
-            ])
-            ->take($limit)
-            ->values()
-            ->all();
+            ]);
+
+        // View All: no slice at all rather than a very large one, so the list
+        // cannot be quietly capped again as the fleet grows.
+        if ($limit !== null) {
+            $rows = $rows->take($limit);
+        }
+
+        return $rows->values()->all();
+    }
+
+    /**
+     * How many rows one of the dashboard's short "Top N" lists should return.
+     *
+     * Shared by every such list so View All means the same thing everywhere.
+     * Absent is the panel's own default, so a first paint is unchanged. "all",
+     * or any number below one, is a View All link asking for the lot; null
+     * carries that back to the caller, which then takes no slice at all.
+     *
+     * @param  int|string|null  $limit
+     * @param  int  $default
+     * @return int|null
+     */
+    protected function panelLimit($limit, $default)
+    {
+        if ($limit === null || $limit === '') {
+            return (int) $default;
+        }
+
+        if (is_string($limit) && strtolower(trim($limit)) === 'all') {
+            return null;
+        }
+
+        return (int) $limit < 1 ? null : (int) $limit;
     }
 
     /*
@@ -1128,9 +1297,14 @@ class FleetTelematicsDashboardService
      * The fuel donut and fleet average.
      *
      * @param  \Illuminate\Support\Collection  $fleet
+     * @param  int|string|null  $lowestLimit  Rows for the "lowest fuel" list;
+     *                                        null is the default, "all" or 0
+     *                                        every vehicle. Sizes that list
+     *                                        only - the donut and the average
+     *                                        always cover the whole fleet.
      * @return array
      */
-    protected function fuel(Collection $fleet)
+    protected function fuel(Collection $fleet, $lowestLimit = null)
     {
         $known = $this->withValidFuel($fleet);
 
@@ -1152,9 +1326,14 @@ class FleetTelematicsDashboardService
 
             'average_pct' => $this->averageFuel($fleet),
 
-            'total_litres' => $fleet->sum(function ($row) {
+            // Summing floats leaves a binary-representation tail -
+            // 1281.7700000000002 for readings that are each exact to the paisa.
+            // Two decimals because that is the precision the readings are
+            // stored at (decimal(10,2)); rounding harder would throw away a
+            // digit the source actually has.
+            'total_litres' => round($fleet->sum(function ($row) {
                 return $row['fuel_level_ltr'] ?: 0;
-            }) ?: null,
+            }), 2) ?: null,
 
             'basis'       => 'all vehicles, last known level',
             'basis_count' => $known->count(),
@@ -1169,8 +1348,9 @@ class FleetTelematicsDashboardService
             ],
 
             // The "lowest fuel" panel, from the same snapshot and the same
-            // bucketing as the donut above.
-            'lowest' => $this->lowestFrom($fleet),
+            // bucketing as the donut above. Short by default; View All asks
+            // for every vehicle counted in 'basis_count'.
+            'lowest' => $this->lowestFrom($fleet, $lowestLimit),
         ];
     }
 
