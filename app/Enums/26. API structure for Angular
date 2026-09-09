@@ -1,0 +1,142 @@
+26. API structure for Angular
+Your Angular developer can now work with:
+
+List
+GET /api/penalties
+
+Example:
+
+GET /api/penalties?page=1&limit=20
+
+Search
+GET /api/penalties?search=Rahul
+
+Recovery type
+GET /api/penalties?recovery_type=loans
+
+Employee
+GET /api/penalties?employee_id=15
+
+Month/year
+GET /api/penalties?month=8&year=2026
+
+Single record
+GET /api/penalties/101
+
+Create
+POST /api/penalties
+
+Body:
+
+{
+    "employee_id": 15,
+    "penalty_date": "2026-08-01",
+    "recovery_type": "loans",
+    "particulars": "Personal Loan",
+    "amount": 100000,
+    "show_cause_issued": false,
+    "explanation_heard_in_presence": null,
+    "number_of_installments": 10,
+    "first_month": 8,
+    "first_year": 2026,
+    "last_month": 5,
+    "last_year": 2027,
+    "date_of_complete_recovery": null,
+    "remarks": "Approved by HR"
+}
+
+27. Update API
+PUT /api/penalties/101
+
+Body:
+
+{
+    "amount": 120000,
+    "remarks": "Amount corrected by HR"
+}
+
+Database:
+
+amount = 120000
+
+but:
+
+calculation_amount = 100000
+
+So payroll remains:
+
+100000
+
+28. Export API
+GET /api/penalties/export
+
+With filters:
+
+GET /api/penalties/export?recovery_type=loans&year=2026
+
+The Excel export approach above follows Laravel Excel's standard Excel::download() flow. 
+L
+Laravel Excel
++1
+
+29. Bulk Excel upload
+POST /api/penalties/bulk-upload
+
+Multipart form-data:
+
+file = penalties.xlsx
+
+Angular sends:
+
+const formData = new FormData();
+formData.append('file', file);
+
+this.http.post(
+    '/api/penalties/bulk-upload',
+    formData
+);
+
+30. I would make one additional API
+For Angular, give the frontend the allowed recovery types.
+
+Create:
+
+GET /api/penalties/recovery-types
+
+In controller:
+
+public function recoveryTypes()
+{
+    return response()->json([
+        'status' => 200,
+        'data' => [
+            [
+                'value' => 'damage',
+                'label' => 'Damage',
+            ],
+            [
+                'value' => 'loss',
+                'label' => 'Loss',
+            ],
+            [
+                'value' => 'fine',
+                'label' => 'Fine',
+            ],
+            [
+                'value' => 'advance',
+                'label' => 'Advance',
+            ],
+            [
+                'value' => 'loans',
+                'label' => 'Loans',
+            ],
+        ],
+    ]);
+}
+
+Route:
+
+Route::get(
+    'penalties/recovery-types',
+    [PenaltyController::class, 'recoveryTypes']
+);

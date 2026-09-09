@@ -91,7 +91,8 @@ class EmployeeShiftAssignmentController extends Controller
 
             foreach ($identifiers as $identifier) {
                 // Find employee by id first, then by employee_code
-                $employee = \App\Models\Employee::where('id', $identifier)
+                $employee = \App\Models\Employee::with('relay')
+                    ->where('id', $identifier)
                     ->orWhere('employee_code', $identifier)
                     ->first();
 
@@ -102,10 +103,10 @@ class EmployeeShiftAssignmentController extends Controller
                     ], 422);
                 }
 
-                if ($employee->relay_shift === 'general') {
+                if (!$employee->relay_id || !$employee->relay || !$employee->relay->is_rotating) {
                     return response()->json([
                         'status' => 422,
-                        'message' => "Shift assignment is not allowed for general shift employee '{$employee->name}'."
+                        'message' => "Shift assignment is not allowed for non-rotating/general shift employee '{$employee->name}'."
                     ], 422);
                 }
 
@@ -183,7 +184,7 @@ class EmployeeShiftAssignmentController extends Controller
             $updateData = [];
 
             if ($request->has('employee_id')) {
-                $employee = \App\Models\Employee::where('id', $request->employee_id)
+                $employee = \App\Models\Employee::with('relay')->where('id', $request->employee_id)
                     ->orWhere('employee_code', $request->employee_id)
                     ->first();
 
@@ -194,10 +195,10 @@ class EmployeeShiftAssignmentController extends Controller
                     ], 422);
                 }
 
-                if ($employee->relay_shift === 'general') {
+                if (!$employee->relay_id || !$employee->relay || !$employee->relay->is_rotating) {
                     return response()->json([
                         'status' => 422,
-                        'message' => 'Shift assignment is not allowed for general shift employees.'
+                        'message' => 'Shift assignment is not allowed for non-rotating/general shift employees.'
                     ], 422);
                 }
 

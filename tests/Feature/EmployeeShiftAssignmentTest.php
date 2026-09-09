@@ -62,12 +62,16 @@ class EmployeeShiftAssignmentTest extends TestCase
             'is_active' => 1
         ]);
 
+        // Create relays
+        $relayA = \App\Models\Relay::create(['name' => 'Relay A', 'is_rotating' => true, 'is_active' => true]);
+        $relayB = \App\Models\Relay::create(['name' => 'Relay B', 'is_rotating' => true, 'is_active' => true]);
+
         // Create employees
         $this->employee1 = Employee::create([
             'employee_code' => 'EMP123',
             'name' => 'Neha Jain',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_1',
+            'relay_id' => $relayA->id,
             'is_active' => 1
         ]);
 
@@ -75,7 +79,7 @@ class EmployeeShiftAssignmentTest extends TestCase
             'employee_code' => 'EMP456',
             'name' => 'Ramesh Kumar',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_2',
+            'relay_id' => $relayB->id,
             'is_active' => 1
         ]);
     }
@@ -165,11 +169,12 @@ class EmployeeShiftAssignmentTest extends TestCase
     public function test_cannot_assign_shift_to_general_shift_employee()
     {
         // Create general shift employee
+        $relayGeneral = \App\Models\Relay::create(['name' => 'General', 'is_rotating' => false, 'is_active' => true]);
         $generalEmployee = Employee::create([
             'employee_code' => 'EMP999',
             'name' => 'General Employee',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'general',
+            'relay_id' => $relayGeneral->id,
             'is_active' => 1
         ]);
 
@@ -181,7 +186,7 @@ class EmployeeShiftAssignmentTest extends TestCase
         $response->assertStatus(422);
         $response->assertJsonFragment([
             'status' => 422,
-            'message' => "Shift assignment is not allowed for general shift employee 'General Employee'."
+            'message' => "Shift assignment is not allowed for non-rotating/general shift employee 'General Employee'."
         ]);
     }
 }

@@ -77,11 +77,14 @@ class DepartmentManagementTest extends TestCase
             'is_active' => 1
         ]);
 
+        $relay = \App\Models\Relay::create(['name' => 'Relay A', 'is_rotating' => true, 'is_active' => true]);
+
         Employee::create([
             'employee_code' => 'EMP001',
             'name' => 'Employee in Dep 1',
             'department_id' => $dep1->id,
             'joining_date' => '2026-01-01',
+            'relay_id' => $relay->id,
             'is_active' => 1
         ]);
 
@@ -90,6 +93,7 @@ class DepartmentManagementTest extends TestCase
             'name' => 'Employee in Dep 2',
             'department_id' => $dep2->id,
             'joining_date' => '2026-01-01',
+            'relay_id' => $relay->id,
             'is_active' => 1
         ]);
 

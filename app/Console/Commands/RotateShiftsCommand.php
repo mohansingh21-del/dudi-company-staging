@@ -5,6 +5,9 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use App\Models\Employee;
 use App\Models\EmployeeShiftAssignment;
+use App\Models\EmployeeShiftOverride;
+use App\Models\RelayShiftMapping;
+use App\Models\Relay;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -22,16 +25,12 @@ class RotateShiftsCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Rotate employee shifts according to a hardcoded sequence every Sunday';
+    protected $description = 'Rotate relay shift mappings according to a hardcoded sequence every Sunday';
 
     /**
      * The sequence defines the rotation order by shift ID.
-     * Only employees whose current shift_id exists in this array are rotated.
-     * Others are silently skipped.
-     *
-     * @var array
      */
-    protected array $rotationSequence = [1, 3, 2];
+    protected $sequence = [1, 3, 2]; // Shift ID 1 -> 3 -> 2 -> 1
 
     /**
      * Execute the console command.
@@ -40,75 +39,185 @@ class RotateShiftsCommand extends Command
      */
     public function handle()
     {
-        $this->info('Starting shift rotation...');
-
-        if (app()->environment('testing')) {
-            $this->rotationSequence = \App\Models\Shift::where('is_active', 1)->orderBy('id')->pluck('id')->toArray();
-        }
-
-        if (empty($this->rotationSequence)) {
-            $this->error('Rotation sequence is empty. Rotation skipped.');
-            return 1;
-        }
-
-        // Filter the rotation sequence to only include active shifts (is_active = 1)
-        $activeShiftIds = \App\Models\Shift::where('is_active', 1)->pluck('id')->toArray();
-        $activeSequence = array_values(array_filter($this->rotationSequence, function ($shiftId) use ($activeShiftIds) {
-            return in_array($shiftId, $activeShiftIds);
-        }));
-
-        if (empty($activeSequence)) {
-            $this->error('No active shifts found in the rotation sequence. Rotation skipped.');
-            return 1;
-        }
-
-        // We only want to rotate active employees who are not on 'general' relay shift
-        $employees = Employee::where('is_active', 1)
-            ->where('relay_shift', '!=', 'general')
-            ->with(['currentShiftAssignment'])
-            ->get();
-
-        $rotatedCount = 0;
-        $skippedCount = 0;
-
         $force = $this->option('force');
 
-        DB::transaction(function () use ($employees, $force, $activeSequence, &$rotatedCount, &$skippedCount) {
-            $today = Carbon::today();
-            $yesterday = Carbon::yesterday();
+        // Rotation sequence dynamically ordered by shift start time (descending / backwards)
+        $activeSequence = \App\Models\Shift::where('is_active', 1)
+            ->orderBy('start_time', 'desc')
+            ->pluck('id')
+            ->toArray();
+
+        // Current week boundary (runs on Sunday/Monday, mapping is for the week starting today/yesterday)
+        // Ensure weekStart is always the current week's Monday (or Sunday) to match scheduler
+        $today = Carbon::today();
+        if ($today->dayOfWeek === Carbon::SUNDAY) {
+            $weekStart = $today->copy()->addDay()->toDateString();
+        } else {
+            $weekStart = $today->copy()->startOfWeek(Carbon::MONDAY)->toDateString();
+        }
+        $weekEnd = Carbon::parse($weekStart)->addDays(6)->toDateString();
+
+        // Check if mappings for this week already exist (prevent duplicate runs)
+        $existingThisWeek = RelayShiftMapping::where('week_start_date', $weekStart)->exists();
+        if ($existingThisWeek && !$force) {
+            $this->warn('Relay mappings for this week already exist. Use --force to override.');
+            return 0;
+        }
+
+        // Get active rotating relays
+        $rotatingRelays = Relay::where('is_active', 1)->where('is_rotating', 1)->get();
+
+        if ($rotatingRelays->isEmpty()) {
+            $this->error('No active rotating relays found in Relay Master.');
+            return 0;
+        }
+
+        DB::transaction(function () use ($activeSequence, $weekStart, $weekEnd, $force, $today, $rotatingRelays) {
+            // Step 1: Expire all open-ended overrides (from previous weeks)
+            $yesterday = $today->copy()->subDay()->toDateString();
+            EmployeeShiftOverride::whereNull('effective_until')
+                ->where('effective_from', '<', $weekStart)
+                ->update(['effective_until' => $yesterday]);
+
+            // Step 2: Get the most recent relay mappings (current or previous week)
+            // Read BEFORE deleting so --force can use them as rotation basis
+            $latestMappings = RelayShiftMapping::orderBy('week_start_date', 'desc')
+                ->get()
+                ->unique('relay_id');
+
+            // If forcing, remove existing mappings for this week
+            if ($force) {
+                RelayShiftMapping::where('week_start_date', $weekStart)->delete();
+            }
+
+            if ($latestMappings->isEmpty()) {
+                // First run — seed from current employee_shift_assignments
+                $this->seedInitialMappings($rotatingRelays, $activeSequence, $weekStart, $weekEnd);
+            } else {
+                // Rotate: each relay's shift moves to the next in the sequence.
+                // Advancing every relay by one step preserves distinctness, so a
+                // collision here means the previous week's mappings were already
+                // inconsistent — skip and warn rather than write a duplicate.
+                $claimedShifts = [];
+
+                foreach ($rotatingRelays as $relay) {
+                    $prevMapping = $latestMappings->firstWhere('relay_id', $relay->id);
+
+                    if (!$prevMapping || !in_array($prevMapping->shift_id, $activeSequence)) {
+                        continue;
+                    }
+
+                    $currentIndex = array_search($prevMapping->shift_id, $activeSequence);
+                    $nextShiftId = $activeSequence[($currentIndex + 1) % count($activeSequence)];
+
+                    if (in_array($nextShiftId, $claimedShifts)) {
+                        $this->warn("Relay {$relay->name}: Shift {$nextShiftId} already claimed this week. Skipping.");
+                        continue;
+                    }
+                    $claimedShifts[] = $nextShiftId;
+
+                    RelayShiftMapping::create([
+                        'week_start_date' => $weekStart,
+                        'week_end_date' => $weekEnd,
+                        'relay_id' => $relay->id,
+                        'shift_id' => $nextShiftId,
+                    ]);
+
+                    $this->line("Relay {$relay->name}: Shift {$prevMapping->shift_id} -> Shift {$nextShiftId}");
+                }
+            }
+
+            // Step 3: Sync employee_shift_assignments for backward compatibility
+            $this->syncEmployeeAssignments($weekStart);
+        });
+
+        $this->info('Relay-based shift rotation completed successfully.');
+        return 0;
+    }
+
+    /**
+     * Seed initial relay mappings from current employee_shift_assignments.
+     * Used on the very first run when no relay mappings exist yet.
+     */
+    private function seedInitialMappings($rotatingRelays, array $activeSequence, string $weekStart, string $weekEnd)
+    {
+        $this->info('No previous relay mappings found. Seeding from current employee assignments...');
+
+        // Each relay's most common shift is derived independently, so two relays
+        // can land on the same shift. Only the first may claim it.
+        $claimedShifts = [];
+
+        foreach ($rotatingRelays as $relay) {
+            // Find the most common shift_id for employees in this relay
+            $mostCommonShiftId = EmployeeShiftAssignment::whereHas('employee', function ($q) use ($relay) {
+                $q->where('is_active', 1)->where('relay_id', $relay->id);
+            })
+                ->select('shift_id', DB::raw('count(*) as cnt'))
+                ->groupBy('shift_id')
+                ->orderByDesc('cnt')
+                ->value('shift_id');
+
+            if ($mostCommonShiftId && in_array($mostCommonShiftId, $claimedShifts)) {
+                $this->warn("Shift {$mostCommonShiftId} already claimed this week. Skipping Relay {$relay->name}.");
+                continue;
+            }
+
+            if ($mostCommonShiftId && in_array($mostCommonShiftId, $activeSequence)) {
+                $claimedShifts[] = $mostCommonShiftId;
+
+                RelayShiftMapping::create([
+                    'week_start_date' => $weekStart,
+                    'week_end_date' => $weekEnd,
+                    'relay_id' => $relay->id,
+                    'shift_id' => $mostCommonShiftId,
+                ]);
+
+                $this->line("Seeded Relay {$relay->name}: Shift {$mostCommonShiftId}");
+            } else {
+                $this->warn("Could not determine current shift for Relay {$relay->name}. Skipping.");
+            }
+        }
+    }
+
+    /**
+     * Sync employee_shift_assignments from relay mappings for backward compatibility.
+     * This ensures all existing code that reads employee_shift_assignments still works.
+     */
+    private function syncEmployeeAssignments(string $weekStart)
+    {
+        $mappings = RelayShiftMapping::where('week_start_date', $weekStart)->get();
+        $rotatedCount = 0;
+
+        foreach ($mappings as $mapping) {
+            $employees = Employee::where('is_active', 1)
+                ->where('relay_id', $mapping->relay_id)
+                ->with('currentShiftAssignment')
+                ->get();
 
             foreach ($employees as $employee) {
                 $currentAssignment = $employee->currentShiftAssignment;
 
-                // Check if employee has a current assignment, and it has no end date or ends today/future,
-                // and the shift_id is in our sequence.
-                if (
-                    $currentAssignment &&
-                    ($force || $currentAssignment->from_date !== $today->toDateString()) &&
-                    (is_null($currentAssignment->to_date) || Carbon::parse($currentAssignment->to_date)->isFuture() || Carbon::parse($currentAssignment->to_date)->isToday()) &&
-                    in_array($currentAssignment->shift_id, $activeSequence)
-                ) {
-                    $currentShiftId = $currentAssignment->shift_id;
-                    $currentIndex = array_search($currentShiftId, $activeSequence);
-                    $nextShiftId = $activeSequence[($currentIndex + 1) % count($activeSequence)];
-
-                    // Update the existing assignment to the new shift
-                    $currentAssignment->update([
-                        'shift_id' => $nextShiftId,
-                        'from_date' => $today->toDateString(),
-                        'to_date' => null
-                    ]);
-
-                    $this->line("Rotated Employee ID {$employee->id} ({$employee->name}): Shift {$currentShiftId} -> Shift {$nextShiftId}");
-                    $rotatedCount++;
+                if ($currentAssignment) {
+                    if ($currentAssignment->shift_id != $mapping->shift_id) {
+                        $currentAssignment->update([
+                            'shift_id' => $mapping->shift_id,
+                            'from_date' => $weekStart,
+                            'to_date' => null,
+                        ]);
+                        $rotatedCount++;
+                    }
                 } else {
-                    $skippedCount++;
+                    EmployeeShiftAssignment::create([
+                        'employee_id' => $employee->id,
+                        'shift_id' => $mapping->shift_id,
+                        'from_date' => $weekStart,
+                        'to_date' => null,
+                    ]);
+                    $rotatedCount++;
                 }
             }
-        });
+        }
 
-        $this->info("Shift rotation completed. {$rotatedCount} employees rotated, {$skippedCount} skipped.");
-
-        return 0;
+        $this->line("Synced legacy employee shift assignments for {$rotatedCount} employees.");
     }
 }

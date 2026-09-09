@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\EmployeeShiftHistoryResource;
 use App\Models\EmployeeShiftAssignment;
 use App\Models\EmployeeShiftHistory;
+use App\Models\EmployeeShiftOverride;
 use App\Models\Employee;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,38 +21,80 @@ class ShiftChangeController extends Controller
     {
         try {
             $limit = $request->input('limit', 10);
+            $today = now()->toDateString();
+            $weekStart = Carbon::parse($today)->startOfWeek(Carbon::MONDAY)->toDateString();
+
+            // Resolve each rotating relay's effective shift the same way Relay::getCurrentShiftIdAttribute()
+            // does: current week's mapping if present, else fall back to the latest mapping on record.
+            // An exact "week_start_date = this week's Monday" match would go empty whenever the weekly
+            // rotation job hasn't run yet, so it can't be pushed down as a plain whereHas() condition.
+            $relayCurrentShiftIds = \App\Models\Relay::where('is_active', 1)
+                ->where('is_rotating', 1)
+                ->get()
+                ->mapWithKeys(fn ($relay) => [$relay->id => $relay->current_shift_id]);
+
+            $resolvableRelayIds = $relayCurrentShiftIds->filter(fn ($shiftId) => $shiftId !== null)->keys()->toArray();
+
             $query = Employee::where('is_active', 1)
-                ->where('relay_shift', '!=', 'general')
-                ->whereHas('currentShiftAssignment')
-                ->with(['currentShiftAssignment.shift', 'department', 'site', 'designation', 'supervisor']);
+                ->whereHas('relay', function ($q) {
+                    $q->where('is_rotating', true);
+                })
+                ->where(function ($q) use ($resolvableRelayIds) {
+                    $q->whereHas('currentShiftAssignment')
+                      ->orWhereIn('relay_id', $resolvableRelayIds);
+                })
+                ->with(['currentShiftAssignment.shift', 'department', 'site', 'designation', 'supervisor', 'relay']);
 
             if ($request->filled('shift_id')) {
-                $query->whereHas('currentShiftAssignment', function ($q) use ($request) {
-                    $q->where('shift_id', $request->shift_id);
+                $requestedShiftId = $request->shift_id;
+                $matchingRelayIds = $relayCurrentShiftIds->filter(fn ($shiftId) => $shiftId == $requestedShiftId)->keys()->toArray();
+                $query->where(function ($q) use ($requestedShiftId, $matchingRelayIds) {
+                    $q->whereHas('currentShiftAssignment', function ($sub) use ($requestedShiftId) {
+                        $sub->where('shift_id', $requestedShiftId);
+                    })
+                    ->orWhereIn('relay_id', $matchingRelayIds);
                 });
             }
 
             if ($request->filled('from_date')) {
-                $query->whereHas('currentShiftAssignment', function ($q) use ($request) {
-                    $q->where(function ($sub) use ($request) {
-                        $sub->whereNotNull('from_date')
-                            ->where('from_date', '>=', $request->from_date)
-                            ->orWhere(function ($sub2) use ($request) {
-                                $sub2->whereNull('from_date')
-                                     ->whereDate('created_at', '>=', $request->from_date);
+                $fromDate = $request->from_date;
+                $query->where(function ($q) use ($fromDate) {
+                    $q->whereHas('currentShiftAssignment', function ($sub) use ($fromDate) {
+                        $sub->where(function ($sub2) use ($fromDate) {
+                            $sub2->whereNotNull('from_date')
+                                 ->where('from_date', '>=', $fromDate)
+                                 ->orWhere(function ($sub3) use ($fromDate) {
+                                     $sub3->whereNull('from_date')
+                                          ->whereDate('created_at', '>=', $fromDate);
+                                 });
+                        });
+                    })
+                    ->orWhere(function ($sub) use ($fromDate) {
+                        $sub->whereDoesntHave('currentShiftAssignment')
+                            ->whereHas('relay.shiftMappings', function ($m) use ($fromDate) {
+                                $m->where('week_start_date', '>=', $fromDate);
                             });
                     });
                 });
             }
 
             if ($request->filled('to_date')) {
-                $query->whereHas('currentShiftAssignment', function ($q) use ($request) {
-                    $q->where(function ($sub) use ($request) {
-                        $sub->whereNotNull('from_date')
-                            ->where('from_date', '<=', $request->to_date)
-                            ->orWhere(function ($sub2) use ($request) {
-                                $sub2->whereNull('from_date')
-                                     ->whereDate('created_at', '<=', $request->to_date);
+                $toDate = $request->to_date;
+                $query->where(function ($q) use ($toDate) {
+                    $q->whereHas('currentShiftAssignment', function ($sub) use ($toDate) {
+                        $sub->where(function ($sub2) use ($toDate) {
+                            $sub2->whereNotNull('from_date')
+                                 ->where('from_date', '<=', $toDate)
+                                 ->orWhere(function ($sub3) use ($toDate) {
+                                     $sub3->whereNull('from_date')
+                                          ->whereDate('created_at', '<=', $toDate);
+                                 });
+                        });
+                    })
+                    ->orWhere(function ($sub) use ($toDate) {
+                        $sub->whereDoesntHave('currentShiftAssignment')
+                            ->whereHas('relay.shiftMappings', function ($m) use ($toDate) {
+                                $m->where('week_start_date', '<=', $toDate);
                             });
                     });
                 });
@@ -81,7 +124,10 @@ class ShiftChangeController extends Controller
                     'name' => $employee->name,
                     'site' => optional($employee->site)->site_name,
                     'department' => optional($employee->department)->name,
-                    'shift' => optional(optional($employee->currentShiftAssignment)->shift)->shift_name,
+                    'shift' => $employee->shift_id ? optional(\App\Models\Shift::find($employee->shift_id))->shift_name : null,
+                    'relay' => optional($employee->relay)->name,
+                    'relay_shift' => optional($employee->relay)->name,
+                    'relay_id' => $employee->relay_id,
                 ];
             });
 
@@ -136,7 +182,8 @@ class ShiftChangeController extends Controller
 
             $resolvedEmployeeIds = [];
             foreach ($identifiers as $identifier) {
-                $employee = Employee::where('id', $identifier)
+                $employee = Employee::with('relay')
+                    ->where('id', $identifier)
                     ->orWhere('employee_code', $identifier)
                     ->first();
 
@@ -147,7 +194,7 @@ class ShiftChangeController extends Controller
                     ], 422);
                 }
 
-                if ($employee->relay_shift === 'general') {
+                if (!$employee->relay_id || !$employee->relay || !$employee->relay->is_rotating) {
                     continue;
                 }
 
@@ -162,6 +209,8 @@ class ShiftChangeController extends Controller
             }
 
             DB::transaction(function () use ($resolvedEmployeeIds, $targetShiftId) {
+                $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
+
                 foreach ($resolvedEmployeeIds as $empId) {
                     EmployeeShiftAssignment::updateOrCreate(
                         ['employee_id' => $empId],
@@ -171,6 +220,19 @@ class ShiftChangeController extends Controller
                             'to_date' => null
                         ]
                     );
+
+                    // Also write to overrides table for relay-based flow
+                    EmployeeShiftOverride::create([
+                        'employee_id' => $empId,
+                        'effective_from' => now()->toDateString(),
+                        'shift_id' => $targetShiftId,
+                        'reason' => 'Manual shift change',
+                        'created_by' => auth()->id(),
+                    ]);
+
+                    if ($newRelayId) {
+                        Employee::where('id', $empId)->update(['relay_id' => $newRelayId]);
+                    }
                 }
             });
 
@@ -216,13 +278,20 @@ class ShiftChangeController extends Controller
                 'shift_id' => 'required|exists:shifts,id',
             ]);
 
-            $employee = Employee::find($id);
+            $employee = Employee::with('relay')->find($id);
 
             if (!$employee) {
                 return response()->json([
                     'status' => 404,
                     'message' => 'Employee not found.'
                 ], 404);
+            }
+
+            if (!$employee->relay_id || !$employee->relay || !$employee->relay->is_rotating) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Shift rotation is not allowed for non-rotating/general shift employees.'
+                ], 422);
             }
 
             $targetShiftId = $request->shift_id;
@@ -236,6 +305,20 @@ class ShiftChangeController extends Controller
                         'to_date' => null
                     ]
                 );
+
+                // Also write to overrides table for relay-based flow
+                EmployeeShiftOverride::create([
+                    'employee_id' => $employee->id,
+                    'effective_from' => now()->toDateString(),
+                    'shift_id' => $targetShiftId,
+                    'reason' => 'Shift override',
+                    'created_by' => auth()->id(),
+                ]);
+
+                $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
+                if ($newRelayId) {
+                    $employee->update(['relay_id' => $newRelayId]);
+                }
             });
 
             $targetShift = \App\Models\Shift::find($targetShiftId);
@@ -273,13 +356,20 @@ class ShiftChangeController extends Controller
                 'shift_id' => 'required|exists:shifts,id',
             ]);
 
-            $employee = Employee::find($request->employee_id);
+            $employee = Employee::with('relay')->find($request->employee_id);
 
             if (!$employee) {
                 return response()->json([
                     'status' => 404,
                     'message' => 'Employee not found.'
                 ], 404);
+            }
+
+            if (!$employee->relay_id || !$employee->relay || !$employee->relay->is_rotating) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Shift rotation/override is not allowed for non-rotating/general shift employees.'
+                ], 422);
             }
 
             $targetShiftId = $request->shift_id;
@@ -293,6 +383,20 @@ class ShiftChangeController extends Controller
                         'to_date' => null
                     ]
                 );
+
+                // Also write to overrides table for relay-based flow
+                EmployeeShiftOverride::create([
+                    'employee_id' => $employee->id,
+                    'effective_from' => now()->toDateString(),
+                    'shift_id' => $targetShiftId,
+                    'reason' => 'Shift override',
+                    'created_by' => auth()->id(),
+                ]);
+
+                $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
+                if ($newRelayId) {
+                    $employee->update(['relay_id' => $newRelayId]);
+                }
             });
 
             $targetShift = \App\Models\Shift::find($targetShiftId);
@@ -321,48 +425,79 @@ class ShiftChangeController extends Controller
                 'swap_with_employee_id' => 'required|exists:employees,id|different:employee_id',
             ]);
 
-            $employee1 = Employee::find($request->employee_id);
-            $employee2 = Employee::find($request->swap_with_employee_id);
+            $employee1 = Employee::with('relay')->find($request->employee_id);
+            $employee2 = Employee::with('relay')->find($request->swap_with_employee_id);
+
+            $isEmp1Rotating = $employee1->relay_id && $employee1->relay && $employee1->relay->is_rotating;
+            $isEmp2Rotating = $employee2->relay_id && $employee2->relay && $employee2->relay->is_rotating;
+
+            if (!$isEmp1Rotating || !$isEmp2Rotating) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Shift swap is not allowed for non-rotating/general shift employees.'
+                ], 422);
+            }
 
             $assignment1 = EmployeeShiftAssignment::where('employee_id', $employee1->id)->first();
             $assignment2 = EmployeeShiftAssignment::where('employee_id', $employee2->id)->first();
 
-            if (!$assignment1) {
+            // Resolve shift IDs from assignments or relay mapping fallback
+            $shiftId1 = $assignment1 ? $assignment1->shift_id : $employee1->shift_id;
+            $shiftId2 = $assignment2 ? $assignment2->shift_id : $employee2->shift_id;
+
+            if (!$shiftId1) {
                 return response()->json([
                     'status' => 422,
-                    'message' => "Employee '{$employee1->name}' does not have a shift assignment."
+                    'message' => "Employee '{$employee1->name}' does not have a shift assigned."
                 ], 422);
             }
 
-            if (!$assignment2) {
+            if (!$shiftId2) {
                 return response()->json([
                     'status' => 422,
-                    'message' => "Employee '{$employee2->name}' does not have a shift assignment."
+                    'message' => "Employee '{$employee2->name}' does not have a shift assigned."
                 ], 422);
             }
 
-            if ($assignment1->shift_id === $assignment2->shift_id) {
+            if ($shiftId1 === $shiftId2) {
                 return response()->json([
                     'status' => 422,
                     'message' => "Both employees already have the same shift assigned."
                 ], 422);
             }
+            $relayId1 = $employee1->relay_id;
+            $relayId2 = $employee2->relay_id;
 
-            $shiftId1 = $assignment1->shift_id;
-            $shiftId2 = $assignment2->shift_id;
+            DB::transaction(function () use ($employee1, $employee2, $shiftId1, $shiftId2, $relayId1, $relayId2) {
+                EmployeeShiftAssignment::updateOrCreate(
+                    ['employee_id' => $employee1->id],
+                    ['shift_id' => $shiftId2, 'from_date' => now()->toDateString(), 'to_date' => null]
+                );
 
-            DB::transaction(function () use ($assignment1, $assignment2, $shiftId1, $shiftId2) {
-                $assignment1->update([
+                EmployeeShiftAssignment::updateOrCreate(
+                    ['employee_id' => $employee2->id],
+                    ['shift_id' => $shiftId1, 'from_date' => now()->toDateString(), 'to_date' => null]
+                );
+
+                // Also write to overrides table for relay-based flow
+                EmployeeShiftOverride::create([
+                    'employee_id' => $employee1->id,
+                    'effective_from' => now()->toDateString(),
                     'shift_id' => $shiftId2,
-                    'from_date' => now()->toDateString(),
-                    'to_date' => null
+                    'reason' => 'Shift swap',
+                    'created_by' => auth()->id(),
+                ]);
+                EmployeeShiftOverride::create([
+                    'employee_id' => $employee2->id,
+                    'effective_from' => now()->toDateString(),
+                    'shift_id' => $shiftId1,
+                    'reason' => 'Shift swap',
+                    'created_by' => auth()->id(),
                 ]);
 
-                $assignment2->update([
-                    'shift_id' => $shiftId1,
-                    'from_date' => now()->toDateString(),
-                    'to_date' => null
-                ]);
+                // Also swap their relays
+                $employee1->update(['relay_id' => $relayId2]);
+                $employee2->update(['relay_id' => $relayId1]);
             });
 
             $shift1 = \App\Models\Shift::find($shiftId1);
@@ -444,6 +579,7 @@ class ShiftChangeController extends Controller
                 ->toArray();
 
             // Find employee's first assignment date
+            $assignment = EmployeeShiftAssignment::where('employee_id', $employee->id)->first();
             $firstAssignmentDate = null;
             $earliestHistory = EmployeeShiftHistory::where('employee_id', $employee->id)
                 ->orderBy('change_date', 'asc')
@@ -665,49 +801,26 @@ class ShiftChangeController extends Controller
      */
     private function getShiftForDate(Employee $employee, Carbon $date)
     {
-        $dateStr = $date->toDateString();
+        return $employee->getShiftForDate($date->toDateString());
+    }
 
-        // 1. Get the current assignment
-        $assignment = EmployeeShiftAssignment::where('employee_id', $employee->id)->first();
-
-        // 2. Check if the date falls within the current assignment
-        if ($assignment) {
-            $from = $assignment->from_date ?: ($assignment->created_at ? $assignment->created_at->toDateString() : now()->toDateString());
-            $to = $assignment->to_date;
-            if ($from && $dateStr >= $from && (is_null($to) || $dateStr <= $to)) {
-                return $assignment->shift;
-            }
-        }
-
-        // 3. Search shift histories for the active shift on this date
-        $nextChange = EmployeeShiftHistory::where('employee_id', $employee->id)
-            ->where('change_date', '>', $dateStr)
-            ->orderBy('change_date', 'asc')
-            ->orderBy('id', 'asc')
+    /**
+     * Resolve the relay ID corresponding to a target shift ID.
+     */
+    private function resolveRelayIdForShift($targetShiftId)
+    {
+        $today = now()->toDateString();
+        $mapping = \App\Models\RelayShiftMapping::where('shift_id', $targetShiftId)
+            ->where('week_start_date', '<=', $today)
+            ->where('week_end_date', '>=', $today)
             ->first();
 
-        if ($nextChange) {
-            return $nextChange->old_shift_id ? \App\Models\Shift::find($nextChange->old_shift_id) : null;
+        if (!$mapping) {
+            $mapping = \App\Models\RelayShiftMapping::where('shift_id', $targetShiftId)
+                ->orderBy('week_start_date', 'desc')
+                ->first();
         }
 
-        $latestChange = EmployeeShiftHistory::where('employee_id', $employee->id)
-            ->where('change_date', '<=', $dateStr)
-            ->orderBy('change_date', 'desc')
-            ->orderBy('id', 'desc')
-            ->first();
-
-        if ($latestChange) {
-            return \App\Models\Shift::find($latestChange->new_shift_id);
-        }
-
-        // If the date is before the current assignment, and no history matches, they had no shift assigned
-        if ($assignment) {
-            $from = $assignment->from_date ?: ($assignment->created_at ? $assignment->created_at->toDateString() : now()->toDateString());
-            if ($dateStr < $from) {
-                return null;
-            }
-        }
-
-        return $assignment ? $assignment->shift : null;
+        return $mapping ? $mapping->relay_id : null;
     }
 }

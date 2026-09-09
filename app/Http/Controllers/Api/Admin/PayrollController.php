@@ -7,7 +7,6 @@ use App\Models\Payroll;
 use App\Models\Employee;
 use App\Models\AttendanceProcessed;
 use App\Models\Leave;
-use App\Models\Penalty;
 use App\Models\Holiday;
 use App\Http\Resources\PayrollResource;
 use Illuminate\Http\Request;
@@ -21,6 +20,22 @@ class PayrollController extends Controller
      *
      * Filters: month, year, site_id, department_id, search (name/code)
      */
+    /**
+     * An amount as it leaves the API: a float carrying at most two decimals.
+     *
+     * Every money figure is passed through this on the way out. The columns
+     * behind them are decimal(12,2), so the paise were always meant to be
+     * there — they were being lost to whole-rupee rounding, which reported a
+     * leave deduction of 11.60 as 12.
+     *
+     * Rounding stays at the edge: the arithmetic above runs at full precision
+     * so a chain of deductions does not accumulate rounding error.
+     */
+    private function money($value): float
+    {
+        return round((float) $value, 2);
+    }
+
     public function index(Request $request)
     {
         try {
@@ -86,49 +101,20 @@ class PayrollController extends Controller
                 ->get()
                 ->keyBy('employee_id');
 
-            // Approved leaves per employee for the month (paid vs unpaid)
-            $leaves = Leave::whereIn('employee_id', $employeeIds)
-                ->where('status', 'approved')
-                ->where(function ($q) use ($month, $year) {
-                    $q->where(function ($q2) use ($month, $year) {
-                        $q2->whereMonth('from_date', $month)->whereYear('from_date', $year);
-                    })->orWhere(function ($q2) use ($month, $year) {
-                        $q2->whereMonth('to_date', $month)->whereYear('to_date', $year);
-                    });
-                })
-                ->with('leaveType')
-                ->get();
+            // Approved leave days per employee, counted as distinct calendar
+            // dates and net of days attendance already pays for. Summing each
+            // leave's length double-paid any day two leaves overlapped on, and
+            // any day filed as leave that attendance had marked present.
+            $leaveSummary = \App\Services\LeaveBalanceService::monthlyLeaveDays(
+                $employeeIds->all(),
+                $month,
+                $year
+            );
 
-            // Calculate leave days per employee (paid / unpaid)
-            $leaveSummary = [];
-            $monthStart = Carbon::create($year, $month, 1)->startOfDay();
-            $monthEnd = $monthStart->copy()->endOfMonth();
-
-            foreach ($leaves as $leave) {
-                $empId = $leave->employee_id;
-                if (!isset($leaveSummary[$empId])) {
-                    $leaveSummary[$empId] = ['paid' => 0, 'unpaid' => 0];
-                }
-
-                $from = Carbon::parse($leave->from_date)->max($monthStart);
-                $to = Carbon::parse($leave->to_date)->min($monthEnd);
-                $days = $from->diffInDays($to) + 1;
-
-                $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
-                if ($category === 'paid') {
-                    $leaveSummary[$empId]['paid'] += $days;
-                } else {
-                    $leaveSummary[$empId]['unpaid'] += $days;
-                }
-            }
-
-            // Penalty totals per employee
-            $penaltyTotals = Penalty::whereIn('employee_id', $employeeIds)
-                ->where('month', $month)
-                ->where('year', $year)
-                ->selectRaw('employee_id, SUM(amount) as total_penalty')
-                ->groupBy('employee_id')
-                ->pluck('total_penalty', 'employee_id');
+            // Recoveries are capped at a percentage of each employee's gross
+            // and carry into later months, so the amount cannot be summed up
+            // front — it is resolved per employee once gross is known below.
+            $recoveryService = app(\App\Services\LoanRecoveryService::class);
 
             // Site-specific holidays
             $siteHolidays = Holiday::whereMonth('holiday_date', $month)
@@ -146,15 +132,22 @@ class PayrollController extends Controller
                 ->get()
                 ->keyBy('employee_id');
 
+            // Overtime hours and the rate they are paid at. Shared with the wage
+            // register so both modules count the same hours.
+            $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
+                ->overtimeSummary($employeeIds->all(), $month, $year);
+            $overtimeRates = \App\Models\EmployeeWage::effectiveSet(
+                Carbon::create($year, $month, 1)->endOfMonth()->toDateString()
+            );
+
             // ── Build result collection ──
-            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $penaltyTotals, $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year) {
+            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $recoveryService, $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year, $overtimeHoursMap, $overtimeRates) {
                 $att = $attendanceCounts->get($employee->id);
                 $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
-                $penaltyTotal = $penaltyTotals[$employee->id] ?? 0;
 
                 $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
                 $activePayroll = $employee->activePayroll;
-                $restDaysSetting = $activePayroll ? (int) $activePayroll->rest_days : (int) $employee->rest_days;
+                $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
 
                 $presentDays = $att ? (int) $att->present_days : 0;
                 $absentDays = $att ? (int) $att->absent_days : 0;
@@ -166,33 +159,58 @@ class PayrollController extends Controller
                 $unpaidRestDays = max(0, $restDays - $paidRestDays);
 
                 // ── Salary Calculation (per documentation) ──
-                $basicSalary = $activePayroll ? (float) $activePayroll->basic_salary : (float) $employee->basic_salary;
+                // Salary comes from the employee's payroll record only. With no
+                // payroll assigned there is no salary to list, not a figure
+                // borrowed from the wage master.
+                $basicSalary = \App\Models\EmployeePayroll::monthlyPay($activePayroll);
                 $shiftAllowance = 0;
                 $incentives = 0;
 
-                // Gross = Basic + Shift Allowance + Incentives
-                $grossSalary = $basicSalary + $shiftAllowance + $incentives;
-                $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
+                // The monthly entitlement. A day of absence is priced against
+                // this and deliberately not against overtime: overtime pays for
+                // hours already worked, so charging absence to it would deduct
+                // the same day twice.
+                $monthlyEarnings = $basicSalary + $shiftAllowance + $incentives;
+                $perDaySalary = $daysInMonth > 0 ? $monthlyEarnings / $daysInMonth : 0;
+
+                // Gross = Basic + Shift Allowance + Incentives + Overtime
+                $overtimeHours = round($overtimeHoursMap[$employee->id] ?? 0, 2);
+                $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
+                    ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
+                    : 0.0;
+                $overtimePayment = round($overtimeHours * $overtimeRate, 2);
+
+                $grossSalary = $monthlyEarnings + $overtimePayment;
+
+                // Recovery deduction, capped at a share of gross and carried
+                // forward. This is a read-only listing, so plan the month
+                // without writing installment rows.
+                $recoveryPlan = $recoveryService->planEmployeeRecoveries(
+                    $employee->id,
+                    $grossSalary,
+                    $month,
+                    $year
+                );
+                $penaltyTotal = $recoveryPlan['total'];
 
                 // Unmarked days count as absent: effective_absent = total - accounted days
                 $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
                 // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
-                $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+                $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 2);
                 $payableDays = max(0.0, (float) ($daysInMonth - ($effectiveAbsent + ($halfDays * 0.5))));
 
                 // Fixed deductions
-                $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
-                $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
+                $pfApplicable = (bool) optional($activePayroll)->pf_applicable;
+                $messDeductionApplicable = (bool) optional($activePayroll)->mess_deduction_applicable;
+                $otherDeductionApplicable = (bool) optional($activePayroll)->other_deduction_appliacble;
 
-                $pfDeduction = $pfApplicable ? ($activePayroll && $activePayroll->pf_amount !== null ? (float) $activePayroll->pf_amount : (float) $employee->pf_amount) : 0;
-                $messDeduction = $messDeductionApplicable ? ($activePayroll && $activePayroll->mess_deduction_amount !== null ? (float) $activePayroll->mess_deduction_amount : (float) $employee->mess_deduction_amount) : 0;
-
-                $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
-                $otherDeduction = $otherDeductionApplicable ? ($activePayroll && $activePayroll->other_deduction !== null ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
+                $pfDeduction = $pfApplicable ? (float) optional($activePayroll)->pf_amount : 0;
+                $messDeduction = $messDeductionApplicable ? (float) optional($activePayroll)->mess_deduction_amount : 0;
+                $otherDeduction = $otherDeductionApplicable ? (float) optional($activePayroll)->other_deduction : 0;
 
                 // Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction)
                 $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
-                $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
+                $netSalary = max(0, round($grossSalary - $totalDeductions, 2));
 
                 $payroll = $existingPayrolls->get($employee->id);
 
@@ -217,18 +235,22 @@ class PayrollController extends Controller
                     'holidays' => $holidays,
                     'paid_leave_days' => $empLeave['paid'],
                     'unpaid_leave_days' => $unpaidLeaveDays,
-                    'payable_days' => $payableDays,
-                    'penalty_amount' => (float) $penaltyTotal,
-                    'basic_salary' => $basicSalary,
-                    'shift_allowance' => $shiftAllowance,
-                    'incentives' => $incentives,
-                    'gross_salary' => $grossSalary,
-                    'leave_deduction' => $leaveDeduction,
-                    'pf_deduction' => $pfDeduction,
-                    'mess_deduction' => $messDeduction,
-                    'other_deduction' => $otherDeduction,
-                    'monthly_salary' => $grossSalary,
-                    'net_salary' => $netSalary,
+                    'payable_days' => round((float) $payableDays, 2),
+                    'penalty_amount' => $this->money($penaltyTotal),
+                    'recovery_limit' => $this->money($recoveryPlan['budget']),
+                    'recovery_carried_forward' => $this->money($recoveryPlan['carried']),
+                    'basic_salary' => $this->money($basicSalary),
+                    'shift_allowance' => $this->money($shiftAllowance),
+                    'incentives' => $this->money($incentives),
+                    'overtime_hours' => round((float) $overtimeHours, 2),
+                    'overtime_payment' => $this->money($overtimePayment),
+                    'gross_salary' => $this->money($grossSalary),
+                    'leave_deduction' => $this->money($leaveDeduction),
+                    'pf_deduction' => $this->money($pfDeduction),
+                    'mess_deduction' => $this->money($messDeduction),
+                    'other_deduction' => $this->money($otherDeduction),
+                    'monthly_salary' => $this->money($grossSalary),
+                    'net_salary' => $this->money($netSalary),
                     'created_at' => ($payroll && $payroll->created_at) ? $payroll->created_at->toDateTimeString() : $employee->created_at->toDateTimeString(),
                 ];
             });
@@ -309,9 +331,24 @@ class PayrollController extends Controller
 
             $daysInMonth = Carbon::create($year, $month)->daysInMonth;
 
+            // Overtime hours and rates, shared with the wage register so both
+            // modules count the same hours.
+            $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
+                ->overtimeSummary($employees->pluck('id')->all(), $month, $year);
+            $overtimeRates = \App\Models\EmployeeWage::effectiveSet($monthEnd->toDateString());
+
             $generated = 0;
 
-            DB::transaction(function () use ($employees, $month, $year, $daysInMonth, $monthStart, $monthEnd, &$generated) {
+            // Distinct leave dates per employee, net of days attendance already
+            // pays for. Same rule as the listing, so a generated payroll cannot
+            // disagree with the screen it was generated from.
+            $leaveSummary = \App\Services\LeaveBalanceService::monthlyLeaveDays(
+                $employees->pluck('id')->all(),
+                $month,
+                $year
+            );
+
+            DB::transaction(function () use ($employees, $month, $year, $daysInMonth, $monthStart, $monthEnd, &$generated, $overtimeHoursMap, $overtimeRates, $leaveSummary) {
                 foreach ($employees as $employee) {
 
                     // ── Attendance summary ──
@@ -332,29 +369,9 @@ class PayrollController extends Controller
                     $restDays = $attendance ? (int) $attendance->rest_days : 0;
 
                     // ── Leave breakdown (paid vs unpaid) ──
-                    $paidLeaveDays = 0;
-                    $unpaidLeaveDays = 0;
-                    $approvedLeaves = Leave::where('employee_id', $employee->id)
-                        ->where('status', 'approved')
-                        ->where(function ($q) use ($month, $year) {
-                            $q->where(function ($q2) use ($month, $year) {
-                                $q2->whereMonth('from_date', $month)->whereYear('from_date', $year);
-                            })->orWhere(function ($q2) use ($month, $year) {
-                                $q2->whereMonth('to_date', $month)->whereYear('to_date', $year);
-                            });
-                        })->with('leaveType')->get();
-
-                    foreach ($approvedLeaves as $leave) {
-                        $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
-                        $from = Carbon::parse($leave->from_date)->max($monthStart);
-                        $to = Carbon::parse($leave->to_date)->min($monthEnd);
-                        $days = $from->diffInDays($to) + 1;
-                        if ($category === 'paid') {
-                            $paidLeaveDays += $days;
-                        } else {
-                            $unpaidLeaveDays += $days;
-                        }
-                    }
+                    $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
+                    $paidLeaveDays = $empLeave['paid'];
+                    $unpaidLeaveDays = $empLeave['unpaid'];
 
                     // ── Holidays for this employee's site ──
                     $holidays = Holiday::whereMonth('holiday_date', $month)->whereYear('holiday_date', $year)
@@ -365,47 +382,68 @@ class PayrollController extends Controller
 
                     // ── Earnings ──
                     $activePayroll = $employee->activePayroll;
-                    $basicSalary = $activePayroll ? (float) $activePayroll->basic_salary : (float) $employee->basic_salary;
+                    // Salary comes from the employee's payroll record only.
+                    $basicSalary = \App\Models\EmployeePayroll::monthlyPay($activePayroll);
                     $shiftAllowance = 0;
                     $incentives = 0;
-                    $grossSalary = $basicSalary + $shiftAllowance + $incentives;
-                    $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
+                    // Absence is priced against the monthly entitlement only —
+                    // overtime pays for hours already worked, so charging
+                    // absence to it would deduct the same day twice.
+                    $monthlyEarnings = $basicSalary + $shiftAllowance + $incentives;
+                    $perDaySalary = $daysInMonth > 0 ? $monthlyEarnings / $daysInMonth : 0;
+
+                    $overtimeHours = round($overtimeHoursMap[$employee->id] ?? 0, 2);
+                    $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
+                        ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
+                        : 0.0;
+                    $overtimePayment = round($overtimeHours * $overtimeRate, 2);
+
+                    $grossSalary = $monthlyEarnings + $overtimePayment;
 
                     // rest day is counted as paid leave
-                    $restDaysSetting = $activePayroll ? (int) $activePayroll->rest_days : (int) $employee->rest_days;
+                    $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
                     $paidRestDays = min($restDays, $restDaysSetting);
                     $paidLeaveDays += $paidRestDays;
 
                     // Unmarked days count as absent: effective_absent = total - accounted days
                     $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
                     // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
-                    $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+                    $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 2);
 
                     // ── Fixed Deductions ──
-                    $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
-                    $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
+                    $pfApplicable = (bool) optional($activePayroll)->pf_applicable;
+                    $messDeductionApplicable = (bool) optional($activePayroll)->mess_deduction_applicable;
+                    $otherDeductionApplicable = (bool) optional($activePayroll)->other_deduction_appliacble;
 
-                    $pfDeduction = $pfApplicable ? ($activePayroll && $activePayroll->pf_amount !== null ? (float) $activePayroll->pf_amount : (float) $employee->pf_amount) : 0;
-                    $messDeduction = $messDeductionApplicable ? ($activePayroll && $activePayroll->mess_deduction_amount !== null ? (float) $activePayroll->mess_deduction_amount : (float) $employee->mess_deduction_amount) : 0;
+                    $pfDeduction = $pfApplicable ? (float) optional($activePayroll)->pf_amount : 0;
+                    $messDeduction = $messDeductionApplicable ? (float) optional($activePayroll)->mess_deduction_amount : 0;
+                    $otherDeduction = $otherDeductionApplicable ? (float) optional($activePayroll)->other_deduction : 0;
 
-                    $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
-                    $otherDeduction = $otherDeductionApplicable ? ($activePayroll && $activePayroll->other_deduction !== null ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
-
-                    // ── Penalty ──
-                    $penaltyTotal = Penalty::where('employee_id', $employee->id)
-                        ->where('month', $month)->where('year', $year)->sum('amount');
+                    // ── Recovery (penalty / fine / damage / loss / advance / loan) ──
+                    // Capped at a share of gross; the balance carries into
+                    // later months as installments.
+                    $recoveryPlan = app(\App\Services\LoanRecoveryService::class)
+                        ->applyEmployeeRecoveries(
+                            $employee->id,
+                            $grossSalary,
+                            $month,
+                            $year
+                        );
+                    $penaltyTotal = $recoveryPlan['total'];
 
                     // ── Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction) ──
                     $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
-                    $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
+                    $netSalary = max(0, round($grossSalary - $totalDeductions, 2));
 
                     // ── Upsert payroll record ──
-                    Payroll::updateOrCreate(
+                    $payroll = Payroll::updateOrCreate(
                         ['employee_id' => $employee->id, 'month' => $month, 'year' => $year],
                         [
                             'basic_salary' => $basicSalary,
                             'shift_allowance' => $shiftAllowance,
                             'incentives' => $incentives,
+                            'overtime_hours' => $overtimeHours,
+                            'overtime_payment' => $overtimePayment,
                             'present_days' => $presentDays,
                             'half_days' => $halfDays,
                             'absent_days' => $absentDays,
@@ -423,6 +461,10 @@ class PayrollController extends Controller
                             'generated_by' => auth()->id(),
                         ]
                     );
+
+                    // Record which payroll the installments were taken on.
+                    app(\App\Services\LoanRecoveryService::class)
+                        ->attachToPayroll($employee->id, $month, $year, $payroll->id);
 
                     $generated++;
                 }
@@ -491,39 +533,16 @@ class PayrollController extends Controller
                 ->first();
 
             // ── Leave breakdown ──
-            $approvedLeaves = Leave::where('employee_id', $employeeId)
-                ->where('status', 'approved')
-                ->where(function ($q) use ($month, $year) {
-                    $q->where(function ($q2) use ($month, $year) {
-                        $q2->whereMonth('from_date', $month)->whereYear('from_date', $year);
-                    })->orWhere(function ($q2) use ($month, $year) {
-                        $q2->whereMonth('to_date', $month)->whereYear('to_date', $year);
-                    });
-                })
-                ->with('leaveType')
-                ->get();
+            // Distinct leave dates net of days attendance already pays for,
+            // same as the listing and the generate path.
+            $empLeave = \App\Services\LeaveBalanceService::monthlyLeaveDays(
+                [$employeeId],
+                $month,
+                $year
+            )[$employeeId] ?? ['paid' => 0, 'unpaid' => 0];
 
-            $paidLeaveDays = 0;
-            $unpaidLeaveDays = 0;
-            foreach ($approvedLeaves as $leave) {
-                $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
-                $from = Carbon::parse($leave->from_date)->max($monthStart);
-                $to = Carbon::parse($leave->to_date)->min($monthEnd);
-                $days = $from->diffInDays($to) + 1;
-                if ($category === 'paid') {
-                    $paidLeaveDays += $days;
-                } else {
-                    $unpaidLeaveDays += $days;
-                }
-            }
-
-            // ── Penalties ──
-            $penalties = Penalty::where('employee_id', $employeeId)
-                ->where('month', $month)
-                ->where('year', $year)
-                ->get(['id', 'penalty_date', 'reason', 'amount']);
-
-            $penaltyTotal = $penalties->sum('amount');
+            $paidLeaveDays = $empLeave['paid'];
+            $unpaidLeaveDays = $empLeave['unpaid'];
 
             // ── Holidays ──
             $holidays = Holiday::whereMonth('holiday_date', $month)
@@ -543,14 +562,43 @@ class PayrollController extends Controller
 
             // Earnings
             $activePayroll = $employee->activePayroll;
-            $basicSalary = $activePayroll ? (float) $activePayroll->basic_salary : (float) $employee->basic_salary;
+
+            $overtimeHoursMap = app(\App\Services\WageRegisterService::class)
+                ->overtimeSummary([$employee->id], $month, $year);
+            // The wage master supplies the overtime rate only; basic salary
+            // comes from the employee's payroll record.
+            $overtimeRates = \App\Models\EmployeeWage::effectiveSet(
+                Carbon::create($year, $month, 1)->endOfMonth()->toDateString()
+            );
+
+            $basicSalary = \App\Models\EmployeePayroll::monthlyPay($activePayroll);
             $shiftAllowance = 0;
             $incentives = 0;
-            $grossSalary = $basicSalary + $shiftAllowance + $incentives;
-            $perDaySalary = $daysInMonth > 0 ? $grossSalary / $daysInMonth : 0;
+            // Absence is priced against the monthly entitlement only — overtime
+            // pays for hours already worked, so charging absence to it would
+            // deduct the same day twice.
+            $monthlyEarnings = $basicSalary + $shiftAllowance + $incentives;
+            $perDaySalary = $daysInMonth > 0 ? $monthlyEarnings / $daysInMonth : 0;
+
+            $overtimeHours = round($overtimeHoursMap[$employee->id] ?? 0, 2);
+            $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
+                ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
+                : 0.0;
+            $overtimePayment = round($overtimeHours * $overtimeRate, 2);
+
+            $grossSalary = $monthlyEarnings + $overtimePayment;
+
+            // ── Recoveries ──
+            // Capped at a share of gross and carried forward, so this has to
+            // run once gross is known. Read-only endpoint: plan, don't persist.
+            $recoveryPlan = app(\App\Services\LoanRecoveryService::class)
+                ->planEmployeeRecoveries($employeeId, $grossSalary, $month, $year);
+
+            $penalties = $recoveryPlan['lines'];
+            $penaltyTotal = $recoveryPlan['total'];
 
             // rest day is counted as paid leave
-            $restDaysSetting = $activePayroll ? (int) $activePayroll->rest_days : (int) $employee->rest_days;
+            $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
             $paidRestDays = min($restDays, $restDaysSetting);
             $approvedPaidLeaves = $paidLeaveDays;
             $paidLeaveDays += $paidRestDays;
@@ -558,22 +606,21 @@ class PayrollController extends Controller
             // Unmarked days count as absent: effective_absent = total - accounted days
             $effectiveAbsent = max(0, $daysInMonth - $presentDays - $halfDays - $paidLeaveDays - $holidays);
             // Leave Deduction: Absent/Unmarked=No Pay, Half Day=Half Pay
-            $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 0);
+            $leaveDeduction = round($perDaySalary * ($effectiveAbsent + ($halfDays * 0.5)), 2);
             $payableDays = max(0.0, (float) ($daysInMonth - ($effectiveAbsent + ($halfDays * 0.5))));
 
             // Fixed deductions
-            $pfApplicable = $activePayroll ? $activePayroll->pf_applicable : $employee->pf_applicable;
-            $messDeductionApplicable = $activePayroll ? $activePayroll->mess_deduction_applicable : $employee->mess_deduction_applicable;
+            $pfApplicable = (bool) optional($activePayroll)->pf_applicable;
+            $messDeductionApplicable = (bool) optional($activePayroll)->mess_deduction_applicable;
+            $otherDeductionApplicable = (bool) optional($activePayroll)->other_deduction_appliacble;
 
-            $pfDeduction = $pfApplicable ? ($activePayroll && $activePayroll->pf_amount !== null ? (float) $activePayroll->pf_amount : (float) $employee->pf_amount) : 0;
-            $messDeduction = $messDeductionApplicable ? ($activePayroll && $activePayroll->mess_deduction_amount !== null ? (float) $activePayroll->mess_deduction_amount : (float) $employee->mess_deduction_amount) : 0;
-
-            $otherDeductionApplicable = $activePayroll ? $activePayroll->other_deduction_appliacble : $employee->other_deduction_appliacble;
-            $otherDeduction = $otherDeductionApplicable ? ($activePayroll && $activePayroll->other_deduction !== null ? (float) $activePayroll->other_deduction : (float) $employee->other_deduction) : 0;
+            $pfDeduction = $pfApplicable ? (float) optional($activePayroll)->pf_amount : 0;
+            $messDeduction = $messDeductionApplicable ? (float) optional($activePayroll)->mess_deduction_amount : 0;
+            $otherDeduction = $otherDeductionApplicable ? (float) optional($activePayroll)->other_deduction : 0;
 
             // Net = Gross − (PF + Mess + Leave Deduction + Penalty + Other Deduction)
             $totalDeductions = $pfDeduction + $messDeduction + $leaveDeduction + $penaltyTotal + $otherDeduction;
-            $netSalary = max(0, round($grossSalary - $totalDeductions, 0));
+            $netSalary = max(0, round($grossSalary - $totalDeductions, 2));
 
             // ── Existing payroll record ──
             $existingPayroll = Payroll::where('employee_id', $employeeId)
@@ -589,6 +636,8 @@ class PayrollController extends Controller
                     'basic_salary' => $basicSalary,
                     'shift_allowance' => $shiftAllowance,
                     'incentives' => $incentives,
+                    'overtime_hours' => $overtimeHours,
+                    'overtime_payment' => $overtimePayment,
                     'present_days' => $presentDays,
                     'half_days' => $halfDays,
                     'absent_days' => $absentDays,
@@ -614,14 +663,14 @@ class PayrollController extends Controller
                     'employee' => [
                         'id' => $employee->id,
                         'employee_code' => $employee->employee_code,
-                        'name' => $employee->name,
+                        'name' => $employee->full_name,
                         'department' => optional($employee->department)->name,
                         'designation' => optional($employee->designation)->name,
                         'site' => optional($employee->site)->site_name,
-                        'salary_type' => $activePayroll ? $activePayroll->salary_type : $employee->salary_type,
-                        'bank_name' => $activePayroll ? $activePayroll->bank_name : $employee->bank_name,
-                        'bank_account_number' => $activePayroll ? $activePayroll->bank_account_number : $employee->bank_account_number,
-                        'ifsc_code' => $activePayroll ? $activePayroll->ifsc_code : $employee->ifsc_code,
+                        'salary_type' => optional($activePayroll)->salary_type,
+                        'bank_name' => optional($activePayroll)->bank_name,
+                        'bank_account_number' => optional($activePayroll)->bank_account_number,
+                        'ifsc_code' => optional($activePayroll)->ifsc_code,
                     ],
                     'payroll_period' => [
                         'month' => $month,
@@ -637,29 +686,31 @@ class PayrollController extends Controller
                         'holidays' => $holidays,
                         'paid_leave_days' => $approvedPaidLeaves,
                         'unpaid_leave_days' => $unpaidLeaveDays,
-                        'payable_days' => $payableDays,
+                        'payable_days' => round((float) $payableDays, 2),
                     ],
                     'earnings' => [
-                        'basic_salary' => $basicSalary,
-                        'shift_allowance' => $shiftAllowance,
-                        'incentives' => $incentives,
-                        'gross_salary' => $grossSalary,
-                        'per_day_salary' => (float) round($perDaySalary, 0),
+                        'basic_salary' => $this->money($basicSalary),
+                        'shift_allowance' => $this->money($shiftAllowance),
+                        'incentives' => $this->money($incentives),
+                        'overtime_hours' => round((float) $overtimeHours, 2),
+                        'overtime_payment' => $this->money($overtimePayment),
+                        'gross_salary' => $this->money($grossSalary),
+                        'per_day_salary' => $this->money($perDaySalary),
                     ],
                     'deductions' => [
-                        'pf_deduction' => $pfDeduction,
-                        'mess_deduction' => $messDeduction,
-                        'leave_deduction' => $leaveDeduction,
-                        'other_deduction' => $otherDeduction,
-                        'penalty_amount' => (float) $penaltyTotal,
-                        'total_deductions' => $totalDeductions,
+                        'pf_deduction' => $this->money($pfDeduction),
+                        'mess_deduction' => $this->money($messDeduction),
+                        'leave_deduction' => $this->money($leaveDeduction),
+                        'other_deduction' => $this->money($otherDeduction),
+                        'penalty_amount' => $this->money($penaltyTotal),
+                        'total_deductions' => $this->money($totalDeductions),
                     ],
                     'penalties' => $penalties,
-                    'net_salary' => $netSalary,
+                    'net_salary' => $this->money($netSalary),
                     'payroll_record' => $payroll ? [
                         'id' => $payroll->id,
                         'status' => $payroll->status,
-                        'net_salary' => (float) $payroll->net_salary,
+                        'net_salary' => $this->money($payroll->net_salary),
                         'created_at' => $payroll->created_at->toDateTimeString(),
                     ] : null,
                 ],
@@ -801,21 +852,52 @@ class PayrollController extends Controller
                 ], 404);
             }
 
-            $penalties = Penalty::where('employee_id', $employeeId)
+            /*
+             * This breakdown has to agree with the payroll row it opens
+             * from, so it applies the same cap. Where payroll has already
+             * been generated its stored gross is authoritative — that is
+             * the figure the deduction was actually calculated against.
+             */
+            $payroll = Payroll::where('employee_id', $employeeId)
                 ->where('month', $month)
                 ->where('year', $year)
-                ->orderBy('penalty_date', 'asc')
-                ->get();
+                ->first();
 
-            $totalPenalty = $penalties->sum('amount');
+            if ($payroll) {
+                $grossSalary = (float) $payroll->gross_salary;
+            } else {
+                $overtimeHours = round(
+                    app(\App\Services\WageRegisterService::class)
+                        ->overtimeSummary([$employee->id], $month, $year)[$employee->id] ?? 0,
+                    2
+                );
+                $overtimeRates = \App\Models\EmployeeWage::effectiveSet($monthEnd->toDateString());
+                $overtimeRate = isset($overtimeRates[$employee->skill_category]) && $overtimeRates[$employee->skill_category]
+                    ? (float) $overtimeRates[$employee->skill_category]->overtime_rate
+                    : 0.0;
+
+                $grossSalary = \App\Models\EmployeePayroll::monthlyPay($employee->activePayroll)
+                    + round($overtimeHours * $overtimeRate, 2);
+            }
+
+            $recoveryPlan = app(\App\Services\LoanRecoveryService::class)
+                ->planEmployeeRecoveries($employeeId, $grossSalary, $month, $year);
+
             $monthName = Carbon::create($year, $month)->format('M Y');
 
-            $formattedPenalties = $penalties->map(function ($p) {
+            $formattedPenalties = collect($recoveryPlan['lines'])->map(function ($line) {
                 return [
-                    'id' => $p->id,
-                    'date' => Carbon::parse($p->penalty_date)->format('d M Y'),
-                    'reason' => $p->reason,
-                    'amount' => (float) $p->amount,
+                    'id' => $line['penalty_id'],
+                    'date' => $line['date'],
+                    'recovery_type' => $line['recovery_type'],
+                    'particulars' => $line['particulars'],
+                    'reason' => $line['reason'],
+                    'total_amount' => $line['total_amount'],
+                    'opening_balance' => $line['opening_balance'],
+                    // What comes out of this month's salary.
+                    'amount' => $line['installment_amount'],
+                    'closing_balance' => $line['closing_balance'],
+                    'fully_recovered' => $line['fully_recovered'],
                 ];
             });
 
@@ -828,7 +910,9 @@ class PayrollController extends Controller
                         'name' => $employee->name,
                         'employee_code' => $employee->employee_code,
                     ],
-                    'total_penalty' => (float) $totalPenalty,
+                    'total_penalty' => (float) $recoveryPlan['total'],
+                    'recovery_limit' => $this->money($recoveryPlan['budget']),
+                    'recovery_carried_forward' => $this->money($recoveryPlan['carried']),
                     'month_name' => $monthName,
                     'penalties' => $formattedPenalties,
                 ]

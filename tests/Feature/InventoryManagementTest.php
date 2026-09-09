@@ -418,9 +418,9 @@ class InventoryManagementTest extends TestCase
 
         $this->assertEquals(1, $import->getSuccessCount());
         $this->assertCount(3, $import->getErrors());
-        $this->assertStringContainsString("Product 'Nonexistent Product' not found", $import->getErrors()[0]);
-        $this->assertStringContainsString("must be at least 5", $import->getErrors()[1]);
-        $this->assertStringContainsString("is already added to inventory", $import->getErrors()[2]);
+        $this->assertStringContainsString("Product 'Nonexistent Product' not found", $import->getErrors()[0]['message']);
+        $this->assertStringContainsString("must be at least 5", $import->getErrors()[1]['message']);
+        $this->assertStringContainsString("is already added to inventory", $import->getErrors()[2]['message']);
 
         // Assert database had stock updated
         $this->assertDatabaseHas('inventories', [

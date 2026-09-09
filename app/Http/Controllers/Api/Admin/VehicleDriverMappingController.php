@@ -124,23 +124,41 @@ class VehicleDriverMappingController extends Controller
                 ], 422);
             }
 
+
+
+            // Check if the driver is already actively mapped on this date and shift
+            $driverConflict = VehicleDriverMapping::with('vehicle')->where('driver_id', $driverId)
+                ->where('assignment_date', $assignmentDate)
+                ->where('shift', $shift)
+                ->where('status', 1)
+                ->first();
+
+            if ($driverConflict) {
+                $vehicleNumber = $driverConflict->vehicle ? $driverConflict->vehicle->vehicle_number : 'Unknown';
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Driver is already assigned to vehicle {$vehicleNumber} on this date and shift."
+                ], 422);
+            }
+
+            // Check if the vehicle is already actively mapped on this date and shift
+            $vehicleConflict = VehicleDriverMapping::with('driver')->where('vehicle_id', $vehicleId)
+                ->where('assignment_date', $assignmentDate)
+                ->where('shift', $shift)
+                ->where('status', 1)
+                ->first();
+
+            if ($vehicleConflict) {
+                $driverName = $vehicleConflict->driver ? $vehicleConflict->driver->name : 'Unknown';
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Vehicle is already assigned to driver {$driverName} on this date and shift."
+                ], 422);
+            }
+
             // Database Transaction to keep sync atomic and clean
             $mapping = DB::transaction(function () use ($vehicleId, $driverId, $assignmentDate, $shift) {
-                // 1. Deactivate any previous active driver assignments for the same vehicle on this shift/date
-                VehicleDriverMapping::where('vehicle_id', $vehicleId)
-                    ->where('assignment_date', $assignmentDate)
-                    ->where('shift', $shift)
-                    ->where('status', 1)
-                    ->update(['status' => 0]);
-
-                // 2. Deactivate any previous active assignments of this driver to other vehicles on this shift/date
-                VehicleDriverMapping::where('driver_id', $driverId)
-                    ->where('assignment_date', $assignmentDate)
-                    ->where('shift', $shift)
-                    ->where('status', 1)
-                    ->update(['status' => 0]);
-
-                // 3. Create the new active mapping
+                // Create the new active mapping
                 return VehicleDriverMapping::create([
                     'vehicle_id' => $vehicleId,
                     'driver_id' => $driverId,
@@ -179,6 +197,8 @@ class VehicleDriverMappingController extends Controller
         try {
             $mapping = VehicleDriverMapping::findOrFail($id);
             
+
+
             $mapping->update([
                 'status' => 'inactive'
             ]);

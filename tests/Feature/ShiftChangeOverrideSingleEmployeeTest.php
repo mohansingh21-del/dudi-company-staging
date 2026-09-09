@@ -19,6 +19,7 @@ class ShiftChangeOverrideSingleEmployeeTest extends TestCase
     protected $employee;
     protected $shiftA;
     protected $shiftB;
+    protected $relayA;
 
     protected function setUp(): void
     {
@@ -61,12 +62,15 @@ class ShiftChangeOverrideSingleEmployeeTest extends TestCase
             'is_active' => 1
         ]);
 
+        // Create relay A
+        $this->relayA = \App\Models\Relay::create(['name' => 'Relay A', 'is_rotating' => true, 'is_active' => true]);
+
         // Create employee
         $this->employee = Employee::create([
             'employee_code' => 'EMP123',
             'name' => 'Neha Jain',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_1',
+            'relay_id' => $this->relayA->id,
             'is_active' => 1
         ]);
     }
@@ -147,7 +151,7 @@ class ShiftChangeOverrideSingleEmployeeTest extends TestCase
             'employee_code' => 'EMP789',
             'name' => 'Amit Singh',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_1',
+            'relay_id' => $this->relayA->id,
             'is_active' => 1
         ]);
         EmployeeShiftAssignment::create([
@@ -161,7 +165,7 @@ class ShiftChangeOverrideSingleEmployeeTest extends TestCase
             'employee_code' => 'EMP999',
             'name' => 'Sanjay Dutt',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_1',
+            'relay_id' => $this->relayA->id,
             'is_active' => 1
         ]);
         EmployeeShiftAssignment::create([
@@ -190,7 +194,7 @@ class ShiftChangeOverrideSingleEmployeeTest extends TestCase
             'employee_code' => 'EMP404',
             'name' => 'Null From Date Emp',
             'joining_date' => '2026-01-01',
-            'relay_shift' => 'relay_1',
+            'relay_id' => $this->relayA->id,
             'is_active' => 1
         ]);
         
@@ -212,5 +216,48 @@ class ShiftChangeOverrideSingleEmployeeTest extends TestCase
         $response = $this->getJson('/api/v1/admin/shift-rotation?from_date=2026-06-15');
         $response->assertStatus(200);
         $response->assertJsonCount(0, 'data');
+    }
+
+    public function test_relay_changes_permanently_to_mapped_relay_when_shift_is_overridden()
+    {
+        // 1. Create a second relay
+        $relayB = \App\Models\Relay::create([
+            'name' => 'Relay B',
+            'is_rotating' => true,
+            'is_active' => true
+        ]);
+
+        // 2. Map Relay B to Shift B for this week
+        $today = now();
+        $weekStart = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
+        $weekEnd = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->addDays(6)->toDateString();
+
+        \App\Models\RelayShiftMapping::create([
+            'week_start_date' => $weekStart,
+            'week_end_date' => $weekEnd,
+            'relay_id' => $relayB->id,
+            'shift_id' => $this->shiftB->id,
+        ]);
+
+        // 3. Set employee initial shift to shiftA
+        EmployeeShiftAssignment::create([
+            'employee_id' => $this->employee->id,
+            'shift_id' => $this->shiftA->id,
+            'from_date' => now()->toDateString(),
+        ]);
+
+        $this->assertEquals($this->relayA->id, $this->employee->relay_id);
+
+        // 4. Override shift to shiftB
+        $response = $this->postJson("/api/v1/admin/shift-rotation/override", [
+            'employee_id' => $this->employee->id,
+            'shift_id' => $this->shiftB->id,
+        ]);
+
+        $response->assertStatus(200);
+
+        // 5. Assert employee's relay has updated permanently to Relay B
+        $this->employee->refresh();
+        $this->assertEquals($relayB->id, $this->employee->relay_id);
     }
 }

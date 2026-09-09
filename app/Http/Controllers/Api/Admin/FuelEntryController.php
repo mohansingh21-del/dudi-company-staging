@@ -3,187 +3,328 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use App\Models\FuelEntry;
-use Illuminate\Support\Facades\Validator;
-use App\Models\Vehicle;
-use App\Models\Employee;
+use App\Http\Requests\StoreFuelEntryRequest;
+use App\Http\Requests\UpdateFuelEntryRequest;
+use App\Http\Requests\FuelRegisterFilterRequest;
+use App\Http\Requests\FuelDashboardFilterRequest;
+use App\Http\Requests\FuelPerformanceFilterRequest;
+use App\Http\Requests\FuelAllocationFilterRequest;
+use App\Http\Requests\FuelSummaryFilterRequest;
+use App\Services\FuelService;
+use App\Http\Resources\FuelRegisterResource;
+use App\Exceptions\MachineNotInShiftException;
+use App\Exceptions\ReadingRegressionException;
+use App\Exceptions\ReadOnlyFieldMutationException;
+use App\Exceptions\FuelRecordNotFoundException;
+use Illuminate\Support\Facades\Auth;
 
 class FuelEntryController extends Controller
 {
-    public function index(Request $request)
+    /**
+     * @var FuelService
+     */
+    protected $service;
+
+    public function __construct(FuelService $service)
+    {
+        $this->service = $service;
+    }
+
+    /**
+     * GET /api/v1/fuel-entries
+     */
+    public function index(FuelRegisterFilterRequest $request)
     {
         try {
-            $limit = $request->input('limit', null);
-            $page = $request->input('page', 1);
-            $search = $request->input('search', null);
+            $result = $this->service->listRegister($request->all());
+            $records = $result['records'];
+            $summary = $result['summary'];
 
-            $fuelEntries = FuelEntry::with(['vehicle', 'driver']);
-            if ($search) {
-                $fuelEntries->whereHas('vehicle', function ($query) use ($search) {
-                    $query->where('vehicle_number', 'like', "%{$search}%")
-                        ->orWhere('vehicle_name', 'like', "%{$search}%")
-                        ->orWhere('chassis_number', 'like', "%{$search}%");
-                })->orWhereHas('driver', function ($query) use ($search) {
-                    $query->where('employee_name', 'like', "%{$search}%");
-                });
-            }
-            if ($limit) {
-                $fuelEntries = $fuelEntries->orderBy('created_at', 'DESC')->paginate($limit, ['*'], 'page', $page);
-                $fuelEntries->getCollection()->transform(function ($fuelEntry) {
-                    return [
-                        'id' => $fuelEntry->id,
-                        'vehicle_number' => $fuelEntry->vehicle->vehicle_number,
-                        'driver_name' => $fuelEntry->driver->employee_name,
-                        'fuel_type' => $fuelEntry->fuel_type,
-                        'fuel_quantity' => $fuelEntry->fuel_quantity,
-                        'amount' => $fuelEntry->amount,
-                        'entry_date' => $fuelEntry->entry_date,
-                    ];
-                });
-                $response = [
-                    'data' => $fuelEntries->items(),
-                    'pagination' => [
-                        'total' => $fuelEntries->total(),
-                        'current_page' => $fuelEntries->currentPage(),
-                        'per_page' => $fuelEntries->perPage(),
-                        'last_page' => $fuelEntries->lastPage(),
-                        'from' => $fuelEntries->firstItem(),
-                        'to' => $fuelEntries->lastItem(),
-                        'next_page_url' => $fuelEntries->nextPageUrl(),
-                        'previous_page_url' => $fuelEntries->previousPageUrl(),
-                    ]
-                ];
+            $isEmpty = $records->isEmpty();
 
-            } else {
-                $fuelEntries = $fuelEntries->orderBy('created_at', 'DESC')->get();
-                $fuelEntries->transform(function ($fuelEntry) {
-                    return [
-                        'id' => $fuelEntry->id,
-                        'vehicle_number' => $fuelEntry->vehicle->vehicle_number,
-                        'driver_name' => $fuelEntry->driver->employee_name,
-                        'fuel_type' => $fuelEntry->fuel_type,
-                        'fuel_quantity' => $fuelEntry->fuel_quantity,
-                        'amount' => $fuelEntry->amount,
-                        'entry_date' => $fuelEntry->entry_date,
-                    ];
-                });
-
-                $response = [
-                    'data' => $fuelEntries,
-                    'pagination' => [
-                        'total' => $fuelEntries->count(),
-                        'current_page' => 1,
-                        'per_page' => $fuelEntries->count(),
-                        'last_page' => 1,
-                        'from' => $fuelEntries->isEmpty() ? 0 : 1,
-                        'to' => $fuelEntries->count(),
-                        'next_page_url' => null,
-                        'previous_page_url' => null,
-                    ]
-                ];
-            }
             return response()->json([
                 'status' => 200,
-                'message' => 'Fuel entries fetched successfully',
-                'data' => $response['data'],
-                'pagination' => $response['pagination']
+                'message' => $isEmpty ? 'No Fuel Records Found' : 'Fuel entries retrieved successfully.',
+                'summary' => $summary,
+                'efficiency_trends' => $result['efficiency_trends'] ?? [],
+                'fuel_consumption_trend' => $result['fuel_consumption_trend'] ?? [],
+                'consumption_by_type' => $result['consumption_by_type'] ?? [],
+                'machine_fuel_efficiency_trends' => $result['machine_fuel_efficiency_trends'] ?? [],
+                'data' => FuelRegisterResource::collection($records->getCollection()),
+                'pagination' => [
+                    'total' => $records->total(),
+                    'current_page' => $records->currentPage(),
+                    'per_page' => $records->perPage(),
+                    'last_page' => $records->lastPage(),
+                    'from' => $records->firstItem(),
+                    'to' => $records->lastItem(),
+                ]
             ], 200);
-        } catch (\Exception $e) {
+        } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
-                'message' => 'Failed to fetch fuel entries',
-                'error' => $e->getMessage(),
+                'message' => 'Failed to retrieve fuel entries',
+                'error' => $th->getMessage(),
             ], 500);
         }
     }
-    public function store(Request $request)
+
+    /**
+     * POST /api/v1/fuel-entries
+     */
+    public function store(StoreFuelEntryRequest $request)
     {
-        $id = $request->input('id');
         try {
-            $validator = Validator::make($request->all(), [
-                'vehicle_id' => 'required|exists:vehicles,id',
-                'driver_id' => 'required|exists:employees,id',
-                'fuel_type' => 'required|in:diesel,petrol,cng,lpg,electricity',
-                'fuel_quantity' => 'required|numeric|min:0',
-                'amount' => 'required|numeric|min:0',
-                'entry_date' => 'required|date',
-                'fuel_station' => 'nullable|string',
-                'current_odometer' => 'nullable|integer',
-                'mileage' => 'nullable|numeric',
-            ]);
-
-            if ($validator->fails()) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Validation failed',
-                    'errors' => $validator->errors(),
-                ], 422);
-            }
-
-            $fuelEntry = $id ? FuelEntry::findOrFail($id) : new FuelEntry();
-            $fuelEntry->vehicle_id = $request->vehicle_id;
-            $fuelEntry->driver_id = $request->driver_id;
-            $fuelEntry->fuel_type = $request->fuel_type;
-            $fuelEntry->quantity = $request->fuel_quantity;
-            $fuelEntry->amount = $request->amount;
-            $fuelEntry->transaction_date = $request->entry_date;
-            $fuelEntry->fuel_station = $request->fuel_station;
-            $fuelEntry->current_odometer = $request->current_odometer;
-            $fuelEntry->mileage = $request->mileage;
-            $fuelEntry->save();
+            $entry = $this->service->createEntry($request->validated(), Auth::id() ?? 1);
 
             return response()->json([
-                'status' => 200,
-                'message' => 'Fuel entry ' . ($id ? 'updated' : 'created') . ' successfully',
-                'data' => $fuelEntry,
-            ], 200);
-        } catch (\Exception $e) {
+                'status' => 201,
+                'message' => 'Fuel entry created successfully.',
+                'data' => $entry,
+            ], 201);
+        } catch (MachineNotInShiftException $e) {
+            return response()->json([
+                'status' => 422,
+                'message' => $e->getMessage(),
+                'data' => null,
+            ], 422);
+        } catch (ReadingRegressionException $e) {
+            return response()->json([
+                'status' => 422,
+                'message' => $e->getMessage(),
+                'data' => null,
+            ], 422);
+        } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
                 'message' => 'Failed to create fuel entry',
-                'error' => $e->getMessage(),
+                'error' => $th->getMessage(),
             ], 500);
         }
     }
 
-    public function show($vehicle_id)
+    /**
+     * GET /api/v1/fuel-entries/{id}
+     */
+    public function show($id)
     {
         try {
-            $fuelEntries = FuelEntry::with(['vehicle', 'driver'])
-                ->where('vehicle_id', $vehicle_id)
-                ->orderBy('transaction_date', 'DESC')
-                ->get();
-
-            $data = $fuelEntries->map(function ($fuelEntry) {
-                return [
-                    'id' => $fuelEntry->id,
-                    'vehicle_id' => $fuelEntry->vehicle_id,
-                    'vehicle_number' => optional($fuelEntry->vehicle)->vehicle_number,
-                    'driver_id' => $fuelEntry->driver_id,
-                    'driver_name' => optional($fuelEntry->driver)->employee_name,
-                    'fuel_type' => $fuelEntry->fuel_type,
-                    'fuel_quantity' => $fuelEntry->quantity,
-                    'amount' => $fuelEntry->amount,
-                    'entry_date' => optional($fuelEntry->transaction_date)->toDateString(),
-                    'fuel_station' => $fuelEntry->fuel_station,
-                    'current_odometer' => $fuelEntry->current_odometer,
-                    'mileage' => $fuelEntry->mileage,
-                    'created_at' => $fuelEntry->created_at,
-                    'updated_at' => $fuelEntry->updated_at,
-                ];
-            });
+            $entry = $this->service->getEntry((int) $id);
 
             return response()->json([
                 'status' => 200,
-                'message' => 'Fuel entries fetched successfully',
-                'data' => $data,
+                'message' => 'Fuel entry retrieved successfully.',
+                'data' => $entry,
             ], 200);
-        } catch (\Exception $e) {
+        } catch (FuelRecordNotFoundException $e) {
+            return response()->json([
+                'status' => 404,
+                'message' => $e->getMessage(),
+                'data' => null,
+            ], 404);
+        } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
-                'message' => 'Failed to fetch fuel entries',
-                'error' => $e->getMessage(),
+                'message' => 'Failed to retrieve fuel entry',
+                'error' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * PUT /api/v1/fuel-entries/{id}
+     */
+    public function update(UpdateFuelEntryRequest $request, $id)
+    {
+        try {
+            $entry = $this->service->updateEntry((int) $id, $request->validated(), Auth::id() ?? 1);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Fuel entry updated successfully.',
+                'data' => $entry,
+            ], 200);
+        } catch (FuelRecordNotFoundException $e) {
+            return response()->json([
+                'status' => 404,
+                'message' => $e->getMessage(),
+                'data' => null,
+            ], 404);
+        } catch (MachineNotInShiftException $e) {
+            return response()->json([
+                'status' => 422,
+                'message' => $e->getMessage(),
+                'data' => null,
+            ], 422);
+        } catch (ReadingRegressionException $e) {
+            return response()->json([
+                'status' => 422,
+                'message' => $e->getMessage(),
+                'data' => null,
+            ], 422);
+        } catch (ReadOnlyFieldMutationException $e) {
+            return response()->json([
+                'status' => 422,
+                'message' => $e->getMessage(),
+                'data' => null,
+            ], 422);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to update fuel entry',
+                'error' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/v1/fuel-entries/dashboard
+     */
+    public function dashboard(FuelDashboardFilterRequest $request)
+    {
+        try {
+            $result = $this->service->getDashboard($request->all());
+            if ($result === null) {
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'No Fuel Activity Available',
+                    'data' => null,
+                ], 200);
+            }
+
+            $hasWorkDone = $result['has_work_done'];
+            unset($result['has_work_done']);
+
+            return response()->json([
+                'status' => 200,
+                'message' => $hasWorkDone ? 'Dashboard data retrieved successfully' : 'Pending Production Data',
+                'data' => $result,
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to retrieve dashboard data',
+                'error' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/v1/fuel-entries/performance
+     */
+    public function performance(FuelPerformanceFilterRequest $request)
+    {
+        try {
+            $result = $this->service->getPerformance($request->all());
+            if ($result === null) {
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'No Fuel Activity Available',
+                    'data' => null,
+                ], 200);
+            }
+
+            $hasWorkDone = $result['has_work_done'];
+            unset($result['has_work_done']);
+
+            return response()->json([
+                'status' => 200,
+                'message' => $hasWorkDone ? 'Performance analytics retrieved successfully' : 'Pending Production Data',
+                'data' => $result,
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to retrieve performance analytics',
+                'error' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/v1/fuel-entries/allocation-tracking
+     */
+    public function allocationTracking(FuelAllocationFilterRequest $request)
+    {
+        try {
+            $result = $this->service->getAllocationTracking($request->all());
+            $records = $result['records'];
+
+            return response()->json([
+                'status' => 200,
+                'message' => $records->isEmpty() ? 'No Fuel Records Found' : 'Allocation tracking retrieved successfully',
+                'data' => $records->items(),
+                'pagination' => [
+                    'total' => $records->total(),
+                    'current_page' => $records->currentPage(),
+                    'per_page' => $records->perPage(),
+                    'last_page' => $records->lastPage(),
+                    'from' => $records->firstItem(),
+                    'to' => $records->lastItem(),
+                ]
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to retrieve allocation tracking',
+                'error' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/v1/fuel-entries/summary
+     */
+    public function summary(FuelSummaryFilterRequest $request)
+    {
+        try {
+            $result = $this->service->getSummary($request->all());
+
+            return response()->json([
+                'status' => 200,
+                'message' => empty($result['machines']) ? 'No Fuel Summary Available' : 'Machine rollup summary retrieved successfully',
+                'data' => $result,
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to retrieve summary',
+                'error' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * POST /api/v1/fuel-entries/import
+     */
+    public function import(\Illuminate\Http\Request $request)
+    {
+        $request->validate([
+            'file' => 'required|file|mimes:xlsx,xls,csv',
+        ]);
+
+        try {
+            $import = new \App\Imports\FuelImport();
+            \Maatwebsite\Excel\Facades\Excel::import($import, $request->file('file'));
+
+            if (count($import->getErrors()) > 0) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Import completed with errors.',
+                    'errors' => $import->getErrors(),
+                ], 422);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Fuel entries imported successfully.',
+                'success_count' => $import->getSuccessCount(),
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to import fuel entries',
+                'error' => $th->getMessage(),
             ], 500);
         }
     }

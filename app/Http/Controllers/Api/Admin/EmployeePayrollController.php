@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Models\Department;
+use App\Models\Employee;
 use App\Models\EmployeePayroll;
+use App\Models\EmployeeWage;
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\StoreEmployeePayrollRequest;
@@ -122,13 +124,24 @@ class EmployeePayrollController extends Controller
                 ], 422);
             }
 
+            // Basic salary comes from the Form B wage master unless the caller
+            // sent one explicitly — an above-minimum figure still wins.
+            $basicSalary = $data['basic_salary'] ?? $this->basicSalaryFromWageMaster($data['employee_id']);
+
             EmployeePayroll::create([
                 'employee_id' => $data['employee_id'],
                 'salary_type' => $data['salary_type'],
-                'basic_salary' => $data['basic_salary'] ?? 0,
+                'basic_salary' => $basicSalary,
                 'daily_wage' => $data['daily_wage'] ?? 0,
                 'pf_applicable' => $data['pf_applicable'] ?? false,
                 'pf_number' => $data['pf_number'] ?? null,
+                'uan' => $data['uan'] ?? null,
+                'esic_ip_number' => $data['esic_ip_number'] ?? null,
+                'lwf_number_applicable' => $data['lwf_number_applicable'] ?? false,
+                'lwf_number' => $data['lwf_number'] ?? null,
+                'pan' => $data['pan'] ?? null,
+                // aadhaar_last4 and aadhaar_hash are derived by the model mutator
+                'aadhaar_number' => $data['aadhaar_number'] ?? null,
                 'bank_name' => $data['bank_name'] ?? null,
                 'bank_account_number' => $data['bank_account_number'] ?? null,
                 'ifsc_code' => $data['ifsc_code'] ?? null,
@@ -137,7 +150,6 @@ class EmployeePayrollController extends Controller
                 'other_deduction' => $data['other_deduction'] ?? 0,
                 'pf_amount' => $data['pf_amount'] ?? 0,
                 'mess_deduction_amount' => $data['mess_deduction_amount'] ?? 0,
-                'rest_days' => $data['rest_days'] ?? 0,
                 'is_active' => true
             ]);
 
@@ -155,6 +167,21 @@ class EmployeePayrollController extends Controller
             ]);
         }
     }
+    /**
+     * The wage master rate for an employee's skill category, as basic salary:
+     * minimum basic + dearness allowance. Falls back to 0 when the employee has
+     * no skill category or no rate has been set up for it yet, which is what
+     * this controller assigned before the master existed.
+     */
+    protected function basicSalaryFromWageMaster($employeeId)
+    {
+        $skillCategory = Employee::where('id', $employeeId)->value('skill_category');
+
+        $wage = EmployeeWage::effectiveFor($skillCategory);
+
+        return $wage ? $wage->basic_salary : 0;
+    }
+
     public function show($id)
     {
         try {

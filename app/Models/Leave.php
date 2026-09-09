@@ -15,6 +15,7 @@ class Leave extends Model
         'to_date',
         'reason',
         'status',
+        'source',
         'approved_by',
     ];
     public function employee()

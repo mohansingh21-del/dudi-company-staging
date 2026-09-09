@@ -19,7 +19,7 @@ class LeaveResource extends JsonResource
             'employee_id' => $this->employee_id,
             'employee_name' => $this->employee->name,
             'leave_type_id' => $this->leave_type_id,
-            'leave_type_name' => $this->leaveType->name,
+            'leave_type_name' => optional($this->leaveType)->name,
             'from_date' => $fromDate->format('d M Y'),
             'to_date' => $toDate->format('d M Y'),
 

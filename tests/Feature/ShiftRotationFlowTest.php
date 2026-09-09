@@ -54,12 +54,17 @@ class ShiftRotationFlowTest extends TestCase
             'end_time' => '00:00:00',
         ]);
 
+        // Create relays
+        $relayGeneral = \App\Models\Relay::create(['name' => 'General', 'is_rotating' => false, 'is_active' => true]);
+        $relayA = \App\Models\Relay::create(['name' => 'Relay A', 'is_rotating' => true, 'is_active' => true]);
+        $relayB = \App\Models\Relay::create(['name' => 'Relay B', 'is_rotating' => true, 'is_active' => true]);
+
         // 3. Create employees
         $this->generalEmployee = Employee::create([
             'employee_code' => 'EMPGEN01',
             'name' => 'General Employee',
             'joining_date' => now()->toDateString(),
-            'relay_shift' => 'general',
+            'relay_id' => $relayGeneral->id,
             'is_active' => 1,
         ]);
 
@@ -67,7 +72,7 @@ class ShiftRotationFlowTest extends TestCase
             'employee_code' => 'EMPRELAY01',
             'name' => 'Relay Employee 1',
             'joining_date' => now()->toDateString(),
-            'relay_shift' => 'relay_1',
+            'relay_id' => $relayA->id,
             'is_active' => 1,
         ]);
 
@@ -75,7 +80,7 @@ class ShiftRotationFlowTest extends TestCase
             'employee_code' => 'EMPRELAY02',
             'name' => 'Relay Employee 2',
             'joining_date' => now()->toDateString(),
-            'relay_shift' => 'relay_2',
+            'relay_id' => $relayB->id,
             'is_active' => 1,
         ]);
 
@@ -162,7 +167,7 @@ class ShiftRotationFlowTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonFragment([
-            'message' => 'Shift rotation is not allowed for general shift employees.'
+            'message' => 'Shift rotation is not allowed for non-rotating/general shift employees.'
         ]);
 
         // Relay employee update should succeed
@@ -189,7 +194,7 @@ class ShiftRotationFlowTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonFragment([
-            'message' => 'Shift rotation/override is not allowed for general shift employees.'
+            'message' => 'Shift rotation/override is not allowed for non-rotating/general shift employees.'
         ]);
 
         // Relay employee override should succeed
@@ -217,7 +222,7 @@ class ShiftRotationFlowTest extends TestCase
 
         $response->assertStatus(422);
         $response->assertJsonFragment([
-            'message' => 'Shift swap is not allowed for general shift employees.'
+            'message' => 'Shift swap is not allowed for non-rotating/general shift employees.'
         ]);
 
         // Swap two relay employees should succeed

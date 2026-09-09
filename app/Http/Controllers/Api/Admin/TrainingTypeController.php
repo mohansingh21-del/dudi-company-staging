@@ -11,6 +11,30 @@ use App\Http\Resources\TrainingTypeResource;
 
 class TrainingTypeController extends Controller
 {
+    /**
+     * Active types only, unpaginated — the Schedule Training "Training Type"
+     * dropdown.
+     */
+    public function publicIndex()
+    {
+        $types = TrainingType::where('is_active', 1)
+            ->latest()
+            ->get()
+            ->map(function ($type) {
+                return [
+                    'id' => $type->id,
+                    'name' => $type->name,
+                    'status' => $type->is_active,
+                ];
+            });
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Training type list fetched successfully',
+            'data' => $types
+        ]);
+    }
+
     public function index(Request $request)
     {
         try {

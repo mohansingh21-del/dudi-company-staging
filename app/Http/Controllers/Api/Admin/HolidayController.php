@@ -105,12 +105,14 @@ class HolidayController extends Controller
             ]);
         }
 
-        $dept->update([
+        $dept->fill(array_filter([
             'holiday_name' => $request->holiday_name,
             'holiday_date' => $request->holiday_date,
             'holiday_type' => $request->holiday_type,
-            'site' => $request->site_id,
-        ]);
+            'site_id'      => $request->site_id,
+        ], fn ($value) => !is_null($value)));
+
+        $dept->save();
 
         return response()->json([
             'status' => 200,
