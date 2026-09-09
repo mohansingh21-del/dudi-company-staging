@@ -268,6 +268,12 @@ class FleetTelematicsDashboardService
             $query->where('equipment_name_id', (int) $filters['machine_id']);
         }
 
+        // Narrowed here as well as on the fleet snapshot below, so a search
+        // cannot leave the two halves of this panel describing different sets
+        // of machines - one vehicle in the operational split beside an
+        // events list covering the whole fleet.
+        $this->applyAlertSearch($query, $filters);
+
         $events = $query->get();
 
         $fleet = $this->fleet($filters);
@@ -299,6 +305,7 @@ class FleetTelematicsDashboardService
             // here the panel would silently be about a quarter of the fleet.
             'by_vehicle' => $this->safetyEventsByMachine(
                 $events,
+                $fleet,
                 $range,
                 $filters,
                 isset($filters['limit']) ? $filters['limit'] : null
@@ -336,6 +343,9 @@ class FleetTelematicsDashboardService
             ->whereBetween('truck_connect_readings.reported_at', [$range[0], $range[1]])
             ->when(! empty($filters['machine_id']), function ($q) use ($filters) {
                 $q->where('equipment_names.id', (int) $filters['machine_id']);
+            })
+            ->tap(function ($q) use ($filters) {
+                $this->applyTruckConnectSearch($q, $filters);
             })
             ->select(
                 'truck_connect_readings.harsh_braking',
@@ -385,16 +395,7 @@ class FleetTelematicsDashboardService
             $query->where('alert_type', $filters['alert_type']);
         }
 
-        $search = isset($filters['search']) ? trim((string) $filters['search']) : '';
-
-        if ($search !== '') {
-            $query->where(function ($q) use ($search) {
-                $q->where('chassis_number', 'like', '%' . $search . '%')
-                    ->orWhereHas('machine', function ($m) use ($search) {
-                        $m->where('equipment_name', 'like', '%' . $search . '%');
-                    });
-            });
-        }
+        $this->applyAlertSearch($query, $filters);
 
         $alerts = $query->orderByDesc('alerted_at')->get();
 
@@ -547,17 +548,62 @@ class FleetTelematicsDashboardService
      * default list is unchanged - it still shows the worst offenders.
      *
      * @param  \Illuminate\Support\Collection  $events  VECV driving-behaviour alerts
+     * @param  \Illuminate\Support\Collection  $fleet   The matching fleet snapshot
      * @param  array  $range
      * @param  array  $filters
      * @param  int|string|null  $limit
      * @return array
      */
-    protected function safetyEventsByMachine(Collection $events, array $range, array $filters, $limit = null)
+    protected function safetyEventsByMachine(Collection $events, Collection $fleet, array $range, array $filters, $limit = null)
     {
-        return $this->rankMachineRows(
-            $this->alertMachineRows($events)->concat($this->truckConnectMachineRows($range, $filters)),
-            $limit
-        );
+        $rows = $this->alertMachineRows($events)
+            ->concat($this->truckConnectMachineRows($range, $filters));
+
+        return $this->rankMachineRows($this->withQuietMachines($rows, $fleet), $limit);
+    }
+
+    /**
+     * Add the machines that reported but raised nothing, at zero.
+     *
+     * The VECV rows are built from the alert log, so a machine that behaved
+     * itself has no row there at all - while the Truck Connect rows come from
+     * the readings and are present at zero. Left alone the list would hide
+     * exactly the well-behaved half of one vendor's fleet and show the other's,
+     * which is not a fleet roster, just an artefact of where each row came
+     * from.
+     *
+     * Only machines in the snapshot are added, so this stays a list of
+     * machines that were actually reporting over the window.
+     *
+     * @param  \Illuminate\Support\Collection  $rows
+     * @param  \Illuminate\Support\Collection  $fleet
+     * @return \Illuminate\Support\Collection
+     */
+    protected function withQuietMachines(Collection $rows, Collection $fleet)
+    {
+        $listed = $rows->pluck('chassis_number')
+            ->map(function ($chassis) {
+                return strtoupper($chassis);
+            })
+            ->all();
+
+        $quiet = $fleet
+            ->reject(function ($row) use ($listed) {
+                return in_array(strtoupper($row['chassis_number']), $listed, true);
+            })
+            ->map(function ($row) {
+                return [
+                    'machine_id'     => $row['machine_id'],
+                    'chassis_number' => $row['chassis_number'],
+                    'dumper_no'      => $row['dumper_no'] ?: $row['chassis_number'],
+                    'count'          => 0,
+                    'critical'       => 0,
+                    'warning'        => 0,
+                    'source'         => $row['source'],
+                ];
+            });
+
+        return $rows->concat($quiet);
     }
 
     /**
@@ -608,6 +654,9 @@ class FleetTelematicsDashboardService
             ->whereBetween('truck_connect_readings.reported_at', [$range[0], $range[1]])
             ->when(! empty($filters['machine_id']), function ($q) use ($filters) {
                 $q->where('equipment_names.id', (int) $filters['machine_id']);
+            })
+            ->tap(function ($q) use ($filters) {
+                $this->applyTruckConnectSearch($q, $filters);
             })
             // Grouped in the database rather than by pulling every reading:
             // this is one row per machine either way, and the window can hold
@@ -732,6 +781,82 @@ class FleetTelematicsDashboardService
         }
 
         return $rows->values()->all();
+    }
+
+    /**
+     * The search box's term, or '' when nothing was typed.
+     *
+     * @param  array  $filters
+     * @return string
+     */
+    protected function searchTerm(array $filters)
+    {
+        return isset($filters['search']) ? trim((string) $filters['search']) : '';
+    }
+
+    /**
+     * The term as a LIKE pattern, with the wildcards escaped.
+     *
+     * The fleet-side search matches with stripos, which treats % and _ as
+     * ordinary characters. Escaping them here keeps one search box meaning one
+     * thing across the response - unescaped, a term holding % would narrow the
+     * vehicle list and widen the alert list in the same request.
+     *
+     * @param  string  $search
+     * @return string
+     */
+    protected function likePattern($search)
+    {
+        return '%' . addcslashes($search, '%_\\') . '%';
+    }
+
+    /**
+     * Narrow an alert query to the search term - chassis or machine name.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @param  array  $filters
+     * @return void
+     */
+    protected function applyAlertSearch($query, array $filters)
+    {
+        $search = $this->searchTerm($filters);
+
+        if ($search === '') {
+            return;
+        }
+
+        $pattern = $this->likePattern($search);
+
+        $query->where(function ($q) use ($pattern) {
+            $q->where('chassis_number', 'like', $pattern)
+                ->orWhereHas('machine', function ($m) use ($pattern) {
+                    $m->where('equipment_name', 'like', $pattern);
+                });
+        });
+    }
+
+    /**
+     * The same for a Truck Connect query, which is joined to the vehicle
+     * master rather than related to it - VIN or machine name.
+     *
+     * @param  \Illuminate\Database\Query\Builder|\Illuminate\Database\Eloquent\Builder  $query
+     * @param  array  $filters
+     * @return void
+     */
+    protected function applyTruckConnectSearch($query, array $filters)
+    {
+        $search = $this->searchTerm($filters);
+
+        if ($search === '') {
+            return;
+        }
+
+        $pattern = $this->likePattern($search);
+
+        $query->where(function ($q) use ($pattern) {
+            $q->where('truck_connect_readings.vin', 'like', $pattern)
+                ->orWhere('equipment_names.equipment_name', 'like', $pattern);
+        });
     }
 
     /**
