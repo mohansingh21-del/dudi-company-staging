@@ -58,6 +58,7 @@ class ServiceRecordController extends Controller
                 'machine:id,equipment_name',
                 'site:id,site_name',
                 'breakdown:id,ticket_number',
+                'store:id,name',
                 'creator:id,email',
             ]);
 
@@ -71,6 +72,10 @@ class ServiceRecordController extends Controller
 
             if ($request->filled('service_type')) {
                 $query->where('service_type', $request->input('service_type'));
+            }
+
+            if ($request->filled('store_id')) {
+                $query->where('store_id', $request->input('store_id'));
             }
 
             if ($request->filled('date_from')) {
@@ -88,6 +93,7 @@ class ServiceRecordController extends Controller
 
                 $query->where(function ($q) use ($search) {
                     $q->where('ticket_number', 'LIKE', "%{$search}%")
+                        ->orWhere('job_card_number', 'LIKE', "%{$search}%")
                         ->orWhere('performed_by', 'LIKE', "%{$search}%")
                         ->orWhereHas('machine', function ($q2) use ($search) {
                             $q2->where('equipment_name', 'LIKE', "%{$search}%");
@@ -166,7 +172,8 @@ class ServiceRecordController extends Controller
                 'site',
                 'breakdown:id,ticket_number,status',
                 'checklistDetail',
-                'spareParts',
+                'spareParts.storeProduct.store',
+                'store',
                 'attachments',
                 'creator:id,email',
                 'updater:id,email',

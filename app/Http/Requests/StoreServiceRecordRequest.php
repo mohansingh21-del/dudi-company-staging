@@ -7,10 +7,12 @@ use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Support\Facades\Schema;
 use App\Http\Requests\Traits\NormalizesServiceRecordInput;
+use App\Http\Requests\Traits\ValidatesStoreSourcedSpareParts;
 
 class StoreServiceRecordRequest extends FormRequest
 {
     use NormalizesServiceRecordInput;
+    use ValidatesStoreSourcedSpareParts;
 
     public function authorize()
     {
@@ -28,6 +30,11 @@ class StoreServiceRecordRequest extends FormRequest
             'breakdown_id'                         => 'required_if:is_breakdown_service,true,1|nullable|integer|exists:' . $breakdownTable . ',id',
             'machine_id'                           => 'required_unless:is_breakdown_service,true,1|nullable|integer|exists:' . $machineTable . ',id',
             'site_id'                              => 'nullable|integer|exists:sites,id',
+            // One record draws from one store, against one job card it raised.
+            // Both are required once any part is store-sourced — see
+            // ValidatesStoreSourcedSpareParts.
+            'store_id'                             => 'nullable|integer|exists:stores,id',
+            'job_card_number'                      => 'nullable|string|max:64',
             'service_date'                         => 'required|date',
             'hours_odometer_reading'               => 'nullable|numeric|min:0',
             'km_run'                               => 'nullable|numeric|min:0',
@@ -56,12 +63,18 @@ class StoreServiceRecordRequest extends FormRequest
 
             'spare_parts_changed'                  => 'nullable|boolean',
             'spare_parts'                          => 'required_if:spare_parts_changed,true,1|nullable|array',
-            'spare_parts.*.source'                 => 'required_with:spare_parts|string|in:inventory,vendor',
+            // The bit that says which of the two inventories a part came from:
+            // the mine's own stock, or one outside store.
+            'spare_parts.*.source'                 => 'required_with:spare_parts|string|in:inventory,store',
             'spare_parts.*.inventory_product_id'   => 'required_if:spare_parts.*.source,inventory|nullable|integer|exists:' . $productTable . ',id',
-            'spare_parts.*.part_name'              => 'required_if:spare_parts.*.source,vendor|nullable|string|max:255',
+            'spare_parts.*.store_product_id'       => 'required_if:spare_parts.*.source,store|nullable|integer|exists:store_products,id',
+            // Both sources resolve the name from the product catalog now, so a
+            // caller-supplied name is only ever a fallback.
+            'spare_parts.*.part_name'              => 'nullable|string|max:255',
             'spare_parts.*.vendor_name'            => 'nullable|string|max:255',
             'spare_parts.*.quantity'               => 'required_with:spare_parts|numeric|min:0.01',
-            'spare_parts.*.amount'                 => 'required_if:spare_parts.*.source,vendor|nullable|numeric|min:0',
+            'spare_parts.*.unit_price'             => 'required_if:spare_parts.*.source,store|nullable|numeric|min:0',
+            'spare_parts.*.amount'                 => 'nullable|numeric|min:0',
 
             'attachments'                          => 'nullable|array',
             'attachments.*'                        => 'file|mimes:jpg,jpeg,png,pdf|max:5120',

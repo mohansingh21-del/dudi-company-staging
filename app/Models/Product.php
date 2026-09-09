@@ -26,9 +26,21 @@ class Product extends Model
         return $this->belongsTo(SubCategory::class, 'sub_category_id');
     }
 
+    /**
+     * The mine's own stock of this product. Outside stores hold the same
+     * product separately — see storeProducts().
+     */
     public function inventory()
     {
         return $this->hasOne(Inventory::class, 'product_id');
+    }
+
+    /**
+     * This product's stock at each outside store that carries it.
+     */
+    public function storeProducts()
+    {
+        return $this->hasMany(StoreProduct::class, 'product_id');
     }
 
     public function inventoryLogs()

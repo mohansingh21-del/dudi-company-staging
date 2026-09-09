@@ -12,6 +12,7 @@ class ServiceSparePart extends Model
         'service_record_id',
         'source',
         'inventory_product_id',
+        'store_product_id',
         'part_name',
         'vendor_name',
         'quantity',
@@ -33,5 +34,14 @@ class ServiceSparePart extends Model
     public function inventoryProduct()
     {
         return $this->belongsTo(InventoryProduct::class, 'inventory_product_id');
+    }
+
+    /**
+     * Set when source is 'store'. Rows migrated from the old free-text
+     * 'vendor' source have none — they predate stores.
+     */
+    public function storeProduct()
+    {
+        return $this->belongsTo(StoreProduct::class, 'store_product_id');
     }
 }

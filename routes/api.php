@@ -37,6 +37,8 @@ use App\Http\Controllers\Api\Admin\CategoryController;
 use App\Http\Controllers\Api\Admin\SubCategoryController;
 use App\Http\Controllers\Api\Admin\ProductController;
 use App\Http\Controllers\Api\Admin\InventoryController;
+use App\Http\Controllers\Api\Admin\StoreController;
+use App\Http\Controllers\Api\Admin\StoreProductController;
 use App\Http\Controllers\Api\Admin\PenaltyController;
 use App\Http\Controllers\Api\Admin\PayrollController;
 use App\Http\Controllers\Api\Admin\EmployeePayrollController;
@@ -215,6 +217,8 @@ Route::prefix('v1')->group(function () {
         Route::get('machine-categories', [EquipmentController::class, 'listCategories']);
         Route::get('active-machines', [EquipmentNameController::class, 'getActiveMachines']);
         Route::get('available-products', [InventoryController::class, 'getAvailableProducts']);
+        Route::get('stores', [StoreController::class, 'publicIndex']);
+        Route::get('store-available-products', [StoreProductController::class, 'availableProducts']);
         Route::get('open-breakdowns', [BreakdownController::class, 'getOpenBreakdowns']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
         Route::get('shift-plans/{shift_id}/machines', [EquipmentAllocationController::class, 'getPublicMachines']);
@@ -467,6 +471,42 @@ Route::prefix('v1')->group(function () {
                 Route::get('{productId}/logs', [InventoryController::class, 'logs']);
                 Route::get('assignments', [InventoryController::class, 'assignments']);
                 Route::get('{id}', [InventoryController::class, 'show']);
+            });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Stores
+            |--------------------------------------------------------------------------
+            | The outside stores this mine draws spare parts from. The stock they
+            | hold lives under store-products below; this is the master only.
+            */
+
+            Route::apiResource('stores', StoreController::class);
+            Route::post('stores/{id}', [StoreController::class, 'update']);
+            Route::patch('stores/{id}/status', [StoreController::class, 'toggleStatus']);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Store Inventory
+            |--------------------------------------------------------------------------
+            | The second inventory. Same shape as the inventories group above, but
+            | every row is scoped to a store and floored at its own threshold
+            | rather than products.min_stock. The product catalog is shared.
+            |
+            | Literal segments must stay above {id} or they resolve as one.
+            */
+
+            Route::prefix('store-products')->group(function () {
+                Route::get('/', [StoreProductController::class, 'index']);
+                Route::get('available', [StoreProductController::class, 'availableProducts']);
+                Route::post('add', [StoreProductController::class, 'store']);
+                Route::post('update/{id}', [StoreProductController::class, 'update']);
+                // Deprecated alias: update/{id} now takes quantity too. Kept so
+                // clients already posting here keep working.
+                Route::post('update-quantity/{id}', [StoreProductController::class, 'update']);
+                Route::get('{id}/logs', [StoreProductController::class, 'logs']);
+                Route::get('{id}', [StoreProductController::class, 'show']);
+                Route::delete('{id}', [StoreProductController::class, 'destroy']);
             });
 
             /*

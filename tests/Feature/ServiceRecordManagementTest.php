@@ -10,6 +10,8 @@ use App\Models\Product;
 use App\Models\Role;
 use App\Models\ServiceRecord;
 use App\Models\Site;
+use App\Models\Store;
+use App\Models\StoreProduct;
 use App\Models\SubCategory;
 use App\Models\Category;
 use App\Models\User;
@@ -27,6 +29,10 @@ class ServiceRecordManagementTest extends TestCase
     protected $site;
     protected $product;
     protected $inventory;
+    protected $store;
+    protected $storeProduct;
+    protected $product2;
+    protected $storeProduct2;
 
     protected function setUp(): void
     {
@@ -71,6 +77,41 @@ class ServiceRecordManagementTest extends TestCase
             'quantity'      => 50.00,
             'left_quantity' => 20.00,
         ]);
+
+        // The same product also stocked at an outside store, so the two
+        // balances can be asserted independently.
+        $this->store = Store::create([
+            'name'        => 'ABC Traders',
+            'description' => 'Outside spare parts store',
+            'is_active'   => 1,
+        ]);
+
+        $this->storeProduct = StoreProduct::create([
+            'store_id'      => $this->store->id,
+            'product_id'    => $this->product->id,
+            'quantity'      => 30.00,
+            'left_quantity' => 30.00,
+            'threshold'     => 4.00,
+            'is_active'     => 1,
+        ]);
+
+        // A second product carried only by the store, for records that draw
+        // more than one part from it.
+        $this->product2 = Product::create([
+            'sub_category_id' => $subCategory->id,
+            'name'            => 'Hydraulic Hose HX-12',
+            'min_stock'       => 0,
+            'is_active'       => 1
+        ]);
+
+        $this->storeProduct2 = StoreProduct::create([
+            'store_id'      => $this->store->id,
+            'product_id'    => $this->product2->id,
+            'quantity'      => 15.00,
+            'left_quantity' => 15.00,
+            'threshold'     => 2.00,
+            'is_active'     => 1,
+        ]);
     }
 
     public function test_can_create_general_service_record_with_recalculated_totals()
@@ -88,6 +129,8 @@ class ServiceRecordManagementTest extends TestCase
                 'fuel_filter_change'  => true,
                 'fuel_filter_change_amount' => 100.00,
             ],
+            'store_id'               => $this->store->id,
+            'job_card_number'        => 'JC-2026-0001',
             'spare_parts_changed'    => true,
             'spare_parts'            => [
                 [
@@ -97,12 +140,10 @@ class ServiceRecordManagementTest extends TestCase
                     'unit_price'           => 50.00,
                 ],
                 [
-                    'source'      => 'vendor',
-                    'part_name'   => 'Custom Gasket',
-                    'vendor_name' => 'ABC Traders',
-                    'quantity'    => 1,
-                    'unit_price'  => 80.00,
-                    'amount'      => 80.00,
+                    'source'           => 'store',
+                    'store_product_id' => $this->storeProduct->id,
+                    'quantity'         => 1,
+                    'unit_price'       => 80.00,
                 ]
             ],
             'remarks'                => 'Routine quarterly maintenance.'
@@ -454,10 +495,12 @@ class ServiceRecordManagementTest extends TestCase
             'site_id'              => $this->site->id,
             'service_date'         => '2026-07-20',
             'base_service_amount'  => 5000,
+            'store_id'             => $this->store->id,
+            'job_card_number'      => 'JC-2026-0042',
             'spare_parts_changed'  => true,
             'spare_parts'          => [
                 ['source' => 'inventory', 'inventory_product_id' => $this->product->id, 'quantity' => 2],
-                ['source' => 'vendor', 'part_name' => 'Custom Valve', 'quantity' => 1, 'amount' => 5200],
+                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 1, 'unit_price' => 5200],
             ],
         ]);
         $created->assertStatus(201);
@@ -484,10 +527,19 @@ class ServiceRecordManagementTest extends TestCase
             ->assertJsonPath('data.spare_parts.0.part_name', 'Oil Filter XP-90')
             ->assertJsonPath('data.spare_parts.0.quantity', 2)
             ->assertJsonPath('data.spare_parts.0.is_priced', false)
-            ->assertJsonPath('data.spare_parts.1.source_label', 'Other Vendors')
-            ->assertJsonPath('data.spare_parts.1.part_name', 'Custom Valve')
+            // A store-sourced part is labelled with the store it came from, and
+            // its name is resolved from the shared product catalog rather than
+            // typed in free text.
+            ->assertJsonPath('data.spare_parts.1.source_label', 'ABC Traders')
+            ->assertJsonPath('data.spare_parts.1.store_id', $this->store->id)
+            ->assertJsonPath('data.spare_parts.1.part_name', 'Oil Filter XP-90')
             ->assertJsonPath('data.spare_parts.1.amount', 5200)
             ->assertJsonPath('data.spare_parts.1.is_priced', true);
+
+        // The record carries the one store and one job card its parts came from.
+        $report->assertJsonPath('data.job_card_number', 'JC-2026-0042')
+            ->assertJsonPath('data.store.id', $this->store->id)
+            ->assertJsonPath('data.store.name', 'ABC Traders');
 
         $report->assertJsonPath('data.totals.base_service_amount', 5000)
             ->assertJsonPath('data.totals.spare_parts_amount_total', 5200)
@@ -535,10 +587,12 @@ class ServiceRecordManagementTest extends TestCase
             'service_date'           => '2026-07-20',
             'hours_odometer_reading' => 450,
             'base_service_amount'    => 6600,
+            'store_id'               => $this->store->id,
+            'job_card_number'        => 'JC-2026-0077',
             'spare_parts_changed'    => true,
             'spare_parts'            => [
-                ['source' => 'vendor', 'part_name' => 'Hydraulic Hose', 'quantity' => 1, 'amount' => 2400],
-                ['source' => 'vendor', 'part_name' => 'Seal Kit', 'quantity' => 1, 'amount' => 1200],
+                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 1, 'unit_price' => 2400],
+                ['source' => 'store', 'store_product_id' => $this->storeProduct2->id, 'quantity' => 1, 'unit_price' => 1200],
             ],
         ])->assertStatus(201);
         \DB::table('service_records')->where('hours_odometer_reading', 450)->update(['service_type' => 'repair']);

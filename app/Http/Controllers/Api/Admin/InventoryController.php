@@ -264,6 +264,10 @@ class InventoryController extends Controller
         try {
             $logs = InventoryLog::with(['product', 'user.roles'])
                 ->where('product_id', $productId)
+                // Own-inventory movements only. The same product can also be
+                // stocked at outside stores, whose movements share this table
+                // and are tagged with a store_id.
+                ->whereNull('store_id')
                 ->orderBy('created_at', 'desc')
                 ->get();
 

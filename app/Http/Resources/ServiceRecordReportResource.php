@@ -20,6 +20,9 @@ class ServiceRecordReportResource extends JsonResource
         return [
             'id'                     => $this->id,
             'ticket_number'          => $this->ticket_number,
+            // The outside store's own job card, present only when this record
+            // drew parts from one. Unrelated to the VECV dealer job cards.
+            'job_card_number'        => $this->job_card_number,
 
             'service_type'           => $this->service_type,
             'service_type_label'     => $this->service_type === 'repair' ? 'Repair' : 'General Service',
@@ -35,6 +38,11 @@ class ServiceRecordReportResource extends JsonResource
                 'id'   => $this->site_id,
                 'name' => optional($this->site)->site_name,
             ],
+            // One record draws store-sourced parts from one store only.
+            'store' => $this->store_id ? [
+                'id'   => $this->store_id,
+                'name' => optional($this->store)->name,
+            ] : null,
 
             'is_breakdown_service'   => (bool) $this->is_breakdown_service,
             'breakdown' => $this->breakdown ? [
@@ -126,12 +134,28 @@ class ServiceRecordReportResource extends JsonResource
     {
         return $this->spareParts->map(function ($part) {
             $isInventory = $part->source === 'inventory';
+            $storeProduct = $part->storeProduct;
+            $storeName = optional(optional($storeProduct)->store)->name;
+
+            // Rows migrated from the old free-text 'vendor' source have no
+            // store_product_id — they predate stores, so the only name they
+            // ever carried is the free-text vendor_name.
+            if ($isInventory) {
+                $sourceLabel = 'Inventory';
+            } elseif ($storeName) {
+                $sourceLabel = $storeName;
+            } else {
+                $sourceLabel = $part->vendor_name ?: 'Other Vendors';
+            }
 
             return [
                 'id'                   => $part->id,
                 'source'               => $part->source,
-                'source_label'         => $isInventory ? 'Inventory' : 'Other Vendors',
+                'source_label'         => $sourceLabel,
                 'inventory_product_id' => $part->inventory_product_id,
+                'store_product_id'     => $part->store_product_id,
+                'store_id'             => optional($storeProduct)->store_id,
+                'store_name'           => $storeName,
                 'part_name'            => $part->part_name,
                 'vendor_name'          => $part->vendor_name,
                 'quantity'             => (float) $part->quantity,
@@ -140,6 +164,7 @@ class ServiceRecordReportResource extends JsonResource
                 // Inventory products carry no price in this system, so an issued
                 // part has no billable amount to show — that is not the same as
                 // costing zero rupees, and the report must not imply it is.
+                // Store-sourced parts are bought, so they always carry one.
                 'is_priced'            => !($isInventory && (float) $part->unit_price === 0.00),
             ];
         })->values()->toArray();
