@@ -73,8 +73,11 @@ class StoreServiceRecordRequest extends FormRequest
             'spare_parts.*.part_name'              => 'nullable|string|max:255',
             'spare_parts.*.vendor_name'            => 'nullable|string|max:255',
             'spare_parts.*.quantity'               => 'required_with:spare_parts|numeric|min:0.01',
-            'spare_parts.*.unit_price'             => 'required_if:spare_parts.*.source,store|nullable|numeric|min:0',
-            'spare_parts.*.amount'                 => 'nullable|numeric|min:0',
+            // The caller prices the whole line, not each unit: a quantity of 4
+            // comes with one amount covering all 4. unit_price is derived from
+            // it server-side, and is only read here for inventory parts.
+            'spare_parts.*.amount'                 => 'required_if:spare_parts.*.source,store|nullable|numeric|min:0',
+            'spare_parts.*.unit_price'             => 'nullable|numeric|min:0',
 
             'attachments'                          => 'nullable|array',
             'attachments.*'                        => 'file|mimes:jpg,jpeg,png,pdf|max:5120',

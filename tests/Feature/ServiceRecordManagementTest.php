@@ -143,7 +143,7 @@ class ServiceRecordManagementTest extends TestCase
                     'source'           => 'store',
                     'store_product_id' => $this->storeProduct->id,
                     'quantity'         => 1,
-                    'unit_price'       => 80.00,
+                    'amount'           => 80.00,
                 ]
             ],
             'remarks'                => 'Routine quarterly maintenance.'
@@ -500,7 +500,7 @@ class ServiceRecordManagementTest extends TestCase
             'spare_parts_changed'  => true,
             'spare_parts'          => [
                 ['source' => 'inventory', 'inventory_product_id' => $this->product->id, 'quantity' => 2],
-                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 1, 'unit_price' => 5200],
+                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 1, 'amount' => 5200],
             ],
         ]);
         $created->assertStatus(201);
@@ -591,8 +591,8 @@ class ServiceRecordManagementTest extends TestCase
             'job_card_number'        => 'JC-2026-0077',
             'spare_parts_changed'    => true,
             'spare_parts'            => [
-                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 1, 'unit_price' => 2400],
-                ['source' => 'store', 'store_product_id' => $this->storeProduct2->id, 'quantity' => 1, 'unit_price' => 1200],
+                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 1, 'amount' => 2400],
+                ['source' => 'store', 'store_product_id' => $this->storeProduct2->id, 'quantity' => 1, 'amount' => 1200],
             ],
         ])->assertStatus(201);
         \DB::table('service_records')->where('hours_odometer_reading', 450)->update(['service_type' => 'repair']);

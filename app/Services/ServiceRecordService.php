@@ -248,8 +248,10 @@ class ServiceRecordService
 
                         // Unlike own-inventory parts, store parts are bought and
                         // therefore priced — their cost belongs in the record total.
-                        $unitPrice = (float) (isset($part['unit_price']) ? $part['unit_price'] : 0.00);
-                        $partAmount = $quantity * $unitPrice;
+                        // The caller prices the whole line, not each unit, so
+                        // amount is what it sends and unit_price is derived.
+                        $partAmount = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
+                        $unitPrice = $quantity > 0 ? $partAmount / $quantity : 0.00;
 
                         ServiceSparePart::create([
                             'service_record_id'    => $serviceRecord->id,
@@ -753,8 +755,9 @@ class ServiceRecordService
 
             // Store parts keep their price, unlike inventory ones — they were
             // bought, and dropping the amount here would quietly erase money
-            // that create() recorded on the record total.
-            $unitPrice = (float) (isset($part['unit_price']) ? $part['unit_price'] : 0.00);
+            // that create() recorded on the record total. Same shape as create():
+            // the caller prices the line, unit_price is derived from it.
+            $partAmount = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
 
             ServiceSparePart::create([
                 'service_record_id'    => $record->id,
@@ -764,8 +767,8 @@ class ServiceRecordService
                 'part_name'            => $storePartNames[$storeProductId],
                 'vendor_name'          => isset($storeNames[$storeProductId]) ? $storeNames[$storeProductId] : null,
                 'quantity'             => $quantity,
-                'unit_price'           => $unitPrice,
-                'amount'               => $quantity * $unitPrice,
+                'unit_price'           => $quantity > 0 ? $partAmount / $quantity : 0.00,
+                'amount'               => $partAmount,
             ]);
         }
 
