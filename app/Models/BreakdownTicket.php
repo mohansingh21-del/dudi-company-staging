@@ -56,15 +56,29 @@ class BreakdownTicket extends Model
     {
         parent::boot();
         static::saving(function ($model) {
-            if (empty($model->date) && $model->breakdown_date_time) {
+            // `date` mirrors the day of breakdown_date_time, so it has to be
+            // re-derived whenever the timestamp is edited - not just backfilled
+            // on create - or the two drift apart and the dashboards that read
+            // one disagree with those that read the other.
+            if ($model->breakdown_date_time && (empty($model->date) || $model->isDirty('breakdown_date_time'))) {
                 $model->date = \Carbon\Carbon::parse($model->breakdown_date_time)->toDateString();
             }
-            if (empty($model->mine_site_id) && $model->date && $model->shift_id) {
+
+            // mine_site_id is derived from (shift_id, date) and is never client
+            // supplied, so a change to either key invalidates it.
+            $siteKeysChanged = $model->isDirty('date') || $model->isDirty('shift_id');
+
+            if ($model->date && $model->shift_id && (empty($model->mine_site_id) || $siteKeysChanged)) {
                 $shiftPlan = \App\Models\ShiftPlan::where('shift_id', $model->shift_id)
                     ->where('planning_date', $model->date)
                     ->first();
                 if ($shiftPlan) {
                     $model->mine_site_id = $shiftPlan->site_id;
+                } elseif ($siteKeysChanged) {
+                    // The ticket moved to a shift/day with no plan: keeping the
+                    // old site would attribute it to the wrong one. Null leaves
+                    // it out of site-filtered views but visible everywhere else.
+                    $model->mine_site_id = null;
                 }
             }
         });

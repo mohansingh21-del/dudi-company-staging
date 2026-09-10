@@ -266,6 +266,86 @@ class BreakdownManagementTest extends TestCase
         ]);
     }
 
+    public function test_can_update_breakdown_date_time_and_derived_date_follows()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $ticket = BreakdownTicket::create([
+            'ticket_number'       => 'BRK-2026-00010',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'Reported with the wrong time',
+            'status'              => 'open',
+        ]);
+
+        $siteId = $ticket->fresh()->mine_site_id;
+        $this->assertNotNull($siteId, 'Ticket should pick up the site from its shift plan on create.');
+
+        // A second plan so the corrected day still resolves to a site.
+        \App\Models\ShiftPlan::create([
+            'planning_date'    => '2026-06-27',
+            'shift_id'         => $this->shift->id,
+            'site_id'          => $siteId,
+            'target_bcm'       => 1000,
+            'supervisor_id'    => $this->adminUser->id,
+            'site_incharge_id' => $this->adminUser->id,
+            'created_by'       => $this->adminUser->id,
+            'reference_no'     => 'SP-TEST-002',
+        ]);
+
+        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", [
+            'breakdown_date_time' => '2026-06-27 09:30:00',
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonFragment([
+                'breakdown_date_time' => '2026-06-27 09:30:00',
+                'date'                => '2026-06-27',
+            ]);
+
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'id'                  => $ticket->id,
+            'breakdown_date_time' => '2026-06-27 09:30:00',
+            'date'                => '2026-06-27',
+            'mine_site_id'        => $siteId,
+        ]);
+    }
+
+    public function test_breakdown_date_time_must_be_a_valid_datetime_on_update()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $ticket = BreakdownTicket::create([
+            'ticket_number'       => 'BRK-2026-00011',
+            'shift_id'            => $this->shift->id,
+            'equipment_id'        => $this->equipment->id,
+            'equipment_name_id'   => $this->equipmentName->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+            'reported_by'         => $this->adminUser->id,
+            'breakdown_type_id'   => 1,
+            'severity'            => 'MEDIUM',
+            'description'         => 'Testing bad datetime',
+            'status'              => 'open',
+        ]);
+
+        $response = $this->putJson("/api/v1/admin/maintenance/breakdowns/{$ticket->id}", [
+            'breakdown_date_time' => '26-06-2026',
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonValidationErrors('breakdown_date_time');
+
+        $this->assertDatabaseHas('breakdown_tickets', [
+            'id'                  => $ticket->id,
+            'breakdown_date_time' => '2026-06-26 12:00:00',
+        ]);
+    }
+
     public function test_downtime_fields_are_ignored_on_breakdown_update()
     {
         Sanctum::actingAs($this->adminUser);
