@@ -6,7 +6,7 @@ use App\Models\Category;
 use App\Models\Product;
 use App\Models\Role;
 use App\Models\Store;
-use App\Models\StoreProduct;
+use App\Models\Inventory;
 use App\Models\SubCategory;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -126,12 +126,11 @@ class StoreManagementTest extends TestCase
         $store = Store::create(['name' => 'ABC Traders', 'is_active' => 1]);
         $product = $this->makeProduct();
 
-        StoreProduct::create([
+        Inventory::create([
             'store_id'      => $store->id,
             'product_id'    => $product->id,
             'quantity'      => 10,
             'left_quantity' => 10,
-            'threshold'     => 2,
             'is_active'     => 1,
         ]);
 
@@ -141,7 +140,7 @@ class StoreManagementTest extends TestCase
 
         // The stock and its history must survive the refused delete.
         $this->assertDatabaseHas('stores', ['id' => $store->id]);
-        $this->assertDatabaseHas('store_products', ['store_id' => $store->id]);
+        $this->assertDatabaseHas('inventories', ['store_id' => $store->id]);
     }
 
     public function test_public_index_returns_active_stores_only()

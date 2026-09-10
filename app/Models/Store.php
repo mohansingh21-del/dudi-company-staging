@@ -21,8 +21,11 @@ class Store extends Model
         'is_active' => 'integer',
     ];
 
-    public function storeProducts()
+    /**
+     * The stock this store holds, one row per product.
+     */
+    public function inventories()
     {
-        return $this->hasMany(StoreProduct::class, 'store_id');
+        return $this->hasMany(Inventory::class, 'store_id');
     }
 }

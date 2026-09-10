@@ -11,7 +11,6 @@ use App\Models\Product;
 use App\Models\Role;
 use App\Models\ServiceRecord;
 use App\Models\Store;
-use App\Models\StoreProduct;
 use App\Models\SubCategory;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -20,19 +19,23 @@ use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 /**
- * Spare parts drawn from an outside store: the second inventory's half of the
- * service-record flow.
+ * Spare parts on a service record.
+ *
+ * Every part comes out of one store's stock, identified by its inventory row.
+ * The same product held at two stores is two independent balances, and a record
+ * draws from exactly one of them.
  */
-class ServiceRecordStoreSparePartTest extends TestCase
+class ServiceRecordSparePartTest extends TestCase
 {
     use RefreshDatabase;
 
     protected $adminUser;
     protected $machine;
     protected $product;
-    protected $inventory;
     protected $store;
-    protected $storeProduct;
+    protected $otherStore;
+    protected $inventory;
+    protected $otherInventory;
 
     protected function setUp(): void
     {
@@ -63,6 +66,8 @@ class ServiceRecordStoreSparePartTest extends TestCase
 
         $category = Category::create(['name' => 'Spare Parts']);
         $subCategory = SubCategory::create(['category_id' => $category->id, 'name' => 'Filters']);
+
+        // min_stock 5 is the floor at every store that carries this product.
         $this->product = Product::create([
             'sub_category_id' => $subCategory->id,
             'name'            => 'Oil Filter XP-90',
@@ -70,27 +75,31 @@ class ServiceRecordStoreSparePartTest extends TestCase
             'is_active'       => 1
         ]);
 
-        $this->inventory = Inventory::create([
-            'product_id'    => $this->product->id,
-            'quantity'      => 50.00,
-            'left_quantity' => 50.00,
-        ]);
-
         $this->store = Store::create(['name' => 'ABC Traders', 'is_active' => 1]);
-        $this->storeProduct = StoreProduct::create([
+        $this->otherStore = Store::create(['name' => 'XYZ Spares', 'is_active' => 1]);
+
+        $this->inventory = Inventory::create([
             'store_id'      => $this->store->id,
             'product_id'    => $this->product->id,
             'quantity'      => 20.00,
             'left_quantity' => 20.00,
-            'threshold'     => 4.00,
+            'is_active'     => 1,
+        ]);
+
+        // The same product at a second store — a separate balance.
+        $this->otherInventory = Inventory::create([
+            'store_id'      => $this->otherStore->id,
+            'product_id'    => $this->product->id,
+            'quantity'      => 50.00,
+            'left_quantity' => 50.00,
             'is_active'     => 1,
         ]);
     }
 
-    public function test_store_part_deducts_store_stock_and_leaves_own_inventory_alone()
+    public function test_a_part_deducts_its_own_store_and_leaves_the_other_alone()
     {
         $response = $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 3, 'amount' => 300],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 3, 'amount' => 300],
         ]));
 
         $response->assertStatus(201)
@@ -99,9 +108,9 @@ class ServiceRecordStoreSparePartTest extends TestCase
             ->assertJsonPath('data.job_card_number', 'JC-2026-0001')
             ->assertJsonPath('data.store_id', $this->store->id);
 
-        $this->assertSame('17.00', $this->storeProduct->fresh()->left_quantity);
-        // The same product in the mine's own inventory is untouched.
-        $this->assertSame('50.00', $this->inventory->fresh()->left_quantity);
+        $this->assertSame('17.00', $this->inventory->fresh()->left_quantity);
+        // The same product at the other store is untouched.
+        $this->assertSame('50.00', $this->otherInventory->fresh()->left_quantity);
 
         $this->assertDatabaseHas('inventory_logs', [
             'product_id' => $this->product->id,
@@ -112,11 +121,10 @@ class ServiceRecordStoreSparePartTest extends TestCase
         ]);
 
         $this->assertDatabaseHas('service_spare_parts', [
-            'source'               => 'store',
-            'store_product_id'     => $this->storeProduct->id,
-            'inventory_product_id' => null,
-            'part_name'            => 'Oil Filter XP-90',
-            'amount'               => 300.00,
+            'inventory_id' => $this->inventory->id,
+            'part_name'    => 'Oil Filter XP-90',
+            'vendor_name'  => 'ABC Traders',
+            'amount'       => 300.00,
         ]);
     }
 
@@ -125,7 +133,7 @@ class ServiceRecordStoreSparePartTest extends TestCase
         // The user enters a quantity of 4 and one amount covering all 4 — not a
         // per-unit rate. unit_price is worked out from it, never sent.
         $id = $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 4, 'amount' => 900],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 4, 'amount' => 900],
         ]))->assertStatus(201)
             ->assertJsonPath('data.spare_parts_amount_total', '900.00')
             ->json('data.id');
@@ -138,50 +146,47 @@ class ServiceRecordStoreSparePartTest extends TestCase
         ]);
     }
 
-    public function test_amount_is_required_for_a_store_part()
+    public function test_a_part_left_unpriced_costs_nothing()
     {
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 2],
-        ]))->assertStatus(422)->assertJsonValidationErrors('spare_parts.0.amount');
+            ['inventory_id' => $this->inventory->id, 'quantity' => 2],
+        ]))->assertStatus(201)
+            ->assertJsonPath('data.spare_parts_amount_total', '0.00');
 
-        $this->assertSame('20.00', $this->storeProduct->fresh()->left_quantity);
+        $this->assertSame('18.00', $this->inventory->fresh()->left_quantity);
+
+        $this->assertDatabaseHas('service_spare_parts', [
+            'inventory_id' => $this->inventory->id,
+            'quantity'     => 2.00,
+            'amount'       => 0.00,
+            'unit_price'   => 0.00,
+        ]);
     }
 
-    public function test_both_inventories_can_be_drawn_from_on_one_record()
-    {
-        $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['source' => 'inventory', 'inventory_product_id' => $this->product->id, 'quantity' => 2],
-            ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 3, 'amount' => 300],
-        ]))->assertStatus(201);
-
-        $this->assertSame('48.00', $this->inventory->fresh()->left_quantity);
-        $this->assertSame('17.00', $this->storeProduct->fresh()->left_quantity);
-    }
-
-    public function test_threshold_is_a_hard_floor_for_store_stock()
+    public function test_min_stock_is_a_hard_floor()
     {
         Mail::fake();
 
-        // 20 on hand, floor of 4: issuing 17 would land at 3.
+        // 20 on hand, floor of 5: issuing 16 would land at 4.
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 17, 'amount' => 170],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 16, 'amount' => 160],
         ]))->assertStatus(422)->assertJsonValidationErrors('spare_parts');
 
-        $this->assertSame('20.00', $this->storeProduct->fresh()->left_quantity);
+        $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
         $this->assertSame(0, ServiceRecord::count());
 
         Mail::assertSent(LowStockAlertMail::class);
     }
 
-    public function test_issuing_down_to_the_threshold_is_allowed_and_alerts()
+    public function test_issuing_down_to_the_floor_is_allowed_and_alerts()
     {
         Mail::fake();
 
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 16, 'amount' => 160],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 15, 'amount' => 150],
         ]))->assertStatus(201);
 
-        $this->assertSame('4.00', $this->storeProduct->fresh()->left_quantity);
+        $this->assertSame('5.00', $this->inventory->fresh()->left_quantity);
 
         Mail::assertSent(LowStockAlertMail::class, function ($mail) {
             return $mail->storeName === 'ABC Traders';
@@ -190,110 +195,132 @@ class ServiceRecordStoreSparePartTest extends TestCase
 
     public function test_a_part_from_another_store_is_rejected()
     {
-        $otherStore = Store::create(['name' => 'XYZ Spares', 'is_active' => 1]);
-        $otherStoreProduct = StoreProduct::create([
-            'store_id'      => $otherStore->id,
-            'product_id'    => $this->product->id,
-            'quantity'      => 10,
-            'left_quantity' => 10,
-            'threshold'     => 1,
-            'is_active'     => 1,
-        ]);
-
         // store_id on the record says ABC Traders; the part belongs to XYZ.
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['source' => 'store', 'store_product_id' => $otherStoreProduct->id, 'quantity' => 1, 'amount' => 10],
-        ]))->assertStatus(422)->assertJsonValidationErrors('spare_parts');
+            ['inventory_id' => $this->otherInventory->id, 'quantity' => 1, 'amount' => 10],
+        ]))->assertStatus(422)->assertJsonValidationErrors('store_id');
 
-        $this->assertSame('10.00', $otherStoreProduct->fresh()->left_quantity);
+        $this->assertSame('50.00', $this->otherInventory->fresh()->left_quantity);
         $this->assertSame(0, ServiceRecord::count());
     }
 
-    public function test_store_id_and_job_card_number_are_required_for_a_store_part()
+    public function test_parts_from_two_stores_on_one_record_are_rejected()
+    {
+        $this->postJson('/api/v1/admin/service-records', $this->payload([
+            ['inventory_id' => $this->inventory->id, 'quantity' => 1, 'amount' => 10],
+            ['inventory_id' => $this->otherInventory->id, 'quantity' => 1, 'amount' => 10],
+        ]))->assertStatus(422)->assertJsonValidationErrors('spare_parts');
+
+        // Rejected at validation, so nothing moved anywhere.
+        $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
+        $this->assertSame('50.00', $this->otherInventory->fresh()->left_quantity);
+        $this->assertSame(0, ServiceRecord::count());
+    }
+
+    public function test_store_id_is_required_once_a_record_has_parts()
     {
         $payload = $this->payload([
-            ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 1, 'amount' => 10],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 1, 'amount' => 10],
         ]);
-        unset($payload['store_id'], $payload['job_card_number']);
+        unset($payload['store_id']);
 
         $this->postJson('/api/v1/admin/service-records', $payload)
             ->assertStatus(422)
-            ->assertJsonValidationErrors(['store_id', 'job_card_number']);
+            ->assertJsonValidationErrors('store_id');
 
-        $this->assertSame('20.00', $this->storeProduct->fresh()->left_quantity);
+        $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
     }
 
-    public function test_an_inventory_only_record_needs_neither_store_nor_job_card()
+    public function test_job_card_number_is_required_on_every_service()
     {
+        // With parts.
         $payload = $this->payload([
-            ['source' => 'inventory', 'inventory_product_id' => $this->product->id, 'quantity' => 2],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 1, 'amount' => 10],
         ]);
-        unset($payload['store_id'], $payload['job_card_number']);
+        unset($payload['job_card_number']);
+
+        $this->postJson('/api/v1/admin/service-records', $payload)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('job_card_number');
+
+        // And without any.
+        $bare = $this->payload([]);
+        unset($bare['job_card_number'], $bare['store_id']);
+        $bare['spare_parts_changed'] = false;
+
+        $this->postJson('/api/v1/admin/service-records', $bare)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('job_card_number');
+    }
+
+    public function test_a_record_with_no_parts_needs_no_store()
+    {
+        $payload = $this->payload([]);
+        unset($payload['store_id']);
+        $payload['spare_parts_changed'] = false;
 
         $this->postJson('/api/v1/admin/service-records', $payload)->assertStatus(201);
-
-        $this->assertSame('48.00', $this->inventory->fresh()->left_quantity);
     }
 
-    public function test_store_product_id_must_exist()
+    public function test_inventory_id_must_exist()
     {
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['source' => 'store', 'store_product_id' => 9999, 'quantity' => 1, 'amount' => 10],
-        ]))->assertStatus(422)->assertJsonValidationErrors('spare_parts.0.store_product_id');
+            ['inventory_id' => 9999, 'quantity' => 1, 'amount' => 10],
+        ]))->assertStatus(422)->assertJsonValidationErrors('spare_parts.0.inventory_id');
     }
 
-    public function test_raising_a_store_part_quantity_deducts_only_the_difference()
+    public function test_raising_a_part_quantity_deducts_only_the_difference()
     {
-        $id = $this->createRecordWithStorePart(3);
+        $id = $this->createRecordWithPart(3);
 
         $this->putJson("/api/v1/admin/service-records/{$id}", [
             'store_id'            => $this->store->id,
             'job_card_number'     => 'JC-2026-0001',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 5, 'amount' => 500],
+                ['inventory_id' => $this->inventory->id, 'quantity' => 5, 'amount' => 500],
             ],
         ])->assertStatus(200);
 
         // 20 - 5, not 20 - 3 - 5.
-        $this->assertSame('15.00', $this->storeProduct->fresh()->left_quantity);
+        $this->assertSame('15.00', $this->inventory->fresh()->left_quantity);
         $this->assertSame('500.00', ServiceRecord::find($id)->spare_parts_amount_total);
     }
 
-    public function test_lowering_a_store_part_quantity_returns_the_difference()
+    public function test_lowering_a_part_quantity_returns_the_difference()
     {
-        $id = $this->createRecordWithStorePart(5);
-        $this->assertSame('15.00', $this->storeProduct->fresh()->left_quantity);
+        $id = $this->createRecordWithPart(5);
+        $this->assertSame('15.00', $this->inventory->fresh()->left_quantity);
 
         $this->putJson("/api/v1/admin/service-records/{$id}", [
             'store_id'            => $this->store->id,
             'job_card_number'     => 'JC-2026-0001',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 2, 'amount' => 200],
+                ['inventory_id' => $this->inventory->id, 'quantity' => 2, 'amount' => 200],
             ],
         ])->assertStatus(200);
 
-        $this->assertSame('18.00', $this->storeProduct->fresh()->left_quantity);
+        $this->assertSame('18.00', $this->inventory->fresh()->left_quantity);
         $this->assertSame('200.00', ServiceRecord::find($id)->spare_parts_amount_total);
     }
 
-    public function test_removing_a_store_part_returns_all_of_it()
+    public function test_removing_a_part_returns_all_of_it()
     {
-        $id = $this->createRecordWithStorePart(5);
+        $id = $this->createRecordWithPart(5);
 
         $this->putJson("/api/v1/admin/service-records/{$id}", [
             'spare_parts_changed' => false,
         ])->assertStatus(200);
 
-        $this->assertSame('20.00', $this->storeProduct->fresh()->left_quantity);
+        $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
         $this->assertSame('0.00', ServiceRecord::find($id)->spare_parts_amount_total);
         $this->assertSame(0, \DB::table('service_spare_parts')->where('service_record_id', $id)->count());
     }
 
-    public function test_editing_a_record_preserves_store_part_prices()
+    public function test_editing_a_record_preserves_part_prices()
     {
-        $id = $this->createRecordWithStorePart(3);
+        $id = $this->createRecordWithPart(3);
         $this->assertSame('300.00', ServiceRecord::find($id)->spare_parts_amount_total);
 
         // Re-post the same list untouched: the money must survive the round trip.
@@ -302,34 +329,33 @@ class ServiceRecordStoreSparePartTest extends TestCase
             'job_card_number'     => 'JC-2026-0001',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 3, 'amount' => 300],
+                ['inventory_id' => $this->inventory->id, 'quantity' => 3, 'amount' => 300],
             ],
         ])->assertStatus(200);
 
         $this->assertSame('300.00', ServiceRecord::find($id)->spare_parts_amount_total);
-        $this->assertSame('17.00', $this->storeProduct->fresh()->left_quantity);
+        $this->assertSame('17.00', $this->inventory->fresh()->left_quantity);
     }
 
-    public function test_swapping_store_parts_returns_before_it_deducts()
+    public function test_re_posting_an_unchanged_part_returns_before_it_deducts()
     {
         $second = Product::create([
             'sub_category_id' => $this->product->sub_category_id,
             'name'            => 'Hydraulic Hose HX-12',
-            'min_stock'       => 0,
+            'min_stock'       => 5,
             'is_active'       => 1,
         ]);
-        $secondStoreProduct = StoreProduct::create([
+        $secondInventory = Inventory::create([
             'store_id'      => $this->store->id,
             'product_id'    => $second->id,
             'quantity'      => 6,
             'left_quantity' => 6,
-            'threshold'     => 5,
             'is_active'     => 1,
         ]);
 
         // Only one unit is issuable above the floor of 5, and it is already out.
-        $id = $this->createRecordWithStorePart(1, $secondStoreProduct->id);
-        $this->assertSame('5.00', $secondStoreProduct->fresh()->left_quantity);
+        $id = $this->createRecordWithPart(1, $secondInventory->id);
+        $this->assertSame('5.00', $secondInventory->fresh()->left_quantity);
 
         // Re-posting the same quantity must not fail: nothing net is issued.
         $this->putJson("/api/v1/admin/service-records/{$id}", [
@@ -337,31 +363,31 @@ class ServiceRecordStoreSparePartTest extends TestCase
             'job_card_number'     => 'JC-2026-0001',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['source' => 'store', 'store_product_id' => $secondStoreProduct->id, 'quantity' => 1, 'amount' => 100],
+                ['inventory_id' => $secondInventory->id, 'quantity' => 1, 'amount' => 100],
             ],
         ])->assertStatus(200);
 
-        $this->assertSame('5.00', $secondStoreProduct->fresh()->left_quantity);
+        $this->assertSame('5.00', $secondInventory->fresh()->left_quantity);
     }
 
-    public function test_switching_a_part_from_own_inventory_to_the_store()
+    public function test_moving_a_record_to_another_store_returns_and_reissues()
     {
-        $id = $this->createRecordWithInventoryPart(4);
-        $this->assertSame('46.00', $this->inventory->fresh()->left_quantity);
+        $id = $this->createRecordWithPart(4);
+        $this->assertSame('16.00', $this->inventory->fresh()->left_quantity);
 
         $this->putJson("/api/v1/admin/service-records/{$id}", [
-            'store_id'            => $this->store->id,
-            'job_card_number'     => 'JC-2026-0001',
+            'store_id'            => $this->otherStore->id,
+            'job_card_number'     => 'JC-2026-0002',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['source' => 'store', 'store_product_id' => $this->storeProduct->id, 'quantity' => 4, 'amount' => 400],
+                ['inventory_id' => $this->otherInventory->id, 'quantity' => 4, 'amount' => 400],
             ],
         ])->assertStatus(200);
 
-        // Own stock fully returned, store stock issued — the same product, two
-        // separate balances.
-        $this->assertSame('50.00', $this->inventory->fresh()->left_quantity);
-        $this->assertSame('16.00', $this->storeProduct->fresh()->left_quantity);
+        // First store fully returned, second store issued — the same product,
+        // two separate balances.
+        $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
+        $this->assertSame('46.00', $this->otherInventory->fresh()->left_quantity);
         $this->assertSame('400.00', ServiceRecord::find($id)->spare_parts_amount_total);
     }
 
@@ -386,29 +412,14 @@ class ServiceRecordStoreSparePartTest extends TestCase
     /**
      * @return int
      */
-    protected function createRecordWithStorePart($quantity, $storeProductId = null)
+    protected function createRecordWithPart($quantity, $inventoryId = null)
     {
         return $this->postJson('/api/v1/admin/service-records', $this->payload([
             [
-                'source'           => 'store',
-                'store_product_id' => $storeProductId ?: $this->storeProduct->id,
-                'quantity'         => $quantity,
+                'inventory_id' => $inventoryId ?: $this->inventory->id,
+                'quantity'     => $quantity,
                 // The caller prices the whole line, so 100 a unit means 100 * qty.
-                'amount'           => 100 * $quantity,
-            ],
-        ]))->assertStatus(201)->json('data.id');
-    }
-
-    /**
-     * @return int
-     */
-    protected function createRecordWithInventoryPart($quantity)
-    {
-        return $this->postJson('/api/v1/admin/service-records', $this->payload([
-            [
-                'source'               => 'inventory',
-                'inventory_product_id' => $this->product->id,
-                'quantity'             => $quantity,
+                'amount'       => 100 * $quantity,
             ],
         ]))->assertStatus(201)->json('data.id');
     }

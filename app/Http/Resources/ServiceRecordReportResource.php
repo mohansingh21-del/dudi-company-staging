@@ -133,39 +133,28 @@ class ServiceRecordReportResource extends JsonResource
     protected function spareParts()
     {
         return $this->spareParts->map(function ($part) {
-            $isInventory = $part->source === 'inventory';
-            $storeProduct = $part->storeProduct;
-            $storeName = optional(optional($storeProduct)->store)->name;
+            $inventory = $part->inventory;
+            $storeName = optional(optional($inventory)->store)->name;
 
-            // Rows migrated from the old free-text 'vendor' source have no
-            // store_product_id — they predate stores, so the only name they
-            // ever carried is the free-text vendor_name.
-            if ($isInventory) {
-                $sourceLabel = 'Inventory';
-            } elseif ($storeName) {
-                $sourceLabel = $storeName;
-            } else {
-                $sourceLabel = $part->vendor_name ?: 'Other Vendors';
-            }
+            // Rows written before the two inventories were merged, and the
+            // older free-text vendor rows, point at no stock row — the only
+            // name they ever carried is the free-text vendor_name.
+            $sourceLabel = $storeName ?: ($part->vendor_name ?: 'Other Vendors');
 
             return [
-                'id'                   => $part->id,
-                'source'               => $part->source,
-                'source_label'         => $sourceLabel,
-                'inventory_product_id' => $part->inventory_product_id,
-                'store_product_id'     => $part->store_product_id,
-                'store_id'             => optional($storeProduct)->store_id,
-                'store_name'           => $storeName,
-                'part_name'            => $part->part_name,
-                'vendor_name'          => $part->vendor_name,
-                'quantity'             => (float) $part->quantity,
-                'unit_price'           => (float) $part->unit_price,
-                'amount'               => (float) $part->amount,
-                // Inventory products carry no price in this system, so an issued
-                // part has no billable amount to show — that is not the same as
-                // costing zero rupees, and the report must not imply it is.
-                // Store-sourced parts are bought, so they always carry one.
-                'is_priced'            => !($isInventory && (float) $part->unit_price === 0.00),
+                'id'           => $part->id,
+                'source_label' => $sourceLabel,
+                'inventory_id' => $part->inventory_id,
+                'store_id'     => optional($inventory)->store_id,
+                'store_name'   => $storeName,
+                'part_name'    => $part->part_name,
+                'quantity'     => (float) $part->quantity,
+                'unit_price'   => (float) $part->unit_price,
+                'amount'       => (float) $part->amount,
+                // A part the caller did not price has no billable amount to
+                // show — that is not the same as costing zero rupees, and the
+                // report must not imply it is.
+                'is_priced'    => (float) $part->unit_price > 0.00,
             ];
         })->values()->toArray();
     }

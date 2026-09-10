@@ -8,17 +8,16 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
 /**
- * Shared by both inventories: the mine's own stock (InventoryStockService) and
- * each outside store's stock (StoreStockService). The recipients and the
- * swallow-and-log failure handling are identical for both — only the location
- * named in the mail differs.
+ * Shared by the stock service and the inventory controller. The recipients and
+ * the swallow-and-log failure handling are the same wherever stock runs low —
+ * only the product and the store named in the mail differ.
  */
 trait SendsLowStockAlert
 {
     /**
      * @param  string       $productName
      * @param  float        $currentStock
-     * @param  string|null  $storeName  Null for the mine's own inventory.
+     * @param  string|null  $storeName  The store the stock ran low at.
      * @return void
      */
     protected function sendLowStockAlert($productName, $currentStock, $storeName = null)

@@ -10,9 +10,7 @@ class ServiceSparePart extends Model
 
     protected $fillable = [
         'service_record_id',
-        'source',
-        'inventory_product_id',
-        'store_product_id',
+        'inventory_id',
         'part_name',
         'vendor_name',
         'quantity',
@@ -31,17 +29,15 @@ class ServiceSparePart extends Model
         return $this->belongsTo(ServiceRecord::class, 'service_record_id');
     }
 
-    public function inventoryProduct()
-    {
-        return $this->belongsTo(InventoryProduct::class, 'inventory_product_id');
-    }
-
     /**
-     * Set when source is 'store'. Rows migrated from the old free-text
-     * 'vendor' source have none — they predate stores.
+     * The stock row this part came out of.
+     *
+     * Null on rows written before the two inventories were merged, and on the
+     * older free-text vendor rows. Both keep part_name / vendor_name, which is
+     * what the report falls back to.
      */
-    public function storeProduct()
+    public function inventory()
     {
-        return $this->belongsTo(StoreProduct::class, 'store_product_id');
+        return $this->belongsTo(Inventory::class, 'inventory_id');
     }
 }

@@ -14,32 +14,70 @@ use App\Http\Resources\InventoryResource;
 use App\Http\Resources\InventoryLogResource;
 use App\Http\Resources\EmployeeProductAssignmentResource;
 use App\Imports\InventoryImport;
+use App\Services\Concerns\SendsLowStockAlert;
 use Maatwebsite\Excel\Facades\Excel;
-use Illuminate\Support\Facades\Mail;
-use App\Mail\LowStockAlertMail;
-use App\Models\User;
-use App\Models\Product;
 
+/**
+ * Stock, one row per (store, product).
+ *
+ * There is no store-less stock and no default store: a row is always somewhere.
+ * The floor a deduction may not cross is products.min_stock, set once on the
+ * product and applied identically in every store that carries it.
+ *
+ * store_id is required on every write. On the reads it is an optional filter —
+ * leaving it off spans every store, so a screen that has not been taught about
+ * stores yet still renders.
+ */
 class InventoryController extends Controller
 {
+    use SendsLowStockAlert;
+
+    /**
+     * Standard eager loads. The product carries min_stock, which is the floor
+     * for every row that points at it.
+     *
+     * @var array
+     */
+    protected $with = ['store', 'product.subCategory.category'];
+
     public function index(Request $request)
     {
         try {
             $limit = $request->input('limit', null);
             $page = $request->input('page', 1);
-            $search = $request->input('search', null);
-            $inventories = Inventory::with(['product.subCategory.category']);
+            $inventories = Inventory::with($this->with);
+
+            if ($request->filled('store_id')) {
+                $inventories->where('store_id', (int) $request->store_id);
+            }
+
+            if ($request->filled('product_id')) {
+                $inventories->where('product_id', (int) $request->product_id);
+            }
+
+            // Stock sitting at or under its product's floor. The floor lives on
+            // products, so this has to reach across the join rather than
+            // compare two columns of this table.
+            if ($request->boolean('low_stock')) {
+                $inventories->whereHas('product', function ($query) {
+                    $query->whereColumn('products.min_stock', '>=', 'inventories.left_quantity');
+                });
+            }
 
             if ($request->filled('search')) {
                 $search = $request->search;
-                $inventories->whereHas('product', function ($query) use ($search) {
-                    $query->where('name', 'LIKE', "%{$search}%")
-                        ->orWhereHas('subCategory', function ($q) use ($search) {
-                            $q->where('name', 'LIKE', "%{$search}%")
-                                ->orWhereHas('category', function ($q2) use ($search) {
-                                    $q2->where('name', 'LIKE', "%{$search}%");
-                                });
-                        });
+                $inventories->where(function ($query) use ($search) {
+                    $query->whereHas('product', function ($q) use ($search) {
+                        $q->where('name', 'LIKE', "%{$search}%")
+                            ->orWhereHas('subCategory', function ($sq) use ($search) {
+                                $sq->where('name', 'LIKE', "%{$search}%")
+                                    ->orWhereHas('category', function ($cq) use ($search) {
+                                        $cq->where('name', 'LIKE', "%{$search}%");
+                                    });
+                            });
+                    })->orWhereHas('store', function ($q) use ($search) {
+                        $q->where('name', 'LIKE', "%{$search}%");
+                    });
                 });
             }
 
@@ -88,9 +126,17 @@ class InventoryController extends Controller
         }
     }
 
+    /**
+     * Add stock for a product at a store.
+     *
+     * Re-posting a pair that already exists replenishes it rather than failing —
+     * the unique(store_id, product_id) index is a safety net, not the intended
+     * error path. The same product can be stocked at as many stores as needed.
+     */
     public function store(AddInventoryRequest $request)
     {
         try {
+            $storeId = (int) $request->store_id;
             $product = \App\Models\Product::find($request->product_id);
 
             if ($product && (float) $request->quantity < (float) $product->min_stock) {
@@ -103,7 +149,9 @@ class InventoryController extends Controller
                 ], 422);
             }
 
-            $inventory = Inventory::where('product_id', $request->product_id)->first();
+            $inventory = Inventory::where('store_id', $storeId)
+                ->where('product_id', $request->product_id)
+                ->first();
 
             if ($inventory) {
                 DB::beginTransaction();
@@ -114,6 +162,7 @@ class InventoryController extends Controller
                 // Create inventory log entry
                 InventoryLog::create([
                     'product_id' => $request->product_id,
+                    'store_id' => $storeId,
                     'user_id' => auth()->id(),
                     'type' => 'in',
                     'action' => 'replenished',
@@ -126,20 +175,23 @@ class InventoryController extends Controller
                 return response()->json([
                     'status' => 200,
                     'message' => 'Product stock added to inventory successfully',
-                    'data' => new InventoryResource($inventory->load('product.subCategory.category'))
+                    'data' => new InventoryResource($inventory->load($this->with))
                 ]);
             }
 
             DB::beginTransaction();
             $inventory = Inventory::create([
+                'store_id' => $storeId,
                 'product_id' => $request->product_id,
                 'quantity' => $request->quantity,
-                'left_quantity' => $request->quantity
+                'left_quantity' => $request->quantity,
+                'is_active' => 1
             ]);
 
             // Create inventory log entry
             InventoryLog::create([
                 'product_id' => $request->product_id,
+                'store_id' => $storeId,
                 'user_id' => auth()->id(),
                 'type' => 'in',
                 'action' => 'added',
@@ -152,7 +204,7 @@ class InventoryController extends Controller
             return response()->json([
                 'status' => 200,
                 'message' => 'Product stock added to inventory successfully',
-                'data' => new InventoryResource($inventory->load('product.subCategory.category'))
+                'data' => new InventoryResource($inventory->load($this->with))
             ]);
         } catch (\Throwable $th) {
             DB::rollBack();
@@ -163,31 +215,42 @@ class InventoryController extends Controller
         }
     }
 
+    /**
+     * Issue stock to an employee out of a named store.
+     */
     public function assign(AssignInventoryRequest $request)
     {
         DB::beginTransaction();
         try {
-            $inventory = Inventory::where('product_id', $request->product_id)->first();
+            $storeId = (int) $request->store_id;
 
-            $availableStock = $inventory ? (float) $inventory->left_quantity : 0.00;
+            $inventory = Inventory::with($this->with)
+                ->where('store_id', $storeId)
+                ->where('product_id', $request->product_id)
+                ->first();
+
+            if (!$inventory) {
+                DB::rollBack();
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Validation failed',
+                    'errors' => [
+                        'product_id' => ['This product is not stocked at the selected store.']
+                    ]
+                ], 422);
+            }
+
+            $availableStock = (float) $inventory->left_quantity;
             $quantity = (float) $request->quantity;
-            $product = \App\Models\Product::find($request->product_id);
+            $product = $inventory->product;
             $minStock = $product ? (float) $product->min_stock : 0.00;
+            $productName = optional($product)->name ?? 'Unknown Product';
+            $storeName = optional($inventory->store)->name;
 
             if ($availableStock - $quantity < $minStock) {
-                $productName = optional($product)->name ?? 'Unknown Product';
-                $recipients = User::whereHas('roles', function ($query) {
-                    $query->whereIn('slug', ['super-admin', 'supervisor']);
-                })->get();
+                $this->sendLowStockAlert($productName, $availableStock, $storeName);
 
-                $emails = $recipients->pluck('email')->filter()->toArray();
-                if (!empty($emails)) {
-                    try {
-                        Mail::to($emails)->send(new LowStockAlertMail($productName, $availableStock));
-                    } catch (\Throwable $mailError) {
-                        \Illuminate\Support\Facades\Log::error("Failed to send low stock email: " . $mailError->getMessage());
-                    }
-                }
+                DB::rollBack();
 
                 return response()->json([
                     'status' => 422,
@@ -204,19 +267,7 @@ class InventoryController extends Controller
 
             // Send low stock alert if left_quantity drops to or below min_stock
             if ((float) $inventory->left_quantity <= $minStock) {
-                $productName = optional($product)->name ?? 'Unknown Product';
-                $recipients = User::whereHas('roles', function ($query) {
-                    $query->whereIn('slug', ['super-admin', 'supervisor']);
-                })->get();
-
-                $emails = $recipients->pluck('email')->filter()->toArray();
-                if (!empty($emails)) {
-                    try {
-                        Mail::to($emails)->send(new LowStockAlertMail($productName, (float) $inventory->left_quantity));
-                    } catch (\Throwable $mailError) {
-                        \Illuminate\Support\Facades\Log::error("Failed to send low stock email: " . $mailError->getMessage());
-                    }
-                }
+                $this->sendLowStockAlert($productName, (float) $inventory->left_quantity, $storeName);
             }
 
             $employee = \App\Models\Employee::find($request->employee_id);
@@ -226,6 +277,7 @@ class InventoryController extends Controller
             $assignment = EmployeeProductAssignment::create([
                 'employee_id' => $request->employee_id,
                 'product_id' => $request->product_id,
+                'store_id' => $storeId,
                 'issued_date' => $request->issued_date,
                 'site_id' => $request->site_id,
                 'department_id' => $request->department_id,
@@ -236,6 +288,7 @@ class InventoryController extends Controller
             // Create inventory log entry
             InventoryLog::create([
                 'product_id' => $request->product_id,
+                'store_id' => $storeId,
                 'user_id' => auth()->id(),
                 'type' => 'out',
                 'action' => 'assigned',
@@ -248,7 +301,7 @@ class InventoryController extends Controller
             return response()->json([
                 'status' => 200,
                 'message' => 'Product assigned to employee successfully',
-                'data' => new EmployeeProductAssignmentResource($assignment->load(['employee', 'product.subCategory.category', 'site', 'department']))
+                'data' => new EmployeeProductAssignmentResource($assignment->load(['employee', 'product.subCategory.category', 'store', 'site', 'department']))
             ]);
         } catch (\Throwable $th) {
             DB::rollBack();
@@ -259,15 +312,28 @@ class InventoryController extends Controller
         }
     }
 
-    public function logs(int $productId)
+    /**
+     * Movement history for one stock row.
+     *
+     * Keyed by inventory id rather than product id: the same product moves
+     * independently at every store that carries it, and the log records those
+     * movements against (product_id, store_id).
+     */
+    public function logs(int $id)
     {
         try {
-            $logs = InventoryLog::with(['product', 'user.roles'])
-                ->where('product_id', $productId)
-                // Own-inventory movements only. The same product can also be
-                // stocked at outside stores, whose movements share this table
-                // and are tagged with a store_id.
-                ->whereNull('store_id')
+            $inventory = Inventory::find($id);
+
+            if (!$inventory) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Inventory record not found.'
+                ], 404);
+            }
+
+            $logs = InventoryLog::with(['product', 'store', 'user.roles'])
+                ->where('product_id', $inventory->product_id)
+                ->where('store_id', $inventory->store_id)
                 ->orderBy('created_at', 'desc')
                 ->get();
 
@@ -287,15 +353,7 @@ class InventoryController extends Controller
     public function show(int $id)
     {
         try {
-            $inventory = Inventory::with([
-                'product.subCategory.category',
-                'product.assignments' => function ($query) {
-                    $query->orderBy('created_at', 'desc');
-                },
-                'product.assignments.employee',
-                'product.assignments.site',
-                'product.assignments.department'
-            ])->find($id);
+            $inventory = Inventory::with($this->with)->find($id);
 
             if (!$inventory) {
                 return response()->json([
@@ -313,7 +371,15 @@ class InventoryController extends Controller
                 ], 404);
             }
 
-            $allocationHistory = $product->assignments->map(function ($assignment, $index) {
+            // Scoped to this row's store: the same product issued from another
+            // store came off a different stock row and does not belong here.
+            $assignments = EmployeeProductAssignment::with(['employee', 'site', 'department'])
+                ->where('product_id', $inventory->product_id)
+                ->where('store_id', $inventory->store_id)
+                ->orderBy('created_at', 'desc')
+                ->get();
+
+            $allocationHistory = $assignments->map(function ($assignment, $index) {
                 return [
                     'sr_no' => $index + 1,
                     'employee_name' => optional($assignment->employee)->name,
@@ -330,9 +396,12 @@ class InventoryController extends Controller
                 'message' => 'Product details fetched successfully.',
                 'data' => [
                     'id' => $inventory->id,
+                    'store_id' => $inventory->store_id,
+                    'store_name' => optional($inventory->store)->name,
                     'product_name' => $product->name,
                     'category_name' => optional(optional($product->subCategory)->category)->name,
                     'sub_category_name' => optional($product->subCategory)->name,
+                    'min_stock' => (float) $product->min_stock,
                     'available_stock' => (float) $inventory->left_quantity,
                     'allocation_history' => $allocationHistory
                 ]
@@ -348,14 +417,17 @@ class InventoryController extends Controller
     public function assignments(Request $request)
     {
         try {
-            $assignments = EmployeeProductAssignment::with(['employee', 'product.subCategory.category', 'site', 'department'])
-                ->orderBy('created_at', 'desc')
-                ->get();
+            $assignments = EmployeeProductAssignment::with(['employee', 'product.subCategory.category', 'store', 'site', 'department'])
+                ->orderBy('created_at', 'desc');
+
+            if ($request->filled('store_id')) {
+                $assignments->where('store_id', (int) $request->store_id);
+            }
 
             return response()->json([
                 'status' => 200,
                 'message' => 'Product assignments fetched successfully',
-                'data' => EmployeeProductAssignmentResource::collection($assignments)
+                'data' => EmployeeProductAssignmentResource::collection($assignments->get())
             ]);
         } catch (\Throwable $th) {
             return response()->json([
@@ -369,10 +441,11 @@ class InventoryController extends Controller
     {
         try {
             $request->validate([
+                'store_id' => 'required|integer|exists:stores,id',
                 'file' => 'required|mimes:xlsx,xls,csv'
             ]);
 
-            $import = new InventoryImport;
+            $import = new InventoryImport((int) $request->store_id);
             Excel::import($import, $request->file('file'));
 
             $errors = $import->getErrors();
@@ -411,15 +484,23 @@ class InventoryController extends Controller
         }
     }
 
+    /**
+     * Adjust one stock row.
+     *
+     * `quantity` is a DELTA, not a new total — send 5 to add five, -5 to take
+     * five off. The store is not a parameter: it is whichever store the row
+     * belongs to.
+     */
     public function updateQuantity(Request $request, $id)
     {
         try {
             $request->validate([
                 'quantity' => 'required|numeric',
+                'is_active' => 'nullable|boolean',
                 'remarks' => 'nullable|string|max:255'
             ]);
 
-            $inventory = Inventory::find($id);
+            $inventory = Inventory::with($this->with)->find($id);
 
             if (!$inventory) {
                 return response()->json([
@@ -461,6 +542,11 @@ class InventoryController extends Controller
 
             $inventory->quantity = $newQuantity;
             $inventory->left_quantity = $newLeftQuantity;
+
+            if ($request->filled('is_active')) {
+                $inventory->is_active = (int) $request->is_active;
+            }
+
             $inventory->save();
 
             // Create inventory log entry
@@ -468,6 +554,7 @@ class InventoryController extends Controller
             $logAction = $request->quantity >= 0 ? 'replenished' : 'edited';
             InventoryLog::create([
                 'product_id' => $inventory->product_id,
+                'store_id' => $inventory->store_id,
                 'user_id' => auth()->id(),
                 'type' => $logType,
                 'action' => $logAction,
@@ -480,7 +567,7 @@ class InventoryController extends Controller
             return response()->json([
                 'status' => 200,
                 'message' => 'Product quantity updated successfully in inventory',
-                'data' => new InventoryResource($inventory->load('product.subCategory.category'))
+                'data' => new InventoryResource($inventory->fresh($this->with))
             ]);
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json([
@@ -498,46 +585,101 @@ class InventoryController extends Controller
     }
 
     /**
-     * Get active products that can still be deducted from inventory.
+     * Unmap a product from a store. Refused while stock is still on the shelf —
+     * removing the row would drop that balance with no movement to explain it.
+     */
+    public function destroy(int $id)
+    {
+        try {
+            $inventory = Inventory::find($id);
+
+            if (!$inventory) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Inventory record not found.'
+                ], 404);
+            }
+
+            if ((float) $inventory->left_quantity > 0) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Cannot remove this product from the store while {$inventory->left_quantity} units are still in stock. Reduce the quantity to zero first."
+                ], 422);
+            }
+
+            $inventory->delete();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Product removed from store successfully'
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Dropdown for the service-record form: what can actually be issued.
      *
-     * "Available" means left_quantity is above min_stock, matching the rule
-     * InventoryStockService applies on deduction. A product sitting exactly at
-     * min_stock has stock on the shelf but cannot be issued, so it is excluded.
+     * "Available" means left_quantity is strictly above the product's min_stock,
+     * matching the rule InventoryStockService applies on deduction. A row
+     * sitting exactly at min_stock has stock on the shelf but nothing issuable.
+     *
+     * Keyed by inventory_id, which is what the form posts back — the same
+     * product at two stores is two separate options.
      */
     public function getAvailableProducts(Request $request)
     {
         try {
-            $query = Product::where('is_active', 1)
-                ->whereHas('inventory', function ($q) {
-                    $q->whereColumn('inventories.left_quantity', '>', 'products.min_stock');
-                })
-                ->with(['inventory', 'subCategory.category']);
+            // Joined rather than a whereHas: min_stock is needed for the
+            // comparison, the ordering and the payload, so one join serves all
+            // three and keeps a single reference to products in the query.
+            $query = Inventory::with($this->with)
+                ->join('products', 'products.id', '=', 'inventories.product_id')
+                ->where('inventories.is_active', 1)
+                ->where('products.is_active', 1)
+                ->whereColumn('inventories.left_quantity', '>', 'products.min_stock')
+                ->orderBy('products.name', 'asc')
+                ->select('inventories.*');
 
-            // Optional Search on product / sub category / category name
+            if ($request->filled('store_id')) {
+                $query->where('inventories.store_id', (int) $request->store_id);
+            }
+
+            // Optional Search on product / sub category / category / store name
             if ($request->filled('search')) {
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
-                    $q->where('name', 'LIKE', "%{$search}%")
-                        ->orWhereHas('subCategory', function ($q2) use ($search) {
-                            $q2->where('name', 'LIKE', "%{$search}%")
-                                ->orWhereHas('category', function ($q3) use ($search) {
-                                    $q3->where('name', 'LIKE', "%{$search}%");
-                                });
-                        });
+                    $q->whereHas('product', function ($pq) use ($search) {
+                        $pq->where('products.name', 'LIKE', "%{$search}%")
+                            ->orWhereHas('subCategory', function ($sq) use ($search) {
+                                $sq->where('name', 'LIKE', "%{$search}%")
+                                    ->orWhereHas('category', function ($cq) use ($search) {
+                                        $cq->where('name', 'LIKE', "%{$search}%");
+                                    });
+                            });
+                    })->orWhereHas('store', function ($sq) use ($search) {
+                        $sq->where('name', 'LIKE', "%{$search}%");
+                    });
                 });
             }
 
-            $query->orderBy('name', 'asc');
-
-            $format = function ($product) {
-                $leftQuantity = (float) optional($product->inventory)->left_quantity;
-                $minStock = (float) $product->min_stock;
+            $format = function ($inventory) {
+                $product = $inventory->product;
+                $leftQuantity = (float) $inventory->left_quantity;
+                $minStock = (float) optional($product)->min_stock;
 
                 return [
-                    'product_id'         => $product->id,
-                    'name'               => $product->name,
-                    'sub_category_name'  => optional($product->subCategory)->name,
-                    'category_name'      => optional(optional($product->subCategory)->category)->name,
+                    'inventory_id'       => $inventory->id,
+                    'store_id'           => $inventory->store_id,
+                    'store_name'         => optional($inventory->store)->name,
+                    'product_id'         => $inventory->product_id,
+                    'name'               => optional($product)->name,
+                    'sub_category_name'  => optional(optional($product)->subCategory)->name,
+                    'category_name'      => optional(optional(optional($product)->subCategory)->category)->name,
                     'left_quantity'      => $leftQuantity,
                     'min_stock'          => $minStock,
                     'available_quantity' => $leftQuantity - $minStock,
@@ -545,29 +687,29 @@ class InventoryController extends Controller
             };
 
             if ($request->filled('limit')) {
-                $products = $query->paginate($request->limit);
+                $inventories = $query->paginate($request->limit);
 
                 return response()->json([
                     'status' => 200,
                     'message' => 'Available products fetched successfully',
-                    'data' => collect($products->items())->map($format)->values()->toArray(),
+                    'data' => collect($inventories->items())->map($format)->values()->toArray(),
                     'pagination' => [
-                        'current_page' => $products->currentPage(),
-                        'last_page' => $products->lastPage(),
-                        'per_page' => $products->perPage(),
-                        'total' => $products->total(),
-                        'from' => $products->firstItem(),
-                        'to' => $products->lastItem(),
+                        'current_page' => $inventories->currentPage(),
+                        'last_page' => $inventories->lastPage(),
+                        'per_page' => $inventories->perPage(),
+                        'total' => $inventories->total(),
+                        'from' => $inventories->firstItem(),
+                        'to' => $inventories->lastItem(),
                     ]
                 ]);
             }
 
-            $products = $query->get();
+            $inventories = $query->get();
 
             return response()->json([
                 'status' => 200,
                 'message' => 'Available products fetched successfully',
-                'data' => $products->map($format)->values()->toArray()
+                'data' => $inventories->map($format)->values()->toArray()
             ]);
         } catch (\Throwable $th) {
             return response()->json([

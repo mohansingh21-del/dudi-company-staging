@@ -7,12 +7,12 @@ use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Support\Facades\Schema;
 use App\Http\Requests\Traits\NormalizesServiceRecordInput;
-use App\Http\Requests\Traits\ValidatesStoreSourcedSpareParts;
+use App\Http\Requests\Traits\ValidatesSpareParts;
 
 class UpdateServiceRecordRequest extends FormRequest
 {
     use NormalizesServiceRecordInput;
-    use ValidatesStoreSourcedSpareParts;
+    use ValidatesSpareParts;
 
     public function authorize()
     {
@@ -23,17 +23,16 @@ class UpdateServiceRecordRequest extends FormRequest
     {
         $breakdownTable = Schema::hasTable('breakdowns') ? 'breakdowns' : 'breakdown_tickets';
         $machineTable = Schema::hasTable('machines') ? 'machines' : 'equipment_names';
-        $productTable = Schema::hasTable('inventory_products') ? 'inventory_products' : 'products';
 
         return [
             'is_breakdown_service'                 => 'sometimes|boolean',
             'breakdown_id'                         => 'required_if:is_breakdown_service,true,1|nullable|integer|exists:' . $breakdownTable . ',id',
             'machine_id'                           => 'nullable|integer|exists:' . $machineTable . ',id',
-            // One record draws from one store, against one job card it raised.
-            // Both are required once any part is store-sourced — see
-            // ValidatesStoreSourcedSpareParts.
+            // Every service carries a job card. The store is required once the
+            // record has parts, and every part must come from it — see
+            // ValidatesSpareParts.
             'store_id'                             => 'nullable|integer|exists:stores,id',
-            'job_card_number'                      => 'nullable|string|max:64',
+            'job_card_number'                      => 'sometimes|required|string|max:64',
             'service_date'                         => 'sometimes|date',
             'hours_odometer_reading'               => 'nullable|numeric|min:0',
             'km_run'                               => 'nullable|numeric|min:0',
@@ -63,21 +62,18 @@ class UpdateServiceRecordRequest extends FormRequest
 
             'spare_parts_changed'                  => 'nullable|boolean',
             'spare_parts'                          => 'required_if:spare_parts_changed,true,1|nullable|array',
-            // The bit that says which of the two inventories a part came from:
-            // the mine's own stock, or one outside store.
-            'spare_parts.*.source'                 => 'required_with:spare_parts|string|in:inventory,store',
-            'spare_parts.*.inventory_product_id'   => 'required_if:spare_parts.*.source,inventory|nullable|integer|exists:' . $productTable . ',id',
-            'spare_parts.*.store_product_id'       => 'required_if:spare_parts.*.source,store|nullable|integer|exists:store_products,id',
-            // Both sources resolve the name from the product catalog now, so a
-            // caller-supplied name is only ever a fallback.
+            // The stock row the part came out of. It names both the product
+            // and the store, so nothing else has to be sent to identify it.
+            'spare_parts.*.inventory_id'           => 'required_with:spare_parts|integer|exists:inventories,id',
+            // The name is resolved from the product catalog, so a
+            // caller-supplied one is only ever a fallback.
             'spare_parts.*.part_name'              => 'nullable|string|max:255',
             'spare_parts.*.vendor_name'            => 'nullable|string|max:255',
             'spare_parts.*.quantity'               => 'required_with:spare_parts|numeric|min:0.01',
             // The caller prices the whole line, not each unit: a quantity of 4
             // comes with one amount covering all 4. unit_price is derived from
-            // it server-side, and is only read here for inventory parts.
-            'spare_parts.*.amount'                 => 'required_if:spare_parts.*.source,store|nullable|numeric|min:0',
-            'spare_parts.*.unit_price'             => 'nullable|numeric|min:0',
+            // it server-side. A part left unpriced costs nothing.
+            'spare_parts.*.amount'                 => 'nullable|numeric|min:0',
 
             'attachments'                          => 'nullable|array',
             'attachments.*'                        => 'file|mimes:jpg,jpeg,png,pdf|max:5120',

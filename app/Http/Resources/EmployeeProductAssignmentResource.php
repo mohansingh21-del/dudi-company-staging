@@ -14,6 +14,8 @@ class EmployeeProductAssignmentResource extends JsonResource
             'employee_name' => optional($this->employee)->name,
             'product_id' => $this->product_id,
             'product_name' => optional($this->product)->name,
+            'store_id' => $this->store_id,
+            'store_name' => optional($this->store)->name,
             'site_id' => $this->site_id,
             'site_name' => optional($this->site)->name,
             'department_id' => $this->department_id,

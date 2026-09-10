@@ -9,9 +9,8 @@ use App\Models\ServiceAttachment;
 use App\Models\ServiceStatusHistory;
 use App\Models\ServiceAuditLog;
 use App\Models\Breakdown;
-use App\Models\InventoryProduct;
+use App\Models\Inventory;
 use App\Models\Machine;
-use App\Models\StoreProduct;
 use App\Http\Resources\ServiceRecordHistoryResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -26,17 +25,9 @@ class ServiceRecordService
      */
     protected $inventoryStockService;
 
-    /**
-     * @var StoreStockService
-     */
-    protected $storeStockService;
-
-    public function __construct(
-        InventoryStockService $inventoryStockService,
-        StoreStockService $storeStockService
-    ) {
+    public function __construct(InventoryStockService $inventoryStockService)
+    {
         $this->inventoryStockService = $inventoryStockService;
-        $this->storeStockService = $storeStockService;
     }
 
     /**
@@ -124,9 +115,9 @@ class ServiceRecordService
 
             $status = $downtimeMinutes !== null ? 'completed' : 'pending';
 
-            // One record draws parts from at most one outside store, against the
-            // one job card that store raised. Enforced per part in
-            // StoreStockService::deductStock().
+            // One record draws its parts from one store. Validation resolves
+            // the store from the parts and checks it matches; deductStock
+            // enforces the same rule again per part.
             $storeId = isset($data['store_id']) && $data['store_id'] !== null
                 ? (int) $data['store_id']
                 : null;
@@ -201,72 +192,38 @@ class ServiceRecordService
             $sparePartsTotal = 0.00;
             if ($serviceRecord->spare_parts_changed && isset($data['spare_parts']) && is_array($data['spare_parts'])) {
                 foreach ($data['spare_parts'] as $part) {
-                    $source = isset($part['source']) ? $part['source'] : 'inventory';
+                    $inventoryId = (int) $part['inventory_id'];
                     $quantity = (float) (isset($part['quantity']) ? $part['quantity'] : 1.00);
 
-                    if ($source === 'inventory') {
-                        $inventoryProductId = (int) $part['inventory_product_id'];
+                    // Rejects a part belonging to any store other than the
+                    // record's own, and enforces products.min_stock as a hard
+                    // floor.
+                    $stockResult = $this->inventoryStockService->deductStock(
+                        $inventoryId,
+                        $quantity,
+                        $userId,
+                        $storeId,
+                        "Ticket: {$ticketNumber}"
+                    );
 
-                        // Deduct stock via existing Inventory module service (ensures min_stock check)
-                        $stockResult = $this->inventoryStockService->deductStock(
-                            $inventoryProductId,
-                            $quantity,
-                            $userId,
-                            "Ticket: {$ticketNumber}"
-                        );
+                    // The caller prices the whole line, not each unit: a
+                    // quantity of 4 comes with one amount covering all 4, and
+                    // unit_price is derived from it. A part the caller does not
+                    // price costs nothing on the record.
+                    $partAmount = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
+                    $unitPrice = $quantity > 0 ? $partAmount / $quantity : 0.00;
 
-                        $partName = $stockResult['part_name'];
-                        $unitPrice = (float) (isset($part['unit_price']) ? $part['unit_price'] : $stockResult['unit_price']);
-                        $partAmount = $quantity * $unitPrice;
+                    ServiceSparePart::create([
+                        'service_record_id' => $serviceRecord->id,
+                        'inventory_id'      => $inventoryId,
+                        'part_name'         => $stockResult['part_name'],
+                        'vendor_name'       => $stockResult['store_name'],
+                        'quantity'          => $quantity,
+                        'unit_price'        => $unitPrice,
+                        'amount'            => $partAmount,
+                    ]);
 
-                        ServiceSparePart::create([
-                            'service_record_id'    => $serviceRecord->id,
-                            'source'               => 'inventory',
-                            'inventory_product_id' => $inventoryProductId,
-                            'store_product_id'     => null,
-                            'part_name'            => $partName,
-                            'vendor_name'          => null,
-                            'quantity'             => $quantity,
-                            'unit_price'           => $unitPrice,
-                            'amount'               => $partAmount,
-                        ]);
-
-                        $sparePartsTotal += $partAmount;
-                    } else {
-                        $storeProductId = (int) $part['store_product_id'];
-
-                        // Deduct from the outside store's stock. Rejects a part
-                        // belonging to any store other than the record's own,
-                        // and enforces that store's threshold as a hard floor.
-                        $stockResult = $this->storeStockService->deductStock(
-                            $storeProductId,
-                            $quantity,
-                            $userId,
-                            $storeId,
-                            "Ticket: {$ticketNumber}"
-                        );
-
-                        // Unlike own-inventory parts, store parts are bought and
-                        // therefore priced — their cost belongs in the record total.
-                        // The caller prices the whole line, not each unit, so
-                        // amount is what it sends and unit_price is derived.
-                        $partAmount = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
-                        $unitPrice = $quantity > 0 ? $partAmount / $quantity : 0.00;
-
-                        ServiceSparePart::create([
-                            'service_record_id'    => $serviceRecord->id,
-                            'source'               => 'store',
-                            'inventory_product_id' => null,
-                            'store_product_id'     => $storeProductId,
-                            'part_name'            => $stockResult['part_name'],
-                            'vendor_name'          => $stockResult['store_name'],
-                            'quantity'             => $quantity,
-                            'unit_price'           => $unitPrice,
-                            'amount'               => $partAmount,
-                        ]);
-
-                        $sparePartsTotal += $partAmount;
-                    }
+                    $sparePartsTotal += $partAmount;
                 }
             }
 
@@ -326,8 +283,7 @@ class ServiceRecordService
                 'site',
                 'breakdown',
                 'checklistDetail',
-                'spareParts.inventoryProduct',
-                'spareParts.storeProduct.store',
+                'spareParts.inventory.store',
                 'store',
                 'attachments',
                 'statusHistory',
@@ -370,8 +326,8 @@ class ServiceRecordService
                 $record->performed_by = $data['performed_by'];
             }
             // Set before syncSpareParts runs: it reads $record->store_id to
-            // check that every store-sourced part comes from this record's
-            // store, so the new value has to be in place first.
+            // check that every part comes from this record's store, so the new
+            // value has to be in place first.
             if (array_key_exists('store_id', $data)) {
                 $record->store_id = $data['store_id'] !== null ? (int) $data['store_id'] : null;
             }
@@ -565,8 +521,7 @@ class ServiceRecordService
                 'site',
                 'breakdown',
                 'checklistDetail',
-                'spareParts.inventoryProduct',
-                'spareParts.storeProduct.store',
+                'spareParts.inventory.store',
                 'store',
                 'attachments',
                 'statusHistory',
@@ -578,19 +533,18 @@ class ServiceRecordService
     }
 
     /**
-     * Replace a record's spare parts, reconciling both inventories as it goes.
+     * Replace a record's spare parts, reconciling stock as it goes.
      *
      * Stock moves on the net change per stock row rather than on each part row,
      * so re-saving a form without touching the parts writes nothing to the
      * ledger, and lowering a quantity from 5 to 3 returns 2 units instead of
      * returning 5 and re-issuing 3.
      *
-     * The mine's own stock is keyed by product; each outside store's stock is
-     * keyed by store_products row. The two are reconciled independently — the
-     * same product held in both places has two separate balances — but returns
-     * for both run before deductions for either, so stock freed by a removed
-     * part is available to the parts replacing it, floor checks included.
-     * Swapping one part for another can't fail on stock the swap itself frees.
+     * Rows are keyed by inventory id, which already carries the store — the
+     * same product held at two stores is two independent balances. Every return
+     * runs before every deduction, so stock freed by a removed part is
+     * available to the parts replacing it, floor checks included: swapping one
+     * part for another can't fail on stock the swap itself frees.
      *
      * @param  ServiceRecord  $record
      * @param  array  $parts  The full list the record should end up with.
@@ -605,104 +559,60 @@ class ServiceRecordService
             return null;
         }
 
-        // Own inventory, keyed by product id.
+        // Keyed by inventory id — the store is already part of that key.
         $oldQuantities = [];
-        // Outside stores, keyed by store_products id.
-        $oldStoreQuantities = [];
 
         foreach ($existing as $row) {
-            if ($row->source === 'inventory' && $row->inventory_product_id) {
-                $productId = (int) $row->inventory_product_id;
-                $oldQuantities[$productId] = (isset($oldQuantities[$productId]) ? $oldQuantities[$productId] : 0.00)
-                    + (float) $row->quantity;
+            // Rows written before the two inventories were merged, and the
+            // older free-text vendor rows, point at nothing and never moved
+            // stock here, so they have nothing to return.
+            if (!$row->inventory_id) {
                 continue;
             }
 
-            // Rows migrated from the old free-text 'vendor' source have no
-            // store_product_id and never moved stock, so they have nothing to
-            // return.
-            if ($row->source === 'store' && $row->store_product_id) {
-                $storeProductId = (int) $row->store_product_id;
-                $oldStoreQuantities[$storeProductId] = (isset($oldStoreQuantities[$storeProductId]) ? $oldStoreQuantities[$storeProductId] : 0.00)
-                    + (float) $row->quantity;
-            }
+            $inventoryId = (int) $row->inventory_id;
+            $oldQuantities[$inventoryId] = (isset($oldQuantities[$inventoryId]) ? $oldQuantities[$inventoryId] : 0.00)
+                + (float) $row->quantity;
         }
 
         $newQuantities = [];
-        $newStoreQuantities = [];
 
         foreach ($parts as $part) {
-            $source = isset($part['source']) ? $part['source'] : 'inventory';
-            $quantity = (float) (isset($part['quantity']) ? $part['quantity'] : 1.00);
-
-            if ($source === 'inventory') {
-                if (empty($part['inventory_product_id'])) {
-                    continue;
-                }
-
-                $productId = (int) $part['inventory_product_id'];
-                $newQuantities[$productId] = (isset($newQuantities[$productId]) ? $newQuantities[$productId] : 0.00)
-                    + $quantity;
+            if (empty($part['inventory_id'])) {
                 continue;
             }
 
-            if (empty($part['store_product_id'])) {
-                continue;
-            }
-
-            $storeProductId = (int) $part['store_product_id'];
-            $newStoreQuantities[$storeProductId] = (isset($newStoreQuantities[$storeProductId]) ? $newStoreQuantities[$storeProductId] : 0.00)
-                + $quantity;
+            $inventoryId = (int) $part['inventory_id'];
+            $newQuantities[$inventoryId] = (isset($newQuantities[$inventoryId]) ? $newQuantities[$inventoryId] : 0.00)
+                + (float) (isset($part['quantity']) ? $part['quantity'] : 1.00);
         }
 
         list($returns, $deductions) = $this->netStockChanges($oldQuantities, $newQuantities);
-        list($storeReturns, $storeDeductions) = $this->netStockChanges($oldStoreQuantities, $newStoreQuantities);
 
-        // Every return first, across both inventories, then every deduction.
-        foreach ($returns as $productId => $quantity) {
+        // Every return first, then every deduction.
+        foreach ($returns as $inventoryId => $quantity) {
             $this->inventoryStockService->restockStock(
-                $productId,
+                $inventoryId,
                 $quantity,
                 $userId,
                 "Ticket: {$record->ticket_number}"
             );
-        }
-
-        foreach ($storeReturns as $storeProductId => $quantity) {
-            $this->storeStockService->restockStock(
-                $storeProductId,
-                $quantity,
-                $userId,
-                "Ticket: {$record->ticket_number}"
-            );
-        }
-
-        $partNames = [];
-        foreach ($deductions as $productId => $quantity) {
-            $result = $this->inventoryStockService->deductStock(
-                $productId,
-                $quantity,
-                $userId,
-                "Ticket: {$record->ticket_number}"
-            );
-
-            $partNames[$productId] = $result['part_name'];
         }
 
         $storeId = $record->store_id !== null ? (int) $record->store_id : null;
-        $storePartNames = [];
+        $partNames = [];
         $storeNames = [];
-        foreach ($storeDeductions as $storeProductId => $quantity) {
-            $result = $this->storeStockService->deductStock(
-                $storeProductId,
+        foreach ($deductions as $inventoryId => $quantity) {
+            $result = $this->inventoryStockService->deductStock(
+                $inventoryId,
                 $quantity,
                 $userId,
                 $storeId,
                 "Ticket: {$record->ticket_number}"
             );
 
-            $storePartNames[$storeProductId] = $result['part_name'];
-            $storeNames[$storeProductId] = $result['store_name'];
+            $partNames[$inventoryId] = $result['part_name'];
+            $storeNames[$inventoryId] = $result['store_name'];
         }
 
         $before = $this->sparePartsSummary($existing);
@@ -710,65 +620,35 @@ class ServiceRecordService
         ServiceSparePart::where('service_record_id', $record->id)->delete();
 
         foreach ($parts as $part) {
-            $source = isset($part['source']) ? $part['source'] : 'inventory';
+            $inventoryId = (int) $part['inventory_id'];
             $quantity = (float) (isset($part['quantity']) ? $part['quantity'] : 1.00);
 
-            if ($source === 'inventory') {
-                $productId = (int) $part['inventory_product_id'];
-
-                // A product whose quantity was unchanged or reduced never went
-                // through deductStock above, so its name is still unresolved.
-                if (!isset($partNames[$productId])) {
-                    $product = InventoryProduct::find($productId);
-                    $partNames[$productId] = $product ? $product->name : 'Unknown Product';
-                }
-
-                // Inventory-issued parts carry no price: products are tracked by
-                // quantity only, and their cost sits in the inventory module.
-                ServiceSparePart::create([
-                    'service_record_id'    => $record->id,
-                    'source'               => 'inventory',
-                    'inventory_product_id' => $productId,
-                    'store_product_id'     => null,
-                    'part_name'            => $partNames[$productId],
-                    'vendor_name'          => null,
-                    'quantity'             => $quantity,
-                    'unit_price'           => 0.00,
-                    'amount'               => 0.00,
-                ]);
-
-                continue;
-            }
-
-            $storeProductId = (int) $part['store_product_id'];
-
-            // Same as above: unchanged or reduced rows skipped deductStock.
-            if (!isset($storePartNames[$storeProductId])) {
-                $storeProduct = StoreProduct::with(['product', 'store'])->find($storeProductId);
-                $storePartNames[$storeProductId] = $storeProduct
-                    ? (optional($storeProduct->product)->name ?: 'Unknown Product')
+            // A row whose quantity was unchanged or reduced never went through
+            // deductStock above, so its names are still unresolved.
+            if (!isset($partNames[$inventoryId])) {
+                $inventory = Inventory::with(['product', 'store'])->find($inventoryId);
+                $partNames[$inventoryId] = $inventory
+                    ? (optional($inventory->product)->name ?: 'Unknown Product')
                     : 'Unknown Product';
-                $storeNames[$storeProductId] = $storeProduct
-                    ? optional($storeProduct->store)->name
+                $storeNames[$inventoryId] = $inventory
+                    ? optional($inventory->store)->name
                     : null;
             }
 
-            // Store parts keep their price, unlike inventory ones — they were
-            // bought, and dropping the amount here would quietly erase money
-            // that create() recorded on the record total. Same shape as create():
-            // the caller prices the line, unit_price is derived from it.
+            // Parts keep their price: dropping the amount here would quietly
+            // erase money that create() recorded on the record total. Same
+            // shape as create() — the caller prices the line, unit_price is
+            // derived from it.
             $partAmount = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
 
             ServiceSparePart::create([
-                'service_record_id'    => $record->id,
-                'source'               => 'store',
-                'inventory_product_id' => null,
-                'store_product_id'     => $storeProductId,
-                'part_name'            => $storePartNames[$storeProductId],
-                'vendor_name'          => isset($storeNames[$storeProductId]) ? $storeNames[$storeProductId] : null,
-                'quantity'             => $quantity,
-                'unit_price'           => $quantity > 0 ? $partAmount / $quantity : 0.00,
-                'amount'               => $partAmount,
+                'service_record_id' => $record->id,
+                'inventory_id'      => $inventoryId,
+                'part_name'         => $partNames[$inventoryId],
+                'vendor_name'       => isset($storeNames[$inventoryId]) ? $storeNames[$inventoryId] : null,
+                'quantity'          => $quantity,
+                'unit_price'        => $quantity > 0 ? $partAmount / $quantity : 0.00,
+                'amount'            => $partAmount,
             ]);
         }
 
@@ -784,9 +664,8 @@ class ServiceRecordService
     }
 
     /**
-     * Split per-key old/new quantities into what must be returned and what must
-     * be issued. Shared by both inventories — they differ only in what the key
-     * means (a product for own stock, a store_products row for store stock).
+     * Split per-inventory-row old/new quantities into what must be returned and
+     * what must be issued.
      *
      * @param  array  $old
      * @param  array  $new
@@ -824,13 +703,11 @@ class ServiceRecordService
     {
         return $parts->map(function ($part) {
             return [
-                'source'               => $part->source,
-                'inventory_product_id' => $part->inventory_product_id ? (int) $part->inventory_product_id : null,
-                'store_product_id'     => $part->store_product_id ? (int) $part->store_product_id : null,
-                'part_name'            => $part->part_name,
-                'vendor_name'          => $part->vendor_name,
-                'quantity'             => (float) $part->quantity,
-                'amount'               => (float) $part->amount,
+                'inventory_id' => $part->inventory_id ? (int) $part->inventory_id : null,
+                'part_name'    => $part->part_name,
+                'vendor_name'  => $part->vendor_name,
+                'quantity'     => (float) $part->quantity,
+                'amount'       => (float) $part->amount,
             ];
         })->values()->all();
     }

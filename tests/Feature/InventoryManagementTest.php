@@ -11,6 +11,7 @@ use App\Models\Employee;
 use App\Models\Site;
 use App\Models\Department;
 use App\Models\Inventory;
+use App\Models\Store;
 use App\Models\InventoryLog;
 use App\Models\EmployeeProductAssignment;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -24,6 +25,7 @@ class InventoryManagementTest extends TestCase
     use RefreshDatabase;
 
     protected $adminUser;
+    protected $store;
     protected $category;
     protected $subCategory;
     protected $product;
@@ -71,6 +73,12 @@ class InventoryManagementTest extends TestCase
             'is_active' => 1
         ]);
 
+        // Every stock row belongs to a store; there is no default one.
+        $this->store = Store::create([
+            'name' => 'Central Store',
+            'is_active' => 1
+        ]);
+
         // Create a site
         $this->site = Site::create([
             'site_name' => 'East Mine',
@@ -98,6 +106,7 @@ class InventoryManagementTest extends TestCase
     public function test_can_add_product_to_inventory()
     {
         $response = $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 100.50,
             'remarks' => 'Initial stock addition'
@@ -126,6 +135,7 @@ class InventoryManagementTest extends TestCase
     {
         // min_stock is 5
         $response = $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 3.00,
             'remarks' => 'Adding low stock'
@@ -145,6 +155,7 @@ class InventoryManagementTest extends TestCase
     public function test_can_list_inventory()
     {
         Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 250.00,
             'left_quantity' => 250.00
@@ -171,12 +182,14 @@ class InventoryManagementTest extends TestCase
     {
         // Add initial stock first
         Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 50.00,
             'left_quantity' => 50.00
         ]);
 
         $response = $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'employee_id' => $this->employee->id,
             'site_id' => $this->site->id,
@@ -221,12 +234,14 @@ class InventoryManagementTest extends TestCase
     public function test_can_assign_product_to_employee_with_custom_quantity()
     {
         Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 50.00,
             'left_quantity' => 50.00
         ]);
 
         $response = $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'employee_id' => $this->employee->id,
             'site_id' => $this->site->id,
@@ -266,12 +281,14 @@ class InventoryManagementTest extends TestCase
     {
         // Add initial stock first
         Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 50.00,
             'left_quantity' => 50.00
         ]);
 
         $response = $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'employee_id' => $this->employee->id,
             'site_id' => null,
@@ -311,12 +328,14 @@ class InventoryManagementTest extends TestCase
     {
         // Inventory is 0.5 (less than the default assignment quantity of 1)
         Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 10.00,
             'left_quantity' => 0.50
         ]);
 
         $response = $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'employee_id' => $this->employee->id,
             'site_id' => $this->site->id,
@@ -337,10 +356,11 @@ class InventoryManagementTest extends TestCase
             ]);
     }
 
-    public function test_validation_fails_when_product_has_no_inventory()
+    public function test_validation_fails_when_product_is_not_stocked_at_the_store()
     {
-        // No Inventory record is created for this product
+        // No Inventory record is created for this product at this store
         $response = $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'employee_id' => $this->employee->id,
             'site_id' => $this->site->id,
@@ -356,14 +376,22 @@ class InventoryManagementTest extends TestCase
             ])
             ->assertJsonStructure([
                 'errors' => [
-                    'quantity'
+                    'product_id'
                 ]
             ]);
     }
 
     public function test_can_get_inventory_logs()
     {
+        $inventory = Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 100.00,
+            'left_quantity' => 100.00
+        ]);
+
         InventoryLog::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'user_id' => $this->adminUser->id,
             'type' => 'in',
@@ -372,7 +400,7 @@ class InventoryManagementTest extends TestCase
             'remarks' => 'Log entry'
         ]);
 
-        $response = $this->getJson("/api/v1/admin/inventories/{$this->product->id}/logs");
+        $response = $this->getJson("/api/v1/admin/inventories/{$inventory->id}/logs");
 
         $response->assertStatus(200)
             ->assertJsonFragment([
@@ -390,6 +418,7 @@ class InventoryManagementTest extends TestCase
         EmployeeProductAssignment::create([
             'employee_id' => $this->employee->id,
             'product_id' => $this->product->id,
+            'store_id' => $this->store->id,
             'site_id' => $this->site->id,
             'department_id' => $this->department->id,
             'quantity' => 20.00,
@@ -408,7 +437,7 @@ class InventoryManagementTest extends TestCase
 
     public function test_inventory_import_processes_rows()
     {
-        $import = new \App\Imports\InventoryImport();
+        $import = new \App\Imports\InventoryImport($this->store->id);
         $import->collection(collect([
             collect(['product_name' => 'Test Product', 'quantity' => 10.00]),
             collect(['product_name' => 'Nonexistent Product', 'quantity' => 20.00]),
@@ -420,7 +449,7 @@ class InventoryManagementTest extends TestCase
         $this->assertCount(3, $import->getErrors());
         $this->assertStringContainsString("Product 'Nonexistent Product' not found", $import->getErrors()[0]['message']);
         $this->assertStringContainsString("must be at least 5", $import->getErrors()[1]['message']);
-        $this->assertStringContainsString("is already added to inventory", $import->getErrors()[2]['message']);
+        $this->assertStringContainsString("is already added to this store's inventory", $import->getErrors()[2]['message']);
 
         // Assert database had stock updated
         $this->assertDatabaseHas('inventories', [
@@ -433,6 +462,7 @@ class InventoryManagementTest extends TestCase
     {
         // Add initial stock
         $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 100.50,
             'remarks' => 'Initial stock addition'
@@ -440,6 +470,7 @@ class InventoryManagementTest extends TestCase
 
         // Try to add stock again for the same product
         $response = $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 50.00,
             'remarks' => 'Adding more stock'
@@ -465,11 +496,15 @@ class InventoryManagementTest extends TestCase
         ]);
     }
 
-    public function test_bulk_upload_requires_file()
+    public function test_bulk_upload_requires_file_and_store()
     {
-        $response = $this->postJson('/api/v1/admin/inventories/bulk-upload', []);
+        $this->postJson('/api/v1/admin/inventories/bulk-upload', [])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['file', 'store_id']);
 
-        $response->assertStatus(422);
+        $this->postJson('/api/v1/admin/inventories/bulk-upload', ['store_id' => $this->store->id])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('file');
     }
 
     public function test_assign_triggers_low_stock_mail_to_admin_and_supervisor()
@@ -505,12 +540,14 @@ class InventoryManagementTest extends TestCase
 
         // Inventory is 0.00
         Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 10.00,
             'left_quantity' => 0.00
         ]);
 
         $response = $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'employee_id' => $this->employee->id,
             'site_id' => $this->site->id,
@@ -559,12 +596,14 @@ class InventoryManagementTest extends TestCase
         // Product min_stock is 5.00
         // Set left_quantity to 6.00. Assigning 1 will make it 5.00 (equal to min_stock)
         Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 10.00,
             'left_quantity' => 6.00
         ]);
 
         $response = $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'employee_id' => $this->employee->id,
             'site_id' => $this->site->id,
@@ -583,6 +622,7 @@ class InventoryManagementTest extends TestCase
     public function test_can_update_inventory_quantity()
     {
         $inventory = Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 100.00,
             'left_quantity' => 50.00
@@ -616,6 +656,7 @@ class InventoryManagementTest extends TestCase
     public function test_update_inventory_quantity_fails_when_below_min_stock()
     {
         $inventory = Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 10.00,
             'left_quantity' => 10.00
@@ -642,6 +683,7 @@ class InventoryManagementTest extends TestCase
     public function test_update_inventory_quantity_can_decrease_quantity()
     {
         $inventory = Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 100.00,
             'left_quantity' => 50.00
@@ -677,6 +719,7 @@ class InventoryManagementTest extends TestCase
     public function test_update_inventory_quantity_fails_when_decrease_exceeds_available_stock()
     {
         $inventory = Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 10.00,
             'left_quantity' => 2.00 // 8 are assigned
@@ -704,6 +747,7 @@ class InventoryManagementTest extends TestCase
     {
         // 1. Added
         $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 10.00
         ]);
@@ -716,6 +760,7 @@ class InventoryManagementTest extends TestCase
 
         // 2. Replenished
         $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 15.00
         ]);
@@ -728,6 +773,7 @@ class InventoryManagementTest extends TestCase
 
         // 3. Assigned
         $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'employee_id' => $this->employee->id,
             'site_id' => $this->site->id,
@@ -759,6 +805,7 @@ class InventoryManagementTest extends TestCase
     public function test_can_view_particular_inventory_product_details()
     {
         $inventory = Inventory::create([
+            'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 1000.00,
             'left_quantity' => 500.00
@@ -767,6 +814,7 @@ class InventoryManagementTest extends TestCase
         EmployeeProductAssignment::create([
             'employee_id' => $this->employee->id,
             'product_id' => $this->product->id,
+            'store_id' => $this->store->id,
             'site_id' => $this->site->id,
             'department_id' => $this->department->id,
             'quantity' => 500.00,
@@ -798,6 +846,223 @@ class InventoryManagementTest extends TestCase
                     ]
                 ]
             ]);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Store scoping
+    |--------------------------------------------------------------------------
+    | The same product stocked at two stores is two independent balances. These
+    | cover what the old separate store-inventory module used to.
+    */
+
+    public function test_same_product_can_be_stocked_at_two_stores()
+    {
+        $other = Store::create(['name' => 'North Store', 'is_active' => 1]);
+
+        $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 40.00
+        ])->assertStatus(200);
+
+        $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $other->id,
+            'product_id' => $this->product->id,
+            'quantity' => 25.00
+        ])->assertStatus(200);
+
+        $this->assertSame(2, Inventory::where('product_id', $this->product->id)->count());
+        $this->assertDatabaseHas('inventories', [
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 40.00
+        ]);
+        $this->assertDatabaseHas('inventories', [
+            'store_id' => $other->id,
+            'product_id' => $this->product->id,
+            'quantity' => 25.00
+        ]);
+    }
+
+    public function test_index_can_filter_by_store()
+    {
+        $other = Store::create(['name' => 'North Store', 'is_active' => 1]);
+
+        Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 40.00,
+            'left_quantity' => 40.00
+        ]);
+        Inventory::create([
+            'store_id' => $other->id,
+            'product_id' => $this->product->id,
+            'quantity' => 25.00,
+            'left_quantity' => 25.00
+        ]);
+
+        // No store_id spans every store.
+        $this->getJson('/api/v1/admin/inventories')
+            ->assertStatus(200)
+            ->assertJsonCount(2, 'data');
+
+        $response = $this->getJson("/api/v1/admin/inventories?store_id={$other->id}");
+
+        $response->assertStatus(200)->assertJsonCount(1, 'data');
+        $this->assertSame($other->id, $response->json('data.0.store_id'));
+        $this->assertSame('North Store', $response->json('data.0.store_name'));
+    }
+
+    public function test_index_can_filter_low_stock_against_product_min_stock()
+    {
+        $spare = Product::create([
+            'sub_category_id' => $this->subCategory->id,
+            'name' => 'Well Stocked Product',
+            'min_stock' => 5,
+            'is_active' => 1
+        ]);
+
+        // At its floor of 5 — low.
+        Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 5.00,
+            'left_quantity' => 5.00
+        ]);
+        // Above it — not low.
+        Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $spare->id,
+            'quantity' => 50.00,
+            'left_quantity' => 50.00
+        ]);
+
+        $response = $this->getJson('/api/v1/admin/inventories?low_stock=1');
+
+        $response->assertStatus(200)->assertJsonCount(1, 'data');
+        $this->assertSame($this->product->id, $response->json('data.0.product_id'));
+        $this->assertTrue($response->json('data.0.is_low_stock'));
+    }
+
+    public function test_available_products_is_scoped_to_a_store_and_floored_at_min_stock()
+    {
+        $other = Store::create(['name' => 'North Store', 'is_active' => 1]);
+
+        // Above min_stock of 5 — issuable.
+        $stocked = Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 20.00,
+            'left_quantity' => 20.00
+        ]);
+        // Exactly at min_stock — on the shelf, but nothing issuable.
+        Inventory::create([
+            'store_id' => $other->id,
+            'product_id' => $this->product->id,
+            'quantity' => 5.00,
+            'left_quantity' => 5.00
+        ]);
+
+        $response = $this->getJson("/api/v1/available-products?store_id={$this->store->id}");
+
+        $response->assertStatus(200)->assertJsonCount(1, 'data');
+        $this->assertSame($stocked->id, $response->json('data.0.inventory_id'));
+        $this->assertEquals(15.0, $response->json('data.0.available_quantity'));
+
+        $this->getJson("/api/v1/available-products?store_id={$other->id}")
+            ->assertStatus(200)
+            ->assertJsonCount(0, 'data');
+    }
+
+    public function test_assign_only_draws_from_the_named_store()
+    {
+        $other = Store::create(['name' => 'North Store', 'is_active' => 1]);
+
+        Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 50.00,
+            'left_quantity' => 50.00
+        ]);
+
+        // Stocked at $this->store, not at $other.
+        $this->postJson('/api/v1/admin/inventories/assign', [
+            'store_id' => $other->id,
+            'product_id' => $this->product->id,
+            'employee_id' => $this->employee->id,
+            'department_id' => $this->department->id,
+            'issued_date' => '2026-06-10',
+            'quantity' => 1.00
+        ])->assertStatus(422)->assertJsonValidationErrors('product_id');
+
+        $this->assertSame('50.00', Inventory::where('store_id', $this->store->id)->first()->left_quantity);
+    }
+
+    public function test_logs_are_scoped_to_one_stores_movements()
+    {
+        $other = Store::create(['name' => 'North Store', 'is_active' => 1]);
+
+        $mine = Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 10.00,
+            'left_quantity' => 10.00
+        ]);
+
+        InventoryLog::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'user_id' => $this->adminUser->id,
+            'type' => 'in',
+            'action' => 'added',
+            'quantity' => 10.00,
+            'remarks' => 'Central movement'
+        ]);
+        InventoryLog::create([
+            'store_id' => $other->id,
+            'product_id' => $this->product->id,
+            'user_id' => $this->adminUser->id,
+            'type' => 'in',
+            'action' => 'added',
+            'quantity' => 99.00,
+            'remarks' => 'North movement'
+        ]);
+
+        $response = $this->getJson("/api/v1/admin/inventories/{$mine->id}/logs");
+
+        $response->assertStatus(200)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonFragment(['remarks' => 'Central movement', 'store_name' => 'Central Store'])
+            ->assertJsonMissing(['remarks' => 'North movement']);
+    }
+
+    public function test_can_remove_a_product_from_a_store_only_once_its_stock_is_zero()
+    {
+        $inventory = Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 10.00,
+            'left_quantity' => 10.00
+        ]);
+
+        $this->deleteJson("/api/v1/admin/inventories/{$inventory->id}")
+            ->assertStatus(422);
+        $this->assertDatabaseHas('inventories', ['id' => $inventory->id]);
+
+        $inventory->update(['left_quantity' => 0.00]);
+
+        $this->deleteJson("/api/v1/admin/inventories/{$inventory->id}")
+            ->assertStatus(200);
+        $this->assertDatabaseMissing('inventories', ['id' => $inventory->id]);
+    }
+
+    public function test_add_requires_a_store()
+    {
+        $this->postJson('/api/v1/admin/inventories/add', [
+            'product_id' => $this->product->id,
+            'quantity' => 10.00
+        ])->assertStatus(422)->assertJsonValidationErrors('store_id');
     }
 
     public function test_unauthenticated_request_returns_json_error()

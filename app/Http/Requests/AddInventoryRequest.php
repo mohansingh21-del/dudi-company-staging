@@ -16,6 +16,7 @@ class AddInventoryRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'store_id' => 'required|integer|exists:stores,id',
             'product_id' => 'required|exists:products,id',
             'quantity' => 'required|numeric|min:0.01',
             'remarks' => 'nullable|string|max:255',
@@ -25,6 +26,8 @@ class AddInventoryRequest extends FormRequest
     public function messages(): array
     {
         return [
+            'store_id.required' => 'Store is required.',
+            'store_id.exists' => 'Selected store is invalid.',
             'product_id.required' => 'Product is required.',
             'product_id.exists' => 'Selected product is invalid.',
             'quantity.required' => 'Quantity is required.',

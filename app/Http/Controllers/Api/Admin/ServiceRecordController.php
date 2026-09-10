@@ -172,7 +172,7 @@ class ServiceRecordController extends Controller
                 'site',
                 'breakdown:id,ticket_number,status',
                 'checklistDetail',
-                'spareParts.storeProduct.store',
+                'spareParts.inventory.store',
                 'store',
                 'attachments',
                 'creator:id,email',

@@ -27,20 +27,11 @@ class Product extends Model
     }
 
     /**
-     * The mine's own stock of this product. Outside stores hold the same
-     * product separately — see storeProducts().
+     * This product's stock at each store that carries it — one row per store.
      */
-    public function inventory()
+    public function inventories()
     {
-        return $this->hasOne(Inventory::class, 'product_id');
-    }
-
-    /**
-     * This product's stock at each outside store that carries it.
-     */
-    public function storeProducts()
-    {
-        return $this->hasMany(StoreProduct::class, 'product_id');
+        return $this->hasMany(Inventory::class, 'product_id');
     }
 
     public function inventoryLogs()

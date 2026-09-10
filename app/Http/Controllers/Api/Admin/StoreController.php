@@ -7,13 +7,13 @@ use App\Http\Requests\StoreStoreRequest;
 use App\Http\Requests\UpdateStoreRequest;
 use App\Http\Resources\StoreResource;
 use App\Models\Store;
-use App\Models\StoreProduct;
+use App\Models\Inventory;
 use Illuminate\Http\Request;
 
 /**
  * Stores master: the outside stores this mine draws spare parts from.
  *
- * The stock each store holds lives in StoreProductController; this is the
+ * The stock each store holds lives in InventoryController; this is the
  * name/description/active-flag master only.
  */
 class StoreController extends Controller
@@ -54,7 +54,7 @@ class StoreController extends Controller
         try {
             $limit = $request->input('limit', 10);
 
-            $stores = Store::withCount('storeProducts as products_count');
+            $stores = Store::withCount('inventories as products_count');
 
             if ($request->filled('search')) {
                 $search = $request->search;
@@ -115,7 +115,7 @@ class StoreController extends Controller
     public function show(int $id)
     {
         try {
-            $store = Store::withCount('storeProducts as products_count')->find($id);
+            $store = Store::withCount('inventories as products_count')->find($id);
 
             if (!$store) {
                 return response()->json([
@@ -171,7 +171,7 @@ class StoreController extends Controller
     }
 
     /**
-     * Hard delete, and store_products cascades with it. Refuse while the store
+     * Hard delete, and its inventory rows cascade with it. Refuse while the store
      * still holds mapped products: deleting would take that stock and its
      * history with it silently. Unmap first, or deactivate instead.
      */
@@ -187,7 +187,7 @@ class StoreController extends Controller
                 ], 404);
             }
 
-            $mappedCount = StoreProduct::where('store_id', $id)->count();
+            $mappedCount = Inventory::where('store_id', $id)->count();
 
             if ($mappedCount > 0) {
                 return response()->json([

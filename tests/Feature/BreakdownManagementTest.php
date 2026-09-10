@@ -598,6 +598,7 @@ class BreakdownManagementTest extends TestCase
             'is_breakdown_service' => true,
             'breakdown_id'         => $ticket->id,
             'service_date'         => '2026-06-26',
+            'job_card_number'      => 'JC-2026-0001',
             'downtime_start'       => '10:00',
             'downtime_end'         => '12:30',
         ]);
