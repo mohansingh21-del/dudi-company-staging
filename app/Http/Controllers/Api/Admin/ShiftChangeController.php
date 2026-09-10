@@ -8,6 +8,7 @@ use App\Models\EmployeeShiftAssignment;
 use App\Models\EmployeeShiftHistory;
 use App\Models\EmployeeShiftOverride;
 use App\Models\Employee;
+use App\Models\ShiftWorkforceDeployment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -180,7 +181,7 @@ class ShiftChangeController extends Controller
                 ], 422);
             }
 
-            $resolvedEmployeeIds = [];
+            $resolvedEmployees = collect();
             foreach ($identifiers as $identifier) {
                 $employee = Employee::with('relay')
                     ->where('id', $identifier)
@@ -198,19 +199,29 @@ class ShiftChangeController extends Controller
                     continue;
                 }
 
-                $resolvedEmployeeIds[] = $employee->id;
+                $resolvedEmployees->push($employee);
             }
 
-            if (empty($resolvedEmployeeIds)) {
+            if ($resolvedEmployees->isEmpty()) {
                 return response()->json([
                     'status' => 422,
                     'message' => 'No active relay employees selected for shift rotation.'
                 ], 422);
             }
 
-            DB::transaction(function () use ($resolvedEmployeeIds, $targetShiftId) {
-                $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
+            if ($blockedResponse = $this->openDeploymentResponse($resolvedEmployees)) {
+                return $blockedResponse;
+            }
 
+            $resolvedEmployeeIds = $resolvedEmployees->pluck('id')->all();
+
+            $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
+
+            if (!$newRelayId) {
+                return $this->unmappedShiftResponse($targetShiftId);
+            }
+
+            DB::transaction(function () use ($resolvedEmployeeIds, $targetShiftId, $newRelayId) {
                 foreach ($resolvedEmployeeIds as $empId) {
                     EmployeeShiftAssignment::updateOrCreate(
                         ['employee_id' => $empId],
@@ -230,9 +241,7 @@ class ShiftChangeController extends Controller
                         'created_by' => auth()->id(),
                     ]);
 
-                    if ($newRelayId) {
-                        Employee::where('id', $empId)->update(['relay_id' => $newRelayId]);
-                    }
+                    Employee::where('id', $empId)->update(['relay_id' => $newRelayId]);
                 }
             });
 
@@ -294,9 +303,19 @@ class ShiftChangeController extends Controller
                 ], 422);
             }
 
+            if ($blockedResponse = $this->openDeploymentResponse(collect([$employee]))) {
+                return $blockedResponse;
+            }
+
             $targetShiftId = $request->shift_id;
 
-            DB::transaction(function () use ($employee, $targetShiftId) {
+            $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
+
+            if (!$newRelayId) {
+                return $this->unmappedShiftResponse($targetShiftId);
+            }
+
+            DB::transaction(function () use ($employee, $targetShiftId, $newRelayId) {
                 EmployeeShiftAssignment::updateOrCreate(
                     ['employee_id' => $employee->id],
                     [
@@ -315,10 +334,7 @@ class ShiftChangeController extends Controller
                     'created_by' => auth()->id(),
                 ]);
 
-                $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
-                if ($newRelayId) {
-                    $employee->update(['relay_id' => $newRelayId]);
-                }
+                $employee->update(['relay_id' => $newRelayId]);
             });
 
             $targetShift = \App\Models\Shift::find($targetShiftId);
@@ -372,9 +388,19 @@ class ShiftChangeController extends Controller
                 ], 422);
             }
 
+            if ($blockedResponse = $this->openDeploymentResponse(collect([$employee]))) {
+                return $blockedResponse;
+            }
+
             $targetShiftId = $request->shift_id;
 
-            DB::transaction(function () use ($employee, $targetShiftId) {
+            $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
+
+            if (!$newRelayId) {
+                return $this->unmappedShiftResponse($targetShiftId);
+            }
+
+            DB::transaction(function () use ($employee, $targetShiftId, $newRelayId) {
                 EmployeeShiftAssignment::updateOrCreate(
                     ['employee_id' => $employee->id],
                     [
@@ -393,10 +419,7 @@ class ShiftChangeController extends Controller
                     'created_by' => auth()->id(),
                 ]);
 
-                $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
-                if ($newRelayId) {
-                    $employee->update(['relay_id' => $newRelayId]);
-                }
+                $employee->update(['relay_id' => $newRelayId]);
             });
 
             $targetShift = \App\Models\Shift::find($targetShiftId);
@@ -438,6 +461,10 @@ class ShiftChangeController extends Controller
                 ], 422);
             }
 
+            if ($blockedResponse = $this->openDeploymentResponse(collect([$employee1, $employee2]))) {
+                return $blockedResponse;
+            }
+
             $assignment1 = EmployeeShiftAssignment::where('employee_id', $employee1->id)->first();
             $assignment2 = EmployeeShiftAssignment::where('employee_id', $employee2->id)->first();
 
@@ -465,6 +492,14 @@ class ShiftChangeController extends Controller
                     'message' => "Both employees already have the same shift assigned."
                 ], 422);
             }
+
+            if ((int) $employee1->relay_id === (int) $employee2->relay_id) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Both employees belong to the same relay. A swap exchanges their relays, so they must start in different relays."
+                ], 422);
+            }
+
             $relayId1 = $employee1->relay_id;
             $relayId2 = $employee2->relay_id;
 
@@ -797,6 +832,87 @@ class ShiftChangeController extends Controller
     }
 
     /**
+     * Employees who are still actively deployed on a shift plan that has not been
+     * closed yet, keyed by employee_id.
+     *
+     * A shift change rewrites the employee's relay and writes an open-ended
+     * override, so the shift they resolve to stops matching the plan they are
+     * standing on. While that plan is still open its workforce, machine
+     * allocations and attendance would silently go stale, so the change is
+     * blocked until the plan is closed or the employee is removed from it.
+     *
+     * @param  array|\Illuminate\Support\Collection  $employeeIds
+     * @return \Illuminate\Support\Collection
+     */
+    private function openDeploymentsFor($employeeIds)
+    {
+        return ShiftWorkforceDeployment::whereIn('employee_id', $employeeIds)
+            ->active()
+            ->whereHas('shiftPlan', function ($q) {
+                $q->notClosed();
+            })
+            ->with('shiftPlan.shift')
+            ->get()
+            ->keyBy('employee_id');
+    }
+
+    /**
+     * Human-readable reason why this employee's shift cannot be changed.
+     */
+    private function openDeploymentMessage(Employee $employee, ShiftWorkforceDeployment $deployment)
+    {
+        $plan = $deployment->shiftPlan;
+        $shiftName = ($plan && $plan->shift) ? $plan->shift->shift_name : 'another shift';
+
+        $where = "'{$employee->name}' is already deployed in {$shiftName}";
+
+        if ($plan && $plan->planning_date) {
+            $where .= ' on ' . $plan->planning_date->format('Y-m-d');
+        }
+
+        if ($plan && $plan->reference_no) {
+            $where .= " ({$plan->reference_no})";
+        }
+
+        return $where . ', and that shift plan is not closed yet. Close the shift plan or remove the employee from its workforce before changing their shift.';
+    }
+
+    /**
+     * 422 listing every selected employee that is blocked by an open deployment,
+     * or null when none of them are.
+     *
+     * @param  \Illuminate\Support\Collection  $employees
+     */
+    private function openDeploymentResponse($employees)
+    {
+        $deployments = $this->openDeploymentsFor($employees->pluck('id')->all());
+
+        if ($deployments->isEmpty()) {
+            return null;
+        }
+
+        $blocked = [];
+        foreach ($employees as $employee) {
+            $deployment = $deployments->get($employee->id);
+            if ($deployment) {
+                $blocked[] = $this->openDeploymentMessage($employee, $deployment);
+            }
+        }
+
+        if (empty($blocked)) {
+            return null;
+        }
+
+        return response()->json([
+            'status' => 422,
+            'message' => count($blocked) === 1
+                ? 'Shift cannot be changed. Employee ' . $blocked[0]
+                : 'Shift cannot be changed for ' . count($blocked) . ' of the selected employees.',
+            'data' => ['blocked' => $blocked],
+        ], 422);
+    }
+
+    /**
      * Determine the active shift for an employee on a given date.
      */
     private function getShiftForDate(Employee $employee, Carbon $date)
@@ -822,5 +938,23 @@ class ShiftChangeController extends Controller
         }
 
         return $mapping ? $mapping->relay_id : null;
+    }
+
+    /**
+     * 422 for a target shift that no relay owns.
+     *
+     * Changing an employee's shift also moves them into that shift's relay. If no
+     * relay is mapped to the shift the employee would keep their old relay while
+     * resolving to the new shift, which puts one relay on two shifts at once.
+     */
+    private function unmappedShiftResponse($targetShiftId)
+    {
+        $shift = \App\Models\Shift::find($targetShiftId);
+        $shiftName = $shift ? $shift->shift_name : "#{$targetShiftId}";
+
+        return response()->json([
+            'status' => 422,
+            'message' => "No relay is mapped to shift '{$shiftName}'. Assign a relay to this shift in Relay Master first, then change the employee's shift.",
+        ], 422);
     }
 }
