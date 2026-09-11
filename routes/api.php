@@ -217,6 +217,10 @@ Route::prefix('v1')->group(function () {
         Route::get('active-machines', [EquipmentNameController::class, 'getActiveMachines']);
         Route::get('available-products', [InventoryController::class, 'getAvailableProducts']);
         Route::get('stores', [StoreController::class, 'publicIndex']);
+        // What a chosen store carries, low stock included — the picker shows
+        // those greyed out rather than pretending the store has no such
+        // product. ?only_available=true drops them.
+        Route::get('stores/{store_id}/products', [InventoryController::class, 'getStoreProducts']);
         Route::get('open-breakdowns', [BreakdownController::class, 'getOpenBreakdowns']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
         Route::get('shift-plans/{shift_id}/machines', [EquipmentAllocationController::class, 'getPublicMachines']);

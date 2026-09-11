@@ -55,6 +55,22 @@ class InventoryController extends Controller
                 $inventories->where('product_id', (int) $request->product_id);
             }
 
+            if ($request->filled('sub_category_id')) {
+                $subCategoryId = (int) $request->sub_category_id;
+                $inventories->whereHas('product', function ($query) use ($subCategoryId) {
+                    $query->where('sub_category_id', $subCategoryId);
+                });
+            }
+
+            // Category is a grandparent here — stock points at a product, which
+            // points at a sub-category, which points at the category.
+            if ($request->filled('category_id')) {
+                $categoryId = (int) $request->category_id;
+                $inventories->whereHas('product.subCategory', function ($query) use ($categoryId) {
+                    $query->where('category_id', $categoryId);
+                });
+            }
+
             // Stock sitting at or under its product's floor. The floor lives on
             // products, so this has to reach across the join rather than
             // compare two columns of this table.
@@ -62,6 +78,33 @@ class InventoryController extends Controller
                 $inventories->whereHas('product', function ($query) {
                     $query->whereColumn('products.min_stock', '>=', 'inventories.left_quantity');
                 });
+            }
+
+            // The Stock Status dropdown. Three states that do not overlap and
+            // together cover every row, so the filter never hides stock the
+            // user would expect to see under some other option:
+            //   out_of_stock — nothing left on the shelf at all
+            //   low_stock    — some left, but at or under the floor
+            //   in_stock     — above the floor, so actually issuable
+            if ($request->filled('stock_status')) {
+                switch ($request->stock_status) {
+                    case 'out_of_stock':
+                        $inventories->where('left_quantity', '<=', 0);
+                        break;
+
+                    case 'low_stock':
+                        $inventories->where('left_quantity', '>', 0)
+                            ->whereHas('product', function ($query) {
+                                $query->whereColumn('products.min_stock', '>=', 'inventories.left_quantity');
+                            });
+                        break;
+
+                    case 'in_stock':
+                        $inventories->whereHas('product', function ($query) {
+                            $query->whereColumn('products.min_stock', '<', 'inventories.left_quantity');
+                        });
+                        break;
+                }
             }
 
             if ($request->filled('search')) {
@@ -678,22 +721,7 @@ class InventoryController extends Controller
             }
 
             $format = function ($inventory) {
-                $product = $inventory->product;
-                $leftQuantity = (float) $inventory->left_quantity;
-                $minStock = (float) optional($product)->min_stock;
-
-                return [
-                    'inventory_id'       => $inventory->id,
-                    'store_id'           => $inventory->store_id,
-                    'store_name'         => optional($inventory->store)->name,
-                    'product_id'         => $inventory->product_id,
-                    'name'               => optional($product)->name,
-                    'sub_category_name'  => optional(optional($product)->subCategory)->name,
-                    'category_name'      => optional(optional(optional($product)->subCategory)->category)->name,
-                    'left_quantity'      => $leftQuantity,
-                    'min_stock'          => $minStock,
-                    'available_quantity' => $leftQuantity - $minStock,
-                ];
+                return $this->formatStockRow($inventory);
             };
 
             if ($request->filled('limit')) {
@@ -727,5 +755,128 @@ class InventoryController extends Controller
                 'message' => $th->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * Everything stocked at one store, for a store-then-product picker.
+     *
+     * Unlike getAvailableProducts this does not hide rows sitting at or under
+     * min_stock — a store screen that silently dropped them would read as "we
+     * do not carry that", when the truth is "we carry it and it needs
+     * reordering". Each row says so through is_available instead, and
+     * ?only_available=true narrows it to the issuable ones.
+     */
+    public function getStoreProducts(Request $request, int $storeId)
+    {
+        try {
+            $store = \App\Models\Store::find($storeId);
+
+            if (!$store) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Store not found.'
+                ], 404);
+            }
+
+            // Joined for the same reason as getAvailableProducts: min_stock is
+            // wanted for the ordering and the payload either way.
+            $query = Inventory::with($this->with)
+                ->join('products', 'products.id', '=', 'inventories.product_id')
+                ->where('inventories.store_id', $store->id)
+                ->where('inventories.is_active', 1)
+                ->where('products.is_active', 1)
+                ->orderBy('products.name', 'asc')
+                ->select('inventories.*');
+
+            if ($request->boolean('only_available')) {
+                $query->whereColumn('inventories.left_quantity', '>', 'products.min_stock');
+            }
+
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('products.name', 'LIKE', "%{$search}%")
+                        ->orWhereHas('product.subCategory', function ($sq) use ($search) {
+                            $sq->where('name', 'LIKE', "%{$search}%")
+                                ->orWhereHas('category', function ($cq) use ($search) {
+                                    $cq->where('name', 'LIKE', "%{$search}%");
+                                });
+                        });
+                });
+            }
+
+            $meta = [
+                'store_id' => $store->id,
+                'store_name' => $store->name,
+            ];
+
+            if ($request->filled('limit')) {
+                $paginated = $query->paginate($request->limit);
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Store products fetched successfully',
+                    'store' => $meta,
+                    'data' => collect($paginated->items())
+                        ->map(fn ($inventory) => $this->formatStockRow($inventory))
+                        ->values()
+                        ->toArray(),
+                    'pagination' => [
+                        'total' => $paginated->total(),
+                        'current_page' => $paginated->currentPage(),
+                        'per_page' => $paginated->perPage(),
+                        'last_page' => $paginated->lastPage(),
+                        'from' => $paginated->firstItem(),
+                        'to' => $paginated->lastItem(),
+                    ]
+                ]);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Store products fetched successfully',
+                'store' => $meta,
+                'data' => $query->get()
+                    ->map(fn ($inventory) => $this->formatStockRow($inventory))
+                    ->values()
+                    ->toArray()
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * One stock row as the product pickers want it: keyed by inventory_id,
+     * which is what those forms post back, with the floor carried alongside so
+     * the caller can show why a row is or is not issuable.
+     *
+     * @param  \App\Models\Inventory  $inventory
+     * @return array
+     */
+    protected function formatStockRow($inventory)
+    {
+        $product = $inventory->product;
+        $leftQuantity = (float) $inventory->left_quantity;
+        $minStock = (float) optional($product)->min_stock;
+
+        return [
+            'inventory_id'       => $inventory->id,
+            'store_id'           => $inventory->store_id,
+            'store_name'         => optional($inventory->store)->name,
+            'product_id'         => $inventory->product_id,
+            'name'               => optional($product)->name,
+            'sub_category_name'  => optional(optional($product)->subCategory)->name,
+            'category_name'      => optional(optional(optional($product)->subCategory)->category)->name,
+            'left_quantity'      => $leftQuantity,
+            'min_stock'          => $minStock,
+            'available_quantity' => max(0, $leftQuantity - $minStock),
+            // min_stock is a hard floor, so stock sitting at or under it is on
+            // the shelf but cannot be issued.
+            'is_available'       => $leftQuantity > $minStock,
+        ];
     }
 }

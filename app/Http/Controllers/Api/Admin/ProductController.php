@@ -208,10 +208,27 @@ class ProductController extends Controller
         }
     }
 
-    public function getPublicProducts()
+    /**
+     * Dropdown feed. The two filters let a Category / Sub Category pair of
+     * pickers cascade into the Product one beside them.
+     */
+    public function getPublicProducts(Request $request)
     {
         try {
-            $products = Product::with('subCategory.category')->where('is_active', 1)->get();
+            $query = Product::with('subCategory.category')->where('is_active', 1);
+
+            if ($request->filled('sub_category_id')) {
+                $query->where('sub_category_id', (int) $request->sub_category_id);
+            }
+
+            if ($request->filled('category_id')) {
+                $categoryId = (int) $request->category_id;
+                $query->whereHas('subCategory', function ($q) use ($categoryId) {
+                    $q->where('category_id', $categoryId);
+                });
+            }
+
+            $products = $query->get();
 
             return response()->json([
                 'status' => 200,
