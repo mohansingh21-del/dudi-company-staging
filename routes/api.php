@@ -216,6 +216,8 @@ Route::prefix('v1')->group(function () {
         Route::get('machine-categories', [EquipmentController::class, 'listCategories']);
         Route::get('active-machines', [EquipmentNameController::class, 'getActiveMachines']);
         Route::get('available-products', [InventoryController::class, 'getAvailableProducts']);
+        // Every product in inventory regardless of stock level, for filter dropdowns.
+        Route::get('inventory-products', [InventoryController::class, 'getInventoryProducts']);
         Route::get('stores', [StoreController::class, 'publicIndex']);
         // What a chosen store carries, low stock included — the picker shows
         // those greyed out rather than pretending the store has no such

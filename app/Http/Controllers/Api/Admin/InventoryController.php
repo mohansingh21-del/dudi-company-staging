@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use App\Models\Inventory;
 use App\Models\InventoryLog;
+use App\Models\Product;
 use App\Models\EmployeeProductAssignment;
 use App\Http\Requests\AddInventoryRequest;
 use App\Http\Requests\AssignInventoryRequest;
@@ -748,6 +749,45 @@ class InventoryController extends Controller
                 'status' => 200,
                 'message' => 'Available products fetched successfully',
                 'data' => $inventories->map($format)->values()->toArray()
+            ]);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Every product carried in inventory, out-of-stock ones included — for a
+     * filter dropdown where "not carried anywhere" and "carried but empty"
+     * need to stay distinguishable options rather than both vanishing.
+     *
+     * Distinct by product, not by inventory row: the same product stocked at
+     * three stores is still one dropdown entry.
+     */
+    public function getInventoryProducts(Request $request)
+    {
+        try {
+            $query = Product::query()
+                ->where('is_active', 1)
+                ->whereHas('inventories', function ($q) use ($request) {
+                    $q->where('is_active', 1);
+
+                    if ($request->filled('store_id')) {
+                        $q->where('store_id', (int) $request->store_id);
+                    }
+                })
+                ->orderBy('name', 'asc');
+
+            if ($request->filled('search')) {
+                $query->where('name', 'LIKE', "%{$request->search}%");
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Inventory products fetched successfully',
+                'data' => $query->get(['id', 'name', 'min_stock']),
             ]);
         } catch (\Throwable $th) {
             return response()->json([
