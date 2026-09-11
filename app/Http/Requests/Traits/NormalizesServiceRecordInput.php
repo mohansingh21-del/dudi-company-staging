@@ -59,16 +59,31 @@ trait NormalizesServiceRecordInput
 
         // Older/other clients still post the pre-migration field name
         // (store_product_id, alongside a now-unused source flag) instead of
-        // inventory_id. Both identify the same inventories row, so fold the
-        // legacy key across here rather than making every client resend
-        // parts under the new name.
+        // inventory_id. That value is actually the product's own id (a
+        // holdover from when store_products was a product-keyed table), not
+        // an inventories row id, so it has to be resolved against this
+        // record's store rather than assumed to equal inventory_id directly
+        // — the two only coincide by chance.
         $parts = $this->input('spare_parts');
 
         if (is_array($parts)) {
+            $storeId = $this->input('store_id');
+
             foreach ($parts as $index => $part) {
-                if (is_array($part) && empty($part['inventory_id']) && !empty($part['store_product_id'])) {
-                    $parts[$index]['inventory_id'] = $part['store_product_id'];
+                if (!is_array($part) || !empty($part['inventory_id']) || empty($part['store_product_id'])) {
+                    continue;
                 }
+
+                $resolvedInventoryId = $storeId
+                    ? \App\Models\Inventory::where('store_id', (int) $storeId)
+                        ->where('product_id', (int) $part['store_product_id'])
+                        ->value('id')
+                    : null;
+
+                // Falling back to the raw value when nothing resolves keeps the
+                // exists:inventories,id rule as the one place that reports "no
+                // such stock row", instead of a misleading "field is required".
+                $parts[$index]['inventory_id'] = $resolvedInventoryId ?: $part['store_product_id'];
             }
 
             $merge['spare_parts'] = $parts;
