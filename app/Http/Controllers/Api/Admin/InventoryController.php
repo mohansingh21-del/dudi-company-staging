@@ -417,19 +417,25 @@ class InventoryController extends Controller
 
             // Scoped to this row's store: the same product issued from another
             // store came off a different stock row and does not belong here.
-            $assignments = EmployeeProductAssignment::with(['employee', 'site', 'department'])
+            $assignments = EmployeeProductAssignment::with(['employee.site', 'employee.department', 'site', 'department'])
                 ->where('product_id', $inventory->product_id)
                 ->where('store_id', $inventory->store_id)
                 ->orderBy('created_at', 'desc')
                 ->get();
 
             $allocationHistory = $assignments->map(function ($assignment, $index) {
+                // Fall back to the employee's own site/department when the
+                // assignment wasn't given one explicitly (site_id is optional
+                // on assignment).
+                $site = $assignment->site ?? optional($assignment->employee)->site;
+                $department = $assignment->department ?? optional($assignment->employee)->department;
+
                 return [
                     'sr_no' => $index + 1,
                     'employee_name' => optional($assignment->employee)->name,
                     'employee_code' => optional($assignment->employee)->employee_code,
-                   'site_name' => optional($assignment->site)->site_name ?? optional($assignment->site)->name,
-                   'department_name' => optional($assignment->department)->name,
+                   'site_name' => optional($site)->site_name ?? optional($site)->name,
+                   'department_name' => optional($department)->name,
                    'quantity_assigned' => (float) $assignment->quantity,
                     'issued_date' => $assignment->issued_date ? $assignment->issued_date->format('d M Y') : null,
                 ];
