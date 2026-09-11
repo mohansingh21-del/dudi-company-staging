@@ -459,8 +459,10 @@ Route::prefix('v1')->group(function () {
             | Inventory Management
             |--------------------------------------------------------------------------
             | Stock, scoped to a store. Every row belongs to one, so store_id is
-            | required to add, assign or bulk upload; on the reads it is an
-            | optional filter and leaving it off spans every store.
+            | required to add or assign; on the reads it is an optional filter
+            | and leaving it off spans every store. Bulk upload names the store
+            | per sheet row instead, so one file can stock several stores, and
+            | only falls back to the request field for rows that name none.
             |
             | Literal segments must stay above {id} or they resolve as one.
             */

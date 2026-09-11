@@ -437,20 +437,30 @@ class InventoryController extends Controller
         }
     }
 
+    /**
+     * Bulk-add stock from a sheet.
+     *
+     * The sheet may carry a store_name column, letting one file stock several
+     * stores at once. store_id on the request is then only the fallback for
+     * rows that name no store, which is why it is no longer required — but a
+     * sheet without the column and an upload without the field leaves those
+     * rows homeless, and each is reported as a row error.
+     */
     public function bulkUpload(Request $request)
     {
         try {
             $request->validate([
-                'store_id' => 'required|integer|exists:stores,id',
+                'store_id' => 'nullable|integer|exists:stores,id',
                 'file' => 'required|mimes:xlsx,xls,csv'
             ]);
 
-            $import = new InventoryImport((int) $request->store_id);
+            $import = new InventoryImport($request->input('store_id'));
             Excel::import($import, $request->file('file'));
 
             $errors = $import->getErrors();
             $warnings = $import->getWarnings();
             $successCount = $import->getSuccessCount();
+            $storeCount = $import->getStoreCount();
 
             if (count($errors) > 0) {
                 return response()->json([
@@ -462,7 +472,7 @@ class InventoryController extends Controller
 
             $responseData = [
                 'status' => 200,
-                'message' => "Successfully imported {$successCount} products into inventory."
+                'message' => "Successfully imported {$successCount} products into inventory across {$storeCount} store(s)."
             ];
 
             if (count($warnings) > 0) {
