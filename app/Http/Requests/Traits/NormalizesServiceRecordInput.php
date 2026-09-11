@@ -57,6 +57,23 @@ trait NormalizesServiceRecordInput
             $merge['checklist'] = $checklist;
         }
 
+        // Older/other clients still post the pre-migration field name
+        // (store_product_id, alongside a now-unused source flag) instead of
+        // inventory_id. Both identify the same inventories row, so fold the
+        // legacy key across here rather than making every client resend
+        // parts under the new name.
+        $parts = $this->input('spare_parts');
+
+        if (is_array($parts)) {
+            foreach ($parts as $index => $part) {
+                if (is_array($part) && empty($part['inventory_id']) && !empty($part['store_product_id'])) {
+                    $parts[$index]['inventory_id'] = $part['store_product_id'];
+                }
+            }
+
+            $merge['spare_parts'] = $parts;
+        }
+
         if (!empty($merge)) {
             $this->merge($merge);
         }
