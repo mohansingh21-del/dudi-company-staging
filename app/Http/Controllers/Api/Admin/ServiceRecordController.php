@@ -246,6 +246,42 @@ class ServiceRecordController extends Controller
     }
 
     /**
+     * Remove a single attachment from a service record.
+     *
+     * Returns the attachments that remain, in the same shape the record detail
+     * uses, so the edit form can repaint its image list from the response.
+     *
+     * @param ServiceRecord $serviceRecord
+     * @param int $attachment
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function destroyAttachment(ServiceRecord $serviceRecord, $attachment)
+    {
+        try {
+            $userId = auth()->id() ? auth()->id() : 1;
+            $remaining = $this->service->deleteAttachment($serviceRecord, (int) $attachment, $userId);
+
+            return response()->json([
+                'status'  => 200,
+                'message' => 'Attachment deleted successfully.',
+                'data'    => [
+                    'attachments'         => $remaining,
+                    'attachments_count'   => count($remaining),
+                    'max_attachments'     => ServiceRecord::MAX_ATTACHMENTS,
+                    'remaining_slots'     => ServiceRecord::MAX_ATTACHMENTS - count($remaining),
+                ],
+            ], 200);
+        } catch (HttpResponseException $e) {
+            throw $e;
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status'  => 500,
+                'message' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Get machine service history: summary cards plus the timeline log.
      *
      * @param Request $request

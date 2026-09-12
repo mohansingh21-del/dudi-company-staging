@@ -809,6 +809,77 @@ class ServiceRecordService
     }
 
     /**
+     * Remove a single attachment from a Service Record.
+     *
+     * The attachment is looked up through the record rather than by id alone,
+     * so an id belonging to another record reads as "not found" instead of
+     * deleting someone else's file.
+     *
+     * The row goes first and the file second: if the disk delete fails the
+     * transaction rolls the row back, leaving the record consistent with what
+     * is actually on disk rather than pointing at a file that is gone.
+     *
+     * @param ServiceRecord $record
+     * @param int $attachmentId
+     * @param int $userId
+     * @return array  The attachments still on the record.
+     */
+    public function deleteAttachment(ServiceRecord $record, $attachmentId, $userId)
+    {
+        $attachment = $record->attachments()->find($attachmentId);
+
+        if (!$attachment) {
+            throw new HttpResponseException(response()->json([
+                'status'  => 404,
+                'message' => 'Attachment not found on this service record.',
+            ], 404));
+        }
+
+        return DB::transaction(function () use ($record, $attachment, $userId) {
+            $path = $attachment->file_path;
+            $fileName = $attachment->file_name;
+            $attachmentId = $attachment->id;
+
+            $attachment->delete();
+
+            if ($path && Storage::disk('public')->exists($path)) {
+                Storage::disk('public')->delete($path);
+            }
+
+            ServiceAuditLog::create([
+                'service_record_id' => $record->id,
+                // 'updated', not a verb of its own: the action column is an
+                // enum of created/updated/deleted and 'deleted' there means the
+                // whole service record went. What actually changed is spelled
+                // out in changes below.
+                'action'            => 'updated',
+                'changes'           => [
+                    'attachment_removed' => [
+                        'old' => [
+                            'id'        => $attachmentId,
+                            'file_name' => $fileName,
+                            'file_path' => $path,
+                        ],
+                        'new' => null,
+                    ],
+                ],
+                'performed_by'      => $userId,
+                'created_at'        => now(),
+            ]);
+
+            return $record->attachments()->get()->map(function ($file) {
+                return [
+                    'id'        => $file->id,
+                    'file_name' => $file->file_name,
+                    'file_type' => $file->file_type,
+                    'file_size' => (int) $file->file_size,
+                    'url'       => Storage::disk('public')->url($file->file_path),
+                ];
+            })->values()->toArray();
+        });
+    }
+
+    /**
      * KPI cards for the Service Management page header.
      *
      * Vehicles-in-breakdown reads breakdown_tickets directly since a machine

@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\Storage;
+use App\Models\ServiceRecord;
 
 /**
  * The Detailed Service Report shown behind "View Full Details".
@@ -69,6 +70,15 @@ class ServiceRecordReportResource extends JsonResource
             'checklist'    => $this->checklist(),
             'spare_parts'  => $this->spareParts(),
             'attachments'  => $this->attachments(),
+
+            // The edit form shows the saved images and has to know when the
+            // upload control should stop accepting more, so the cap ships with
+            // them rather than being hardcoded client-side.
+            'attachment_limits' => [
+                'max'             => ServiceRecord::MAX_ATTACHMENTS,
+                'used'            => $this->attachments->count(),
+                'remaining_slots' => max(0, ServiceRecord::MAX_ATTACHMENTS - $this->attachments->count()),
+            ],
 
             'totals' => [
                 'base_service_amount'      => (float) $this->base_service_amount,

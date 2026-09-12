@@ -647,6 +647,9 @@ Route::prefix('v1')->group(function () {
             */
             Route::get('service-records/machine/{machine}/history', [ServiceRecordController::class, 'history']);
             Route::get('service-records/{serviceRecord}/audit-trail', [ServiceRecordController::class, 'auditTrail']);
+            // Images are added through the store/update payload but removed one
+            // at a time, so the edit form can free up a slot without resubmitting.
+            Route::delete('service-records/{serviceRecord}/attachments/{attachment}', [ServiceRecordController::class, 'destroyAttachment']);
             Route::apiResource('service-records', ServiceRecordController::class);
 
 

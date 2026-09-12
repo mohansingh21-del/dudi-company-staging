@@ -8,6 +8,7 @@ use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Support\Facades\Schema;
 use App\Http\Requests\Traits\NormalizesServiceRecordInput;
 use App\Http\Requests\Traits\ValidatesSpareParts;
+use App\Models\ServiceRecord;
 
 class StoreServiceRecordRequest extends FormRequest
 {
@@ -75,9 +76,23 @@ class StoreServiceRecordRequest extends FormRequest
             // it server-side. A part left unpriced costs nothing.
             'spare_parts.*.amount'                 => 'nullable|numeric|min:0',
 
-            'attachments'                          => 'nullable|array',
+            // A new record starts with nothing on file, so the total cap is a
+            // plain per-request cap here. Updates have to count what is already
+            // stored — see UpdateServiceRecordRequest.
+            'attachments'                          => 'nullable|array|max:' . ServiceRecord::MAX_ATTACHMENTS,
             'attachments.*'                        => 'file|mimes:jpg,jpeg,png,pdf|max:5120',
             'remarks'                              => 'nullable|string',
+        ];
+    }
+
+    /**
+     * @return array
+     */
+    public function messages()
+    {
+        return [
+            'attachments.max' => 'A service record can hold at most '
+                . ServiceRecord::MAX_ATTACHMENTS . ' images.',
         ];
     }
 

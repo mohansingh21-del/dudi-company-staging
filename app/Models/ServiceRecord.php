@@ -10,6 +10,15 @@ class ServiceRecord extends Model
 {
     use SoftDeletes;
 
+    /**
+     * How many attachments a single service record may hold in total.
+     *
+     * Counted across what is already stored plus whatever an update is
+     * uploading, so the cap holds over the life of the record and not just
+     * per request.
+     */
+    const MAX_ATTACHMENTS = 3;
+
     protected $table = 'service_records';
 
     protected $fillable = [
