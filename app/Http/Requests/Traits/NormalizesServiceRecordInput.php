@@ -2,6 +2,9 @@
 
 namespace App\Http\Requests\Traits;
 
+use App\Models\Inventory;
+use App\Models\ServiceRecord;
+
 trait NormalizesServiceRecordInput
 {
     /**
@@ -26,6 +29,14 @@ trait NormalizesServiceRecordInput
         'fuel_filter_change',
         'oil_filter_change',
     ];
+
+    /**
+     * spare_parts indexes whose store_product_id names no stock row at this
+     * record's store, as index => product id. Reported by ValidatesSpareParts.
+     *
+     * @var array
+     */
+    protected $unresolvedStoreProducts = [];
 
     /**
      * Cast "true"/"false"/"yes"/"on" strings to real booleans.
@@ -57,35 +68,9 @@ trait NormalizesServiceRecordInput
             $merge['checklist'] = $checklist;
         }
 
-        // Older/other clients still post the pre-migration field name
-        // (store_product_id, alongside a now-unused source flag) instead of
-        // inventory_id. That value is actually the product's own id (a
-        // holdover from when store_products was a product-keyed table), not
-        // an inventories row id, so it has to be resolved against this
-        // record's store rather than assumed to equal inventory_id directly
-        // — the two only coincide by chance.
-        $parts = $this->input('spare_parts');
+        $parts = $this->resolveSparePartStockRows();
 
-        if (is_array($parts)) {
-            $storeId = $this->input('store_id');
-
-            foreach ($parts as $index => $part) {
-                if (!is_array($part) || !empty($part['inventory_id']) || empty($part['store_product_id'])) {
-                    continue;
-                }
-
-                $resolvedInventoryId = $storeId
-                    ? \App\Models\Inventory::where('store_id', (int) $storeId)
-                        ->where('product_id', (int) $part['store_product_id'])
-                        ->value('id')
-                    : null;
-
-                // Falling back to the raw value when nothing resolves keeps the
-                // exists:inventories,id rule as the one place that reports "no
-                // such stock row", instead of a misleading "field is required".
-                $parts[$index]['inventory_id'] = $resolvedInventoryId ?: $part['store_product_id'];
-            }
-
+        if ($parts !== null) {
             $merge['spare_parts'] = $parts;
         }
 
@@ -102,6 +87,96 @@ trait NormalizesServiceRecordInput
             $this->request->remove('spare_parts');
             $this->query->remove('spare_parts');
         }
+    }
+
+    /**
+     * Point every spare part line at the stock row it actually came out of.
+     *
+     * Clients still post the pre-migration field name (store_product_id,
+     * alongside a now-unused source flag), which carries the product's own id.
+     * A product id does not name a stock row on its own — the same product is a
+     * separate row, and a separate balance, at every store that carries it — so
+     * it is resolved against this record's store.
+     *
+     * Where a line sends both, the resolved row wins over the posted
+     * inventory_id. A client that repeats one inventory_id across lines while
+     * varying store_product_id would otherwise have every one of those lines
+     * saved against the first line's part: the record shows the same part
+     * twice, and that part's stock absorbs a deduction belonging to another.
+     * store_product_id is the field such a payload varies per line, so it is
+     * the one to trust.
+     *
+     * Nothing is guessed when a product is not stocked at the store — the index
+     * is recorded for ValidatesSpareParts to report, rather than silently
+     * falling back to an id that points somewhere else.
+     *
+     * @return array|null  The rewritten lines, or null when there are none.
+     */
+    protected function resolveSparePartStockRows()
+    {
+        $parts = $this->input('spare_parts');
+
+        if (!is_array($parts)) {
+            return null;
+        }
+
+        $storeId = $this->serviceRecordStoreId();
+
+        foreach ($parts as $index => $part) {
+            if (!is_array($part) || empty($part['store_product_id'])) {
+                continue;
+            }
+
+            $productId = (int) $part['store_product_id'];
+
+            $resolved = $storeId
+                ? Inventory::where('store_id', $storeId)
+                    ->where('product_id', $productId)
+                    ->value('id')
+                : null;
+
+            if (!$resolved) {
+                // The posted inventory_id is left alone: validation fails on
+                // the error added for this index, so it is never read.
+                $this->unresolvedStoreProducts[$index] = $productId;
+
+                continue;
+            }
+
+            $parts[$index]['inventory_id'] = (int) $resolved;
+        }
+
+        return $parts;
+    }
+
+    /**
+     * The store this record draws its parts from.
+     *
+     * An update that changes only the parts does not have to resend store_id,
+     * so the stored one stands in — without it every line on such a request
+     * would be unresolvable.
+     *
+     * @return int|null
+     */
+    protected function serviceRecordStoreId()
+    {
+        if ($this->filled('store_id')) {
+            return (int) $this->input('store_id');
+        }
+
+        $record = $this->route('service_record');
+
+        return $record instanceof ServiceRecord && $record->store_id
+            ? (int) $record->store_id
+            : null;
+    }
+
+    /**
+     * @return array  index => product id
+     */
+    public function unresolvedStoreProducts()
+    {
+        return $this->unresolvedStoreProducts;
     }
 
     /**

@@ -23,6 +23,9 @@ trait ValidatesSpareParts
     public function withValidator(Validator $validator)
     {
         $validator->after(function (Validator $validator) {
+            $this->reportUnresolvedStoreProducts($validator);
+            $this->reportRepeatedStockRows($validator);
+
             // Nothing to resolve against if the ids themselves failed to
             // validate — those errors are the useful ones.
             if ($validator->errors()->hasAny(['spare_parts', 'store_id'])) {
@@ -68,7 +71,11 @@ trait ValidatesSpareParts
                 return;
             }
 
-            if (!$this->filled('store_id')) {
+            // The stored store stands in on an update that changes only the
+            // parts, the same way normalisation resolves them against it.
+            $recordStoreId = $this->serviceRecordStoreId();
+
+            if ($recordStoreId === null) {
                 $validator->errors()->add(
                     'store_id',
                     'Store is required when a service record has spare parts.'
@@ -77,12 +84,76 @@ trait ValidatesSpareParts
                 return;
             }
 
-            if ((int) $this->input('store_id') !== $storeIds->first()) {
+            if ($recordStoreId !== $storeIds->first()) {
                 $validator->errors()->add(
                     'store_id',
                     'The selected store does not match the store the spare parts are stocked at.'
                 );
             }
         });
+    }
+
+    /**
+     * Report a line naming a product the record's store does not stock.
+     *
+     * Normalisation deliberately resolves nothing for these, so without this
+     * the line would keep whatever inventory_id the client posted — which is
+     * how a part ends up saved against another part's stock.
+     *
+     * @param  Validator  $validator
+     * @return void
+     */
+    protected function reportUnresolvedStoreProducts(Validator $validator)
+    {
+        foreach ($this->unresolvedStoreProducts() as $index => $productId) {
+            $validator->errors()->add(
+                "spare_parts.{$index}.store_product_id",
+                "Product {$productId} is not stocked at the selected store."
+            );
+        }
+    }
+
+    /**
+     * Report two lines drawing on the same stock row.
+     *
+     * Two lines against one row is never what the form meant — it is a part
+     * picked twice, or ids that did not vary with the products they came from.
+     * Saved, it reads back as the same part twice and takes both deductions out
+     * of that one balance, so it is rejected rather than merged: the quantities
+     * and amounts to keep are the user's call, not this method's.
+     *
+     * @param  Validator  $validator
+     * @return void
+     */
+    protected function reportRepeatedStockRows(Validator $validator)
+    {
+        $parts = $this->input('spare_parts');
+
+        if (!is_array($parts)) {
+            return;
+        }
+
+        $seen = [];
+
+        foreach ($parts as $index => $part) {
+            if (!is_array($part) || empty($part['inventory_id'])) {
+                continue;
+            }
+
+            $inventoryId = (int) $part['inventory_id'];
+
+            if (isset($seen[$inventoryId])) {
+                $first = $seen[$inventoryId] + 1;
+
+                $validator->errors()->add(
+                    "spare_parts.{$index}.inventory_id",
+                    "This is the same part as line {$first}. Put it on one line with the total quantity instead."
+                );
+
+                continue;
+            }
+
+            $seen[$inventoryId] = $index;
+        }
     }
 }
