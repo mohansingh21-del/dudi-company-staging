@@ -23,6 +23,7 @@ trait ValidatesSpareParts
     public function withValidator(Validator $validator)
     {
         $validator->after(function (Validator $validator) {
+            $this->reportMissingProducts($validator);
             $this->reportUnresolvedStoreProducts($validator);
             $this->reportRepeatedStockRows($validator);
 
@@ -91,6 +92,37 @@ trait ValidatesSpareParts
                 );
             }
         });
+    }
+
+    /**
+     * Report a line that names no product.
+     *
+     * A posted inventory_id is discarded during normalisation, so the product
+     * id is the only thing that can name a line's stock row. Without it the
+     * line would reach the stock service pointing at nothing — a 500 from the
+     * foreign key on update — so it is rejected here instead.
+     *
+     * @param  Validator  $validator
+     * @return void
+     */
+    protected function reportMissingProducts(Validator $validator)
+    {
+        $parts = $this->input('spare_parts');
+
+        if (!is_array($parts)) {
+            return;
+        }
+
+        foreach ($parts as $index => $part) {
+            if (is_array($part) && (!empty($part['store_product_id']) || !empty($part['product_id']))) {
+                continue;
+            }
+
+            $validator->errors()->add(
+                "spare_parts.{$index}.store_product_id",
+                'The spare_parts.' . $index . '.store_product_id field is required when spare parts is present.'
+            );
+        }
     }
 
     /**

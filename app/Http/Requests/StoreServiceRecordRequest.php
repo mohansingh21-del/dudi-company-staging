@@ -63,9 +63,10 @@ class StoreServiceRecordRequest extends FormRequest
 
             'spare_parts_changed'                  => 'nullable|boolean',
             'spare_parts'                          => 'required_if:spare_parts_changed,true,1|nullable|array',
-            // The stock row the part came out of. It names both the product
-            // and the store, so nothing else has to be sent to identify it.
-            'spare_parts.*.inventory_id'           => 'required_with:spare_parts|integer|exists:inventories,id',
+            // The product the line is for. inventory_id is never read from the
+            // payload — the service resolves it from this and the record's store.
+            'spare_parts.*.store_product_id'       => 'nullable|integer',
+            'spare_parts.*.product_id'             => 'nullable|integer',
             // The name is resolved from the product catalog, so a
             // caller-supplied one is only ever a fallback.
             'spare_parts.*.part_name'              => 'nullable|string|max:255',

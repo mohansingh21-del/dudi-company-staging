@@ -202,6 +202,24 @@ class ServiceRecordLegacySparePartPayloadTest extends TestCase
         $this->assertDatabaseHas('service_spare_parts', ['service_record_id' => $id, 'inventory_id' => $this->hammerStock->id]);
     }
 
+    public function test_product_id_from_the_show_response_resolves_like_store_product_id()
+    {
+        // What an edit form gets back from GET: product_id beside the same
+        // repeated inventory_id. The product id decides the stock row.
+        $id = $this->postJson('/api/v1/admin/service-records', $this->payload([
+            ['product_id' => $this->wrench->id, 'inventory_id' => $this->wrenchStock->id],
+            ['product_id' => $this->hammer->id, 'inventory_id' => $this->wrenchStock->id],
+        ]))->assertStatus(201)->json('data.id');
+
+        $this->getJson('/api/v1/admin/service-records/' . $id)
+            ->assertStatus(200)
+            ->assertJsonPath('data.spare_parts.0.product_id', $this->wrench->id)
+            ->assertJsonPath('data.spare_parts.1.product_id', $this->hammer->id);
+
+        $this->assertSame('74.00', $this->wrenchStock->fresh()->left_quantity);
+        $this->assertSame('39.00', $this->hammerStock->fresh()->left_quantity);
+    }
+
     /**
      * The live form's payload, minus the fields that do not vary per line.
      *

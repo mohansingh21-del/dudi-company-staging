@@ -192,7 +192,7 @@ class ServiceRecordService
             $sparePartsTotal = 0.00;
             if ($serviceRecord->spare_parts_changed && isset($data['spare_parts']) && is_array($data['spare_parts'])) {
                 foreach ($data['spare_parts'] as $part) {
-                    $inventoryId = (int) $part['inventory_id'];
+                    $inventoryId = $this->resolveInventoryId($storeId, $part);
                     $quantity = (float) (isset($part['quantity']) ? $part['quantity'] : 1.00);
 
                     // Rejects a part belonging to any store other than the
@@ -559,6 +559,12 @@ class ServiceRecordService
             return null;
         }
 
+        $storeId = $record->store_id !== null ? (int) $record->store_id : null;
+
+        foreach ($parts as $index => $part) {
+            $parts[$index]['inventory_id'] = $this->resolveInventoryId($storeId, $part);
+        }
+
         // Keyed by inventory id — the store is already part of that key.
         $oldQuantities = [];
 
@@ -599,7 +605,6 @@ class ServiceRecordService
             );
         }
 
-        $storeId = $record->store_id !== null ? (int) $record->store_id : null;
         $partNames = [];
         $storeNames = [];
         foreach ($deductions as $inventoryId => $quantity) {
@@ -661,6 +666,42 @@ class ServiceRecordService
         }
 
         return ['old' => $before, 'new' => $after];
+    }
+
+    /**
+     * The stock row a spare part line draws on: the record's store and the
+     * line's product. A posted inventory_id is never read.
+     *
+     * Validation already rejects a line whose product the store does not
+     * stock; this refuses rather than saving a part that points at nothing.
+     *
+     * @param  int|null  $storeId
+     * @param  array  $part
+     * @return int
+     */
+    protected function resolveInventoryId($storeId, array $part)
+    {
+        $productId = !empty($part['store_product_id'])
+            ? (int) $part['store_product_id']
+            : (!empty($part['product_id']) ? (int) $part['product_id'] : null);
+
+        $inventoryId = $storeId && $productId
+            ? Inventory::where('store_id', $storeId)->where('product_id', $productId)->value('id')
+            : null;
+
+        if (!$inventoryId) {
+            throw new HttpResponseException(response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => [
+                    'spare_parts' => [$productId
+                        ? "Product {$productId} is not stocked at the selected store."
+                        : 'Every spare part needs a store_product_id.'],
+                ],
+            ], 422));
+        }
+
+        return (int) $inventoryId;
     }
 
     /**
