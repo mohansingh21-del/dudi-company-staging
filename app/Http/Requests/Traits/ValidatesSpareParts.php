@@ -154,6 +154,11 @@ trait ValidatesSpareParts
      * of that one balance, so it is rejected rather than merged: the quantities
      * and amounts to keep are the user's call, not this method's.
      *
+     * inventory_id is resolved server-side and never read from the client, so
+     * the error is keyed on the product field the client actually posted —
+     * store_product_id, or product_id from an edit form — which is the field
+     * its form can highlight.
+     *
      * @param  Validator  $validator
      * @return void
      */
@@ -176,10 +181,13 @@ trait ValidatesSpareParts
 
             if (isset($seen[$inventoryId])) {
                 $first = $seen[$inventoryId] + 1;
+                $field = !empty($part['store_product_id']) ? 'store_product_id' : 'product_id';
+                $partName = optional(optional(Inventory::with('product:id,name')->find($inventoryId))->product)->name;
+                $partLabel = $partName ? "'{$partName}'" : 'This part';
 
                 $validator->errors()->add(
-                    "spare_parts.{$index}.inventory_id",
-                    "This is the same part as line {$first}. Put it on one line with the total quantity instead."
+                    "spare_parts.{$index}.{$field}",
+                    "{$partLabel} is already on line {$first}. Put it on one line with the total quantity instead."
                 );
 
                 continue;

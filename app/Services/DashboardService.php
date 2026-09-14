@@ -33,11 +33,6 @@ class DashboardService
     protected $dispatch;
 
     /**
-     * @var InventoryDashboardService
-     */
-    protected $inventory;
-
-    /**
      * Constructor injecting module services.
      */
     public function __construct(
@@ -45,15 +40,13 @@ class DashboardService
         FuelDashboardService $fuel,
         BreakdownDashboardService $breakdown,
         DelayDashboardService $delay,
-        DispatchDashboardService $dispatch,
-        InventoryDashboardService $inventory
+        DispatchDashboardService $dispatch
     ) {
         $this->overview = $overview;
         $this->fuel = $fuel;
         $this->breakdown = $breakdown;
         $this->delay = $delay;
         $this->dispatch = $dispatch;
-        $this->inventory = $inventory;
     }
 
     /**
@@ -79,32 +72,26 @@ class DashboardService
         $bypassCache = app()->environment('local', 'testing') || request()->has('nocache') || request()->has('refresh');
 
         if ($bypassCache) {
-            $summary = [
+            return [
                 'overview'  => $this->overview->build($filters),
                 'fuel'      => $this->fuel->build($filters),
                 'breakdown' => $this->breakdown->build($filters),
                 'delay'     => $this->delay->build($filters),
                 'dispatch'  => $this->dispatch->build($filters),
             ];
-        } else {
-            // Build Cache Key
-            $cacheKey = "dashboard_summary_{$siteId}_{$blockId}_{$shiftId}_{$from}_{$to}";
-
-            $summary = Cache::remember($cacheKey, $ttl, function () use ($filters) {
-                return [
-                    'overview'  => $this->overview->build($filters),
-                    'fuel'      => $this->fuel->build($filters),
-                    'breakdown' => $this->breakdown->build($filters),
-                    'delay'     => $this->delay->build($filters),
-                    'dispatch'  => $this->dispatch->build($filters),
-                ];
-            });
         }
 
-        // Stock is live and ignores the date range, so it is built outside the
-        // cache — a past range would otherwise show stock up to an hour old.
-        $summary['inventory'] = $this->inventory->build($filters['store_id'] ?? null);
+        // Build Cache Key
+        $cacheKey = "dashboard_summary_{$siteId}_{$blockId}_{$shiftId}_{$from}_{$to}";
 
-        return $summary;
+        return Cache::remember($cacheKey, $ttl, function () use ($filters) {
+            return [
+                'overview'  => $this->overview->build($filters),
+                'fuel'      => $this->fuel->build($filters),
+                'breakdown' => $this->breakdown->build($filters),
+                'delay'     => $this->delay->build($filters),
+                'dispatch'  => $this->dispatch->build($filters),
+            ];
+        });
     }
 }

@@ -288,7 +288,8 @@ class DashboardController extends Controller
         try {
             $filters = $request->getResolvedFilters();
             $perPage = (int) $request->input('per_page', 10);
-            $data = $this->inventoryService->getBelowMinLevel($filters['store_id'], $perPage);
+            $data = ['summary' => $this->inventoryService->summary($filters['store_id'])]
+                + $this->inventoryService->getBelowMinLevel($filters['store_id'], $perPage);
 
             return response()->json([
                 'status'  => true,
@@ -315,7 +316,8 @@ class DashboardController extends Controller
         try {
             $filters = $request->getResolvedFilters();
             $perPage = (int) $request->input('per_page', 10);
-            $data = $this->inventoryService->getOutOfStock($filters['store_id'], $perPage);
+            $data = ['summary' => $this->inventoryService->summary($filters['store_id'])]
+                + $this->inventoryService->getOutOfStock($filters['store_id'], $perPage);
 
             return response()->json([
                 'status'  => true,

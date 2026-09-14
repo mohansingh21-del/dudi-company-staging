@@ -176,7 +176,8 @@ class ServiceRecordLegacySparePartPayloadTest extends TestCase
             ['store_product_id' => $this->wrench->id, 'inventory_id' => $this->wrenchStock->id, 'part_name' => 'Wrench Sets'],
             ['store_product_id' => $this->wrench->id, 'inventory_id' => $this->wrenchStock->id, 'part_name' => 'Wrench Sets'],
         ]))->assertStatus(422)
-            ->assertJsonValidationErrors('spare_parts.1.inventory_id');
+            ->assertJsonValidationErrors('spare_parts.1.store_product_id')
+            ->assertJsonMissingValidationErrors('spare_parts.1.inventory_id');
 
         $this->assertSame(0, ServiceRecord::count());
         $this->assertSame('75.00', $this->wrenchStock->fresh()->left_quantity);

@@ -19,23 +19,18 @@ use App\Models\Inventory;
 class InventoryDashboardService
 {
     /**
-     * Inventory block of the dashboard summary: counts plus the first page of
-     * each list, so the cards render without a second request.
+     * Counts for the three stock cards. Returned with both lists, so whichever
+     * table the page loads first also fills the cards.
      *
      * @param int|null $storeId
-     * @param int $perPage
      * @return array
      */
-    public function build($storeId = null, int $perPage = 10): array
+    public function summary($storeId = null): array
     {
         return [
-            'kpis' => [
-                'total_products'  => $this->baseQuery($storeId)->count(),
-                'below_min_level' => $this->belowMinLevelQuery($storeId)->count(),
-                'out_of_stock'    => $this->outOfStockQuery($storeId)->count(),
-            ],
-            'below_min_level_products' => $this->getBelowMinLevel($storeId, $perPage, 1),
-            'out_of_stock_products'    => $this->getOutOfStock($storeId, $perPage, 1),
+            'total_products'  => $this->baseQuery($storeId)->count(),
+            'below_min_level' => $this->belowMinLevelQuery($storeId)->count(),
+            'out_of_stock'    => $this->outOfStockQuery($storeId)->count(),
         ];
     }
 

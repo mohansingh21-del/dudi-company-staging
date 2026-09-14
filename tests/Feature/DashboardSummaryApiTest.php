@@ -387,7 +387,7 @@ class DashboardSummaryApiTest extends TestCase
         $res->assertStatus(200)->assertJsonStructure(['status', 'message', 'data' => ['items', 'current_page', 'last_page', 'total', 'per_page']]);
     }
 
-    public function test_summary_includes_live_inventory_stock()
+    public function test_inventory_endpoints_return_stock_lists_with_summary()
     {
         Sanctum::actingAs($this->adminUser);
 
@@ -404,40 +404,42 @@ class DashboardSummaryApiTest extends TestCase
         Inventory::create(['store_id' => $udaipur->id, 'product_id' => $tape->id, 'quantity' => 10, 'left_quantity' => 0]);
         Inventory::create(['store_id' => $kamalpur->id, 'product_id' => $tape->id, 'quantity' => 10, 'left_quantity' => -3]);
 
-        // A past range still returns today's stock.
-        $response = $this->getJson('/api/v1/dashboard/summary?date_range=last_30_days');
+        // Inventory lives only on its own endpoints, not the dashboard summary.
+        $summary = $this->getJson('/api/v1/dashboard/summary?date_range=last_30_days');
+        $summary->assertStatus(200);
+        $this->assertNull($summary->json('data.inventory'));
 
-        $response->assertStatus(200)
-            ->assertJsonPath('data.inventory.kpis.total_products', 4)
-            ->assertJsonPath('data.inventory.kpis.below_min_level', 1)
-            ->assertJsonPath('data.inventory.kpis.out_of_stock', 2)
-            ->assertJsonPath('data.inventory.below_min_level_products.total', 1)
-            ->assertJsonPath('data.inventory.below_min_level_products.items.0.product', 'DI Sluice Valve')
-            ->assertJsonPath('data.inventory.below_min_level_products.items.0.location', 'Kamalpur')
-            ->assertJsonPath('data.inventory.below_min_level_products.items.0.minimum_stock', 20)
-            ->assertJsonPath('data.inventory.below_min_level_products.items.0.quantity', 7)
-            ->assertJsonPath('data.inventory.out_of_stock_products.total', 2)
-            ->assertJsonStructure(['data' => ['inventory' => ['out_of_stock_products' => [
-                'items' => [['inventory_id', 'product_id', 'product', 'store_id', 'location', 'minimum_stock', 'quantity', 'stock_status', 'stock_status_label']],
-                'current_page', 'last_page', 'total', 'per_page',
-            ]]]]);
-
-        // store_id narrows every inventory figure to one store.
-        $this->getJson('/api/v1/dashboard/summary?store_id=' . $udaipur->id)
-            ->assertStatus(200)
-            ->assertJsonPath('data.inventory.kpis.total_products', 2)
-            ->assertJsonPath('data.inventory.kpis.below_min_level', 0)
-            ->assertJsonPath('data.inventory.kpis.out_of_stock', 1);
-
-        // Lazy-loaded pages for the two tables.
-        $this->getJson('/api/v1/dashboard/inventory/out-of-stock?per_page=1&page=2')
-            ->assertStatus(200)
-            ->assertJsonPath('data.current_page', 2)
-            ->assertJsonPath('data.last_page', 2)
-            ->assertJsonCount(1, 'data.items');
-
+        // Both lists carry the same card counts.
         $this->getJson('/api/v1/dashboard/inventory/below-min-level')
             ->assertStatus(200)
+            ->assertJsonPath('data.summary.total_products', 4)
+            ->assertJsonPath('data.summary.below_min_level', 1)
+            ->assertJsonPath('data.summary.out_of_stock', 2)
+            ->assertJsonPath('data.total', 1)
+            ->assertJsonPath('data.items.0.product', 'DI Sluice Valve')
+            ->assertJsonPath('data.items.0.location', 'Kamalpur')
+            ->assertJsonPath('data.items.0.minimum_stock', 20)
+            ->assertJsonPath('data.items.0.quantity', 7);
+
+        $this->getJson('/api/v1/dashboard/inventory/out-of-stock?per_page=1&page=2')
+            ->assertStatus(200)
+            ->assertJsonPath('data.summary.total_products', 4)
+            ->assertJsonPath('data.summary.out_of_stock', 2)
+            ->assertJsonPath('data.current_page', 2)
+            ->assertJsonPath('data.last_page', 2)
+            ->assertJsonCount(1, 'data.items')
+            ->assertJsonStructure(['data' => [
+                'summary' => ['total_products', 'below_min_level', 'out_of_stock'],
+                'items' => [['inventory_id', 'product_id', 'product', 'store_id', 'location', 'minimum_stock', 'quantity', 'stock_status', 'stock_status_label']],
+                'current_page', 'last_page', 'total', 'per_page',
+            ]]);
+
+        // store_id narrows the counts and the rows to one store.
+        $this->getJson('/api/v1/dashboard/inventory/out-of-stock?store_id=' . $udaipur->id)
+            ->assertStatus(200)
+            ->assertJsonPath('data.summary.total_products', 2)
+            ->assertJsonPath('data.summary.below_min_level', 0)
+            ->assertJsonPath('data.summary.out_of_stock', 1)
             ->assertJsonPath('data.total', 1);
     }
 
