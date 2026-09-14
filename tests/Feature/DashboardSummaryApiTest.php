@@ -23,6 +23,11 @@ use App\Models\Delay;
 use App\Models\DelayCategory;
 use App\Models\BreakdownTicket;
 use App\Models\BreakdownType;
+use App\Models\Category;
+use App\Models\SubCategory;
+use App\Models\Product;
+use App\Models\Store;
+use App\Models\Inventory;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 
@@ -380,6 +385,60 @@ class DashboardSummaryApiTest extends TestCase
         // 7. dispatch/recent-trips
         $res = $this->getJson('/api/v1/dashboard/dispatch/recent-trips?date_range=yesterday');
         $res->assertStatus(200)->assertJsonStructure(['status', 'message', 'data' => ['items', 'current_page', 'last_page', 'total', 'per_page']]);
+    }
+
+    public function test_summary_includes_live_inventory_stock()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $category = Category::create(['name' => 'Spares', 'is_active' => 1]);
+        $subCategory = SubCategory::create(['category_id' => $category->id, 'name' => 'Valves', 'is_active' => 1]);
+        $valve = Product::create(['sub_category_id' => $subCategory->id, 'name' => 'DI Sluice Valve', 'min_stock' => 20, 'is_active' => 1]);
+        $tape = Product::create(['sub_category_id' => $subCategory->id, 'name' => 'B-tape', 'min_stock' => 10, 'is_active' => 1]);
+        $udaipur = Store::create(['name' => 'Udaipur', 'is_active' => 1]);
+        $kamalpur = Store::create(['name' => 'Kamalpur', 'is_active' => 1]);
+
+        // in stock, below min level, out of stock (zero), out of stock (negative)
+        Inventory::create(['store_id' => $udaipur->id, 'product_id' => $valve->id, 'quantity' => 50, 'left_quantity' => 50]);
+        Inventory::create(['store_id' => $kamalpur->id, 'product_id' => $valve->id, 'quantity' => 30, 'left_quantity' => 7]);
+        Inventory::create(['store_id' => $udaipur->id, 'product_id' => $tape->id, 'quantity' => 10, 'left_quantity' => 0]);
+        Inventory::create(['store_id' => $kamalpur->id, 'product_id' => $tape->id, 'quantity' => 10, 'left_quantity' => -3]);
+
+        // A past range still returns today's stock.
+        $response = $this->getJson('/api/v1/dashboard/summary?date_range=last_30_days');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.inventory.kpis.total_products', 4)
+            ->assertJsonPath('data.inventory.kpis.below_min_level', 1)
+            ->assertJsonPath('data.inventory.kpis.out_of_stock', 2)
+            ->assertJsonPath('data.inventory.below_min_level_products.total', 1)
+            ->assertJsonPath('data.inventory.below_min_level_products.items.0.product', 'DI Sluice Valve')
+            ->assertJsonPath('data.inventory.below_min_level_products.items.0.location', 'Kamalpur')
+            ->assertJsonPath('data.inventory.below_min_level_products.items.0.minimum_stock', 20)
+            ->assertJsonPath('data.inventory.below_min_level_products.items.0.quantity', 7)
+            ->assertJsonPath('data.inventory.out_of_stock_products.total', 2)
+            ->assertJsonStructure(['data' => ['inventory' => ['out_of_stock_products' => [
+                'items' => [['inventory_id', 'product_id', 'product', 'store_id', 'location', 'minimum_stock', 'quantity', 'stock_status', 'stock_status_label']],
+                'current_page', 'last_page', 'total', 'per_page',
+            ]]]]);
+
+        // store_id narrows every inventory figure to one store.
+        $this->getJson('/api/v1/dashboard/summary?store_id=' . $udaipur->id)
+            ->assertStatus(200)
+            ->assertJsonPath('data.inventory.kpis.total_products', 2)
+            ->assertJsonPath('data.inventory.kpis.below_min_level', 0)
+            ->assertJsonPath('data.inventory.kpis.out_of_stock', 1);
+
+        // Lazy-loaded pages for the two tables.
+        $this->getJson('/api/v1/dashboard/inventory/out-of-stock?per_page=1&page=2')
+            ->assertStatus(200)
+            ->assertJsonPath('data.current_page', 2)
+            ->assertJsonPath('data.last_page', 2)
+            ->assertJsonCount(1, 'data.items');
+
+        $this->getJson('/api/v1/dashboard/inventory/below-min-level')
+            ->assertStatus(200)
+            ->assertJsonPath('data.total', 1);
     }
 
     public function test_custom_date_range_validation()

@@ -110,7 +110,7 @@ class ServiceRecordLegacySparePartPayloadTest extends TestCase
             'spare_parts_changed' => true,
             'spare_parts'         => [
                 ['source' => 'store', 'store_product_id' => $this->wrench->id, 'inventory_id' => $this->wrenchStock->id, 'quantity' => 1, 'amount' => 100],
-                ['source' => 'store', 'store_product_id' => $this->hammer->id, 'inventory_id' => $this->wrenchStock->id, 'quantity' => 3, 'amount' => 300],
+                ['source' => 'store', 'store_product_id' => $this->hammer->id, 'inventory_id' => $this->wrenchStock->id, 'quantity' => 3, 'amount' => 100],
             ],
         ])->assertStatus(200);
 
@@ -133,7 +133,7 @@ class ServiceRecordLegacySparePartPayloadTest extends TestCase
         $this->putJson('/api/v1/admin/service-records/' . $id, [
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['source' => 'store', 'store_product_id' => $this->hammer->id, 'inventory_id' => $this->wrenchStock->id, 'quantity' => 2, 'amount' => 200],
+                ['source' => 'store', 'store_product_id' => $this->hammer->id, 'inventory_id' => $this->wrenchStock->id, 'quantity' => 2, 'amount' => 100],
             ],
         ])->assertStatus(200);
 

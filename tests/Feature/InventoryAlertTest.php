@@ -236,18 +236,46 @@ class InventoryAlertTest extends TestCase
         $this->assertSame(0, InventoryAlert::openLevel()->count());
     }
 
-    public function test_removing_a_product_from_a_store_raises_product_removed_and_closes_its_alerts()
+    public function test_removing_a_product_from_a_store_deletes_its_alerts()
     {
+        // Another product's alert at the same store must survive.
+        $gloves = Product::create([
+            'sub_category_id' => $this->subCategory->id,
+            'name' => 'Safety Gloves',
+            'min_stock' => 5,
+            'is_active' => 1
+        ]);
+        $glovesStock = $this->stock(3, $gloves);
+        InventoryAlert::create([
+            'type' => 'low_stock',
+            'severity' => 'warning',
+            'store_id' => $this->store->id,
+            'product_id' => $gloves->id,
+            'inventory_id' => $glovesStock->id,
+            'title' => 'Low stock: Safety Gloves',
+            'message' => 'Safety Gloves is low.',
+        ]);
+
         $inventory = $this->stock(1);
         $this->assign(1)->assertStatus(200); // out of stock, left 0
+        $this->assertSame(1, InventoryAlert::where('inventory_id', $inventory->id)->count());
 
         $this->deleteJson("/api/v1/admin/inventories/{$inventory->id}")->assertStatus(200);
 
-        $removed = $this->alertsOfType('product_removed')->sole();
-        $this->assertSame($inventory->id, $removed->inventory_id);
-        $this->assertSame('Safety Helmet', $removed->product_name);
+        // Nothing left to open, so nothing left to show.
+        $this->assertSame(0, InventoryAlert::where('inventory_id', $inventory->id)->count());
+        $this->assertSame(1, InventoryAlert::count());
+        $this->assertSame($glovesStock->id, InventoryAlert::sole()->inventory_id);
+    }
 
-        $this->assertSame(0, InventoryAlert::openLevel()->count());
+    public function test_bulk_upload_and_removal_raise_no_unlinkable_alerts()
+    {
+        $this->assertNotContains('product_removed', InventoryAlert::TYPES);
+        $this->assertNotContains('bulk_import', InventoryAlert::TYPES);
+
+        $this->getJson('/api/v1/admin/inventory-alerts?type=bulk_import')
+            ->assertStatus(422)
+            ->assertJsonStructure(['errors' => ['type']]);
     }
 
     public function test_raising_min_stock_flags_rows_that_are_now_under_it()
@@ -267,6 +295,46 @@ class InventoryAlertTest extends TestCase
         $low = $this->alertsOfType('low_stock')->sole();
         $this->assertSame($inventory->id, $low->inventory_id);
         $this->assertSame('product_update', $low->source);
+
+        // Product-wide: opens the product across every store, no store filter.
+        $this->assertSame(
+            ['module' => 'inventory', 'filters' => ['product_id' => $this->product->id]],
+            $changed->redirect()
+        );
+
+        $this->getJson("/api/v1/admin/inventory-alerts/{$changed->id}")
+            ->assertStatus(200)
+            ->assertJsonPath('data.redirect.module', 'inventory')
+            ->assertJsonPath('data.redirect.filters', ['product_id' => $this->product->id]);
+    }
+
+    public function test_every_alert_redirects_to_inventory_filtered_to_its_product_and_store()
+    {
+        $inventory = $this->stock(6);
+        $this->assign(2)->assertStatus(200); // low_stock
+        $this->assign(4)->assertStatus(200); // out_of_stock
+        $this->add(10)->assertStatus(200);   // stock_replenished + back_in_stock
+
+        $alerts = $this->getJson('/api/v1/admin/inventory-alerts')
+            ->assertStatus(200)
+            ->json('data');
+
+        $this->assertCount(4, $alerts);
+
+        foreach ($alerts as $alert) {
+            $this->assertSame('inventory', $alert['redirect']['module'], $alert['type']);
+            $this->assertEquals([
+                'product_id' => $this->product->id,
+                'store_id' => $this->store->id,
+            ], $alert['redirect']['filters'], $alert['type']);
+        }
+
+        // The filters really do open the row the alert is about.
+        $filters = http_build_query($alerts[0]['redirect']['filters']);
+        $this->getJson("/api/v1/admin/inventories?{$filters}")
+            ->assertStatus(200)
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.id', $inventory->id);
     }
 
     public function test_index_lists_newest_first_and_filters()
@@ -339,17 +407,28 @@ class InventoryAlertTest extends TestCase
             ->assertJsonPath('data.is_read', true)
             ->assertJsonPath('data.read_by.id', $this->adminUser->id);
 
-        $this->getJson('/api/v1/admin/inventory-alerts?read=unread')
+        // The list only carries new alerts: the one just read is gone from it.
+        $this->getJson('/api/v1/admin/inventory-alerts')
             ->assertStatus(200)
             ->assertJsonCount(1, 'data')
+            ->assertJsonPath('pagination.total', 1)
             ->assertJsonPath('data.0.type', 'low_stock');
 
         $this->postJson('/api/v1/admin/inventory-alerts/read-all')
             ->assertStatus(200)
             ->assertJsonPath('data.marked', 1);
 
+        $this->getJson('/api/v1/admin/inventory-alerts')
+            ->assertStatus(200)
+            ->assertJsonCount(0, 'data');
+
         $this->getJson('/api/v1/admin/inventory-alerts/summary')
             ->assertJsonPath('data.unread_count', 0);
+
+        // A read alert is still reachable directly, it is only off the list.
+        $this->getJson("/api/v1/admin/inventory-alerts/{$stockAdded->id}")
+            ->assertStatus(200)
+            ->assertJsonPath('data.is_read', true);
 
         $this->getJson('/api/v1/admin/inventory-alerts/999999')->assertStatus(404);
     }

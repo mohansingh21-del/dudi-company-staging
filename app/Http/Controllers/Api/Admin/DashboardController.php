@@ -15,6 +15,7 @@ use App\Services\DashboardService;
 use App\Services\FuelDashboardService;
 use App\Services\DelayDashboardService;
 use App\Services\DispatchDashboardService;
+use App\Services\InventoryDashboardService;
 use Illuminate\Http\JsonResponse;
 
 class DashboardController extends Controller
@@ -40,18 +41,25 @@ class DashboardController extends Controller
     protected $dispatchService;
 
     /**
+     * @var InventoryDashboardService
+     */
+    protected $inventoryService;
+
+    /**
      * Inject services.
      */
     public function __construct(
         DashboardService $dashboardService,
         FuelDashboardService $fuelService,
         DelayDashboardService $delayService,
-        DispatchDashboardService $dispatchService
+        DispatchDashboardService $dispatchService,
+        InventoryDashboardService $inventoryService
     ) {
         $this->dashboardService = $dashboardService;
         $this->fuelService = $fuelService;
         $this->delayService = $delayService;
         $this->dispatchService = $dispatchService;
+        $this->inventoryService = $inventoryService;
     }
 
     /**
@@ -264,6 +272,60 @@ class DashboardController extends Controller
             return response()->json([
                 'status'  => false,
                 'message' => 'Failed to retrieve recent dispatch trips.',
+                'error'   => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/v1/dashboard/inventory/below-min-level
+     *
+     * @param DashboardSummaryRequest $request
+     * @return JsonResponse
+     */
+    public function belowMinLevelProducts(DashboardSummaryRequest $request): JsonResponse
+    {
+        try {
+            $filters = $request->getResolvedFilters();
+            $perPage = (int) $request->input('per_page', 10);
+            $data = $this->inventoryService->getBelowMinLevel($filters['store_id'], $perPage);
+
+            return response()->json([
+                'status'  => true,
+                'message' => 'Below min level products retrieved successfully.',
+                'data'    => $data,
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'Failed to retrieve below min level products.',
+                'error'   => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * GET /api/v1/dashboard/inventory/out-of-stock
+     *
+     * @param DashboardSummaryRequest $request
+     * @return JsonResponse
+     */
+    public function outOfStockProducts(DashboardSummaryRequest $request): JsonResponse
+    {
+        try {
+            $filters = $request->getResolvedFilters();
+            $perPage = (int) $request->input('per_page', 10);
+            $data = $this->inventoryService->getOutOfStock($filters['store_id'], $perPage);
+
+            return response()->json([
+                'status'  => true,
+                'message' => 'Out of stock products retrieved successfully.',
+                'data'    => $data,
+            ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status'  => false,
+                'message' => 'Failed to retrieve out of stock products.',
                 'error'   => $th->getMessage(),
             ], 500);
         }

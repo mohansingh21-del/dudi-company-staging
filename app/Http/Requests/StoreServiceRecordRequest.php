@@ -72,9 +72,9 @@ class StoreServiceRecordRequest extends FormRequest
             'spare_parts.*.part_name'              => 'nullable|string|max:255',
             'spare_parts.*.vendor_name'            => 'nullable|string|max:255',
             'spare_parts.*.quantity'               => 'required_with:spare_parts|numeric|min:0.01',
-            // The caller prices the whole line, not each unit: a quantity of 4
-            // comes with one amount covering all 4. unit_price is derived from
-            // it server-side. A part left unpriced costs nothing.
+            // The per-unit price, not the line total: a quantity of 4 at an
+            // amount of 100 is a 400 line, worked out server-side. A part left
+            // unpriced costs nothing.
             'spare_parts.*.amount'                 => 'nullable|numeric|min:0',
 
             // A new record starts with nothing on file, so the total cap is a

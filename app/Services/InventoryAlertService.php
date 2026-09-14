@@ -17,6 +17,11 @@ use Illuminate\Support\Collection;
  *
  * Alerts are written inside the caller's transaction, so a movement that rolls
  * back takes its alerts with it.
+ *
+ * Every alert must be able to open the inventory module filtered to its
+ * product (and store, for a stock row) — see InventoryAlert::redirect(). So
+ * nothing is raised for events with no single product to show, such as a bulk
+ * upload, or for a stock row that is being removed.
  */
 class InventoryAlertService
 {
@@ -126,62 +131,6 @@ class InventoryAlertService
         }
 
         $this->syncStockLevel($inventory, $source, $userId, $reference);
-    }
-
-    /**
-     * A product taken off a store. Its level alerts can never recover now, so
-     * they are closed along with it.
-     *
-     * @param  Inventory  $inventory
-     * @param  int|null   $userId
-     * @return void
-     */
-    public function productRemoved(Inventory $inventory, $userId = null)
-    {
-        $inventory->loadMissing(['product', 'store']);
-
-        InventoryAlert::openLevel()
-            ->where('inventory_id', $inventory->id)
-            ->update(['resolved_at' => now()]);
-
-        $productName = $this->productName($inventory);
-
-        $this->raise(InventoryAlert::TYPE_PRODUCT_REMOVED, $this->rowAttributes($inventory, 'store_unmap', $userId, null) + [
-            'title'   => "Product removed: {$productName}",
-            'message' => "{$productName} was removed from {$this->storeName($inventory)}.",
-        ]);
-    }
-
-    /**
-     * One summary for a whole upload — a row per imported product would bury
-     * everything else in the feed. The level alerts for each row are still
-     * raised individually by the import.
-     *
-     * @param  int       $successCount
-     * @param  int       $storeCount
-     * @param  int       $errorCount
-     * @param  int|null  $userId
-     * @return void
-     */
-    public function bulkImported($successCount, $storeCount, $errorCount, $userId = null)
-    {
-        $message = "{$successCount} products were imported into inventory across {$storeCount} store(s).";
-
-        if ($errorCount > 0) {
-            $message .= " {$errorCount} row(s) were rejected.";
-        }
-
-        $this->raise(InventoryAlert::TYPE_BULK_IMPORT, [
-            'source'       => 'bulk_import',
-            'triggered_by' => $userId,
-            'title'        => 'Bulk import completed',
-            'message'      => $message,
-            'meta'         => [
-                'imported' => (int) $successCount,
-                'stores'   => (int) $storeCount,
-                'rejected' => (int) $errorCount,
-            ],
-        ]);
     }
 
     /**

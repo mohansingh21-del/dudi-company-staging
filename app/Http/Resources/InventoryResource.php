@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Inventory;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 class InventoryResource extends JsonResource
@@ -12,6 +13,7 @@ class InventoryResource extends JsonResource
         // The floor lives on the product and applies in every store that
         // carries it — there is no per-store override.
         $minStock = (float) optional($this->product)->min_stock;
+        $stockStatus = Inventory::stockStatus($leftQuantity, $minStock);
 
         return [
             'id' => $this->id,
@@ -29,6 +31,8 @@ class InventoryResource extends JsonResource
             'available_quantity' => max(0, $leftQuantity),
             'is_low_stock' => $leftQuantity <= $minStock,
             'is_out_of_stock' => $leftQuantity <= 0,
+            'stock_status' => $stockStatus,
+            'stock_status_label' => Inventory::STOCK_STATUS_LABELS[$stockStatus],
             'status' => $this->is_active,
             'created_at' => optional($this->created_at)->toIso8601String(),
             'updated_at' => optional($this->updated_at)->toIso8601String(),

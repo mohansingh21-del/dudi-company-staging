@@ -183,6 +183,91 @@ class InventoryManagementTest extends TestCase
             ]);
     }
 
+    /**
+     * Rows of a downloaded CSV, header included.
+     */
+    protected function downloadedCsv($response)
+    {
+        $path = $response->baseResponse->getFile()->getPathname();
+        $lines = array_filter(explode("\n", trim(file_get_contents($path))));
+
+        return array_values(array_map('str_getcsv', $lines));
+    }
+
+    public function test_can_export_inventory_as_csv()
+    {
+        Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 250.00,
+            'left_quantity' => 3.00,
+            'is_active' => 1
+        ]);
+
+        $response = $this->get('/api/v1/admin/inventories/export?format=csv');
+
+        $response->assertStatus(200);
+        $this->assertStringContainsString('.csv', $response->headers->get('content-disposition'));
+
+        $rows = $this->downloadedCsv($response);
+
+        $this->assertSame('Sr No', $rows[0][0]);
+        $this->assertCount(2, $rows);
+        $this->assertNotContains('Total Stock', $rows[0]);
+        $this->assertSame(
+            ['1', 'Central Store', 'Test Product', 'Test Category', 'Test SubCategory', '3', '5', 'Low Stock', 'Active'],
+            array_slice($rows[1], 0, 9)
+        );
+    }
+
+    public function test_export_defaults_to_excel()
+    {
+        Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 10,
+            'left_quantity' => 10
+        ]);
+
+        $response = $this->get('/api/v1/admin/inventories/export');
+
+        $response->assertStatus(200);
+        $this->assertStringContainsString('.xlsx', $response->headers->get('content-disposition'));
+    }
+
+    public function test_export_applies_list_filters()
+    {
+        $otherStore = Store::create(['name' => 'North Store', 'is_active' => 1]);
+
+        Inventory::create([
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 100,
+            'left_quantity' => 100
+        ]);
+        Inventory::create([
+            'store_id' => $otherStore->id,
+            'product_id' => $this->product->id,
+            'quantity' => 10,
+            'left_quantity' => 0
+        ]);
+
+        $rows = $this->downloadedCsv(
+            $this->get("/api/v1/admin/inventories/export?format=csv&stock_status=out_of_stock")
+        );
+
+        $this->assertCount(2, $rows);
+        $this->assertSame('North Store', $rows[1][1]);
+        $this->assertSame('Out of Stock', $rows[1][7]);
+    }
+
+    public function test_export_rejects_unknown_format()
+    {
+        $this->getJson('/api/v1/admin/inventories/export?format=pdf')
+            ->assertStatus(422)
+            ->assertJsonStructure(['errors' => ['format']]);
+    }
+
     public function test_can_assign_product_to_employee()
     {
         // Add initial stock first
@@ -661,7 +746,7 @@ class InventoryManagementTest extends TestCase
             'product_id' => $this->product->id,
             'store_id' => $this->store->id,
             'type' => 'in',
-            'action' => 'replenished',
+            'action' => 'added',
             'quantity' => 3.00,
             'remarks' => 'Small top-up'
         ]);
@@ -702,7 +787,7 @@ class InventoryManagementTest extends TestCase
             'quantity' => 10.00
         ]);
 
-        // 2. Replenished
+        // 2. Topped up an existing row: still logged as added
         $this->postJson('/api/v1/admin/inventories/add', [
             'store_id' => $this->store->id,
             'product_id' => $this->product->id,
@@ -711,7 +796,7 @@ class InventoryManagementTest extends TestCase
 
         $this->assertDatabaseHas('inventory_logs', [
             'product_id' => $this->product->id,
-            'action' => 'replenished',
+            'action' => 'added',
             'quantity' => 15.00
         ]);
 

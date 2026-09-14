@@ -41,6 +41,8 @@ class InventoryAlertResource extends JsonResource
             'is_resolved' => $this->resource->isLevel() ? $this->resolved_at !== null : null,
             'resolved_at' => optional($this->resolved_at)->toIso8601String(),
             'triggered_by' => $user($this->triggeredBy),
+            // Where clicking the alert should take the user.
+            'redirect' => $this->resource->redirect(),
             'created_at' => optional($this->created_at)->toIso8601String(),
         ];
     }

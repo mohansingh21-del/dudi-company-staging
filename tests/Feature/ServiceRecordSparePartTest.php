@@ -100,7 +100,7 @@ class ServiceRecordSparePartTest extends TestCase
     public function test_a_part_deducts_its_own_store_and_leaves_the_other_alone()
     {
         $response = $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['inventory_id' => $this->inventory->id, 'quantity' => 3, 'amount' => 300],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 3, 'amount' => 100],
         ]));
 
         $response->assertStatus(201)
@@ -129,12 +129,12 @@ class ServiceRecordSparePartTest extends TestCase
         ]);
     }
 
-    public function test_amount_prices_the_whole_line_and_unit_price_is_derived()
+    public function test_amount_is_the_unit_price_and_the_line_is_multiplied_out()
     {
-        // The user enters a quantity of 4 and one amount covering all 4 — not a
-        // per-unit rate. unit_price is worked out from it, never sent.
+        // The user enters a quantity of 4 at 225 each — a per-unit rate, not
+        // the line total. The line amount is worked out from it.
         $id = $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['inventory_id' => $this->inventory->id, 'quantity' => 4, 'amount' => 900],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 4, 'amount' => 225],
         ]))->assertStatus(201)
             ->assertJsonPath('data.spare_parts_amount_total', '900.00')
             ->json('data.id');
@@ -171,7 +171,7 @@ class ServiceRecordSparePartTest extends TestCase
         // 20 on hand, min_stock 5: issuing 16 lands at 4 — under the line but
         // still on the shelf, so it goes through.
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['product_id' => $this->product->id, 'quantity' => 16, 'amount' => 160],
+            ['product_id' => $this->product->id, 'quantity' => 16, 'amount' => 10],
         ]))->assertStatus(201);
 
         $this->assertSame('4.00', $this->inventory->fresh()->left_quantity);
@@ -189,7 +189,7 @@ class ServiceRecordSparePartTest extends TestCase
         Mail::fake();
 
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['product_id' => $this->product->id, 'quantity' => 21, 'amount' => 210],
+            ['product_id' => $this->product->id, 'quantity' => 21, 'amount' => 10],
         ]))->assertStatus(422)->assertJsonValidationErrors('spare_parts');
 
         $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
@@ -204,7 +204,7 @@ class ServiceRecordSparePartTest extends TestCase
         Mail::fake();
 
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['inventory_id' => $this->inventory->id, 'quantity' => 15, 'amount' => 150],
+            ['inventory_id' => $this->inventory->id, 'quantity' => 15, 'amount' => 10],
         ]))->assertStatus(201);
 
         $this->assertSame('5.00', $this->inventory->fresh()->left_quantity);
@@ -299,7 +299,7 @@ class ServiceRecordSparePartTest extends TestCase
             'job_card_number'     => 'JC-2026-0001',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['inventory_id' => $this->inventory->id, 'quantity' => 5, 'amount' => 500],
+                ['inventory_id' => $this->inventory->id, 'quantity' => 5, 'amount' => 100],
             ],
         ])->assertStatus(200);
 
@@ -318,7 +318,7 @@ class ServiceRecordSparePartTest extends TestCase
             'job_card_number'     => 'JC-2026-0001',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['inventory_id' => $this->inventory->id, 'quantity' => 2, 'amount' => 200],
+                ['inventory_id' => $this->inventory->id, 'quantity' => 2, 'amount' => 100],
             ],
         ])->assertStatus(200);
 
@@ -350,7 +350,7 @@ class ServiceRecordSparePartTest extends TestCase
             'job_card_number'     => 'JC-2026-0001',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['inventory_id' => $this->inventory->id, 'quantity' => 3, 'amount' => 300],
+                ['inventory_id' => $this->inventory->id, 'quantity' => 3, 'amount' => 100],
             ],
         ])->assertStatus(200);
 
@@ -401,7 +401,7 @@ class ServiceRecordSparePartTest extends TestCase
             'job_card_number'     => 'JC-2026-0002',
             'spare_parts_changed' => true,
             'spare_parts'         => [
-                ['inventory_id' => $this->otherInventory->id, 'quantity' => 4, 'amount' => 400],
+                ['inventory_id' => $this->otherInventory->id, 'quantity' => 4, 'amount' => 100],
             ],
         ])->assertStatus(200);
 
@@ -417,7 +417,7 @@ class ServiceRecordSparePartTest extends TestCase
         Mail::fake();
 
         $id = $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['product_id' => $this->product->id, 'quantity' => 16, 'amount' => 160],
+            ['product_id' => $this->product->id, 'quantity' => 16, 'amount' => 10],
         ]))->assertStatus(201)->json('data.id');
 
         // 20 - 16 = 4, under min_stock of 5: a low-stock alert is open.
@@ -497,8 +497,8 @@ class ServiceRecordSparePartTest extends TestCase
             [
                 'inventory_id' => $inventoryId ?: $this->inventory->id,
                 'quantity'     => $quantity,
-                // The caller prices the whole line, so 100 a unit means 100 * qty.
-                'amount'       => 100 * $quantity,
+                // The caller prices each unit, so the line comes to 100 * qty.
+                'amount'       => 100,
             ],
         ]))->assertStatus(201)->json('data.id');
     }

@@ -141,8 +141,8 @@ class ServiceRecordManagementTest extends TestCase
                 [
                     'inventory_id'         => $this->inventory->id,
                     'quantity'             => 2,
-                    // One amount covering both units, not a per-unit rate.
-                    'amount'               => 100.00,
+                    // A per-unit rate: 2 at 50 is a 100 line.
+                    'amount'               => 50.00,
                 ],
                 [
                     'inventory_id'     => $this->inventory2->id,
@@ -191,7 +191,7 @@ class ServiceRecordManagementTest extends TestCase
                 [
                     'inventory_id'         => $this->inventory->id,
                     'quantity'             => 21,
-                    'amount'               => 210.00,
+                    'amount'               => 10.00,
                 ]
             ],
         ];

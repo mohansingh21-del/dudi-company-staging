@@ -164,6 +164,8 @@ Route::prefix('v1')->group(function () {
             Route::get('delay/critical-delays', [DashboardController::class, 'criticalDelays']);
             Route::get('delay/recent-delays', [DashboardController::class, 'recentDelays']);
             Route::get('dispatch/recent-trips', [DashboardController::class, 'recentTrips']);
+            Route::get('inventory/below-min-level', [DashboardController::class, 'belowMinLevelProducts']);
+            Route::get('inventory/out-of-stock', [DashboardController::class, 'outOfStockProducts']);
 
             /*
             | Live fleet telematics (VECV rFMS).
@@ -480,6 +482,7 @@ Route::prefix('v1')->group(function () {
                 Route::post('assign', [InventoryController::class, 'assign']);
                 Route::post('bulk-upload', [InventoryController::class, 'bulkUpload']);
                 Route::get('assignments', [InventoryController::class, 'assignments']);
+                Route::get('export', [InventoryController::class, 'export']);
                 Route::get('{id}/logs', [InventoryController::class, 'logs']);
                 Route::get('{id}', [InventoryController::class, 'show']);
                 Route::delete('{id}', [InventoryController::class, 'destroy']);
@@ -489,9 +492,10 @@ Route::prefix('v1')->group(function () {
             |--------------------------------------------------------------------------
             | Inventory Alerts
             |--------------------------------------------------------------------------
-            | Low stock, out of stock, back in stock, stock added/replenished,
-            | product removed, bulk imports and min stock changes. Written as
-            | stock moves; these routes only read them and track read state.
+            | Low stock, out of stock, back in stock, stock added/replenished
+            | and min stock changes. Written as stock moves; these routes only
+            | read them and track read state. Each alert carries a `redirect`
+            | naming the inventory filters (product_id, store_id) to open.
             |
             | Literal segments must stay above {id} or they resolve as one.
             */

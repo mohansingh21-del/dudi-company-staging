@@ -206,12 +206,11 @@ class ServiceRecordService
                         "Ticket: {$ticketNumber}"
                     );
 
-                    // The caller prices the whole line, not each unit: a
-                    // quantity of 4 comes with one amount covering all 4, and
-                    // unit_price is derived from it. A part the caller does not
-                    // price costs nothing on the record.
-                    $partAmount = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
-                    $unitPrice = $quantity > 0 ? $partAmount / $quantity : 0.00;
+                    // The caller prices each unit, not the whole line: a
+                    // quantity of 4 at an amount of 100 is a 400 line. A part
+                    // the caller does not price costs nothing on the record.
+                    $unitPrice = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
+                    $partAmount = round($unitPrice * $quantity, 2);
 
                     ServiceSparePart::create([
                         'service_record_id' => $serviceRecord->id,
@@ -642,9 +641,9 @@ class ServiceRecordService
 
             // Parts keep their price: dropping the amount here would quietly
             // erase money that create() recorded on the record total. Same
-            // shape as create() — the caller prices the line, unit_price is
-            // derived from it.
-            $partAmount = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
+            // shape as create() — the caller prices each unit, the line
+            // amount is unit_price × quantity.
+            $unitPrice = (float) (isset($part['amount']) ? $part['amount'] : 0.00);
 
             ServiceSparePart::create([
                 'service_record_id' => $record->id,
@@ -652,8 +651,8 @@ class ServiceRecordService
                 'part_name'         => $partNames[$inventoryId],
                 'vendor_name'       => isset($storeNames[$inventoryId]) ? $storeNames[$inventoryId] : null,
                 'quantity'          => $quantity,
-                'unit_price'        => $quantity > 0 ? $partAmount / $quantity : 0.00,
-                'amount'            => $partAmount,
+                'unit_price'        => $unitPrice,
+                'amount'            => round($unitPrice * $quantity, 2),
             ]);
         }
 

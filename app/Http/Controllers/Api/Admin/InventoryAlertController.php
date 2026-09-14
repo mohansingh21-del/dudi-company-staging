@@ -21,12 +21,17 @@ use Illuminate\Validation\ValidationException;
  */
 class InventoryAlertController extends Controller
 {
+    /**
+     * New alerts only. Once an alert is read — opened through markRead or
+     * cleared by markAllRead — it drops out of this list for good.
+     */
     public function index(Request $request)
     {
         try {
             $this->validateFilters($request);
 
             $alerts = $this->filtered($request)
+                ->unread()
                 ->with(['triggeredBy', 'readBy'])
                 ->orderByDesc('created_at')
                 ->orderByDesc('id')
@@ -228,12 +233,6 @@ class InventoryAlertController extends Controller
             $query->whereIn('type', InventoryAlert::LEVEL_TYPES)->whereNotNull('resolved_at');
         }
 
-        if ($request->input('read') === 'unread') {
-            $query->whereNull('read_at');
-        } elseif ($request->input('read') === 'read') {
-            $query->whereNotNull('read_at');
-        }
-
         if ($request->filled('from_date')) {
             $query->whereDate('created_at', '>=', $request->from_date);
         }
@@ -263,7 +262,6 @@ class InventoryAlertController extends Controller
             'product_id' => 'nullable|integer',
             'inventory_id' => 'nullable|integer',
             'status' => 'nullable|in:open,resolved',
-            'read' => 'nullable|in:read,unread',
             'from_date' => 'nullable|date',
             'to_date' => 'nullable|date|after_or_equal:from_date',
             'limit' => 'nullable|integer|min:1|max:100',

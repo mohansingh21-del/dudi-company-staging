@@ -35,6 +35,7 @@ class DashboardSummaryRequest extends FormRequest
             'machine_number_id' => 'nullable|integer|exists:equipment_names,id',
             'delay_category_id' => 'nullable|integer|exists:delay_categories,id',
             'delay_severity' => 'nullable|string',
+            'store_id' => 'nullable|integer|exists:stores,id',
         ];
     }
 
@@ -160,6 +161,7 @@ class DashboardSummaryRequest extends FormRequest
             'machine_number_id' => $this->input('machine_number_id') ? (int) $this->input('machine_number_id') : null,
             'delay_category_id' => $this->input('delay_category_id') ? (int) $this->input('delay_category_id') : null,
             'delay_severity'    => $this->input('delay_severity'),
+            'store_id'          => $this->input('store_id') ? (int) $this->input('store_id') : null,
         ];
     }
 }

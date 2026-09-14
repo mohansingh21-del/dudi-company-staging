@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Validator;
+use App\Exports\InventoryExport;
 use App\Models\Inventory;
 use App\Models\InventoryLog;
 use App\Models\Product;
@@ -56,84 +58,8 @@ class InventoryController extends Controller
         try {
             $limit = $request->input('limit', null);
             $page = $request->input('page', 1);
-            $inventories = Inventory::with($this->with);
-
-            if ($request->filled('store_id')) {
-                $inventories->where('store_id', (int) $request->store_id);
-            }
-
-            if ($request->filled('product_id')) {
-                $inventories->where('product_id', (int) $request->product_id);
-            }
-
-            if ($request->filled('sub_category_id')) {
-                $subCategoryId = (int) $request->sub_category_id;
-                $inventories->whereHas('product', function ($query) use ($subCategoryId) {
-                    $query->where('sub_category_id', $subCategoryId);
-                });
-            }
-
-            // Category is a grandparent here — stock points at a product, which
-            // points at a sub-category, which points at the category.
-            if ($request->filled('category_id')) {
-                $categoryId = (int) $request->category_id;
-                $inventories->whereHas('product.subCategory', function ($query) use ($categoryId) {
-                    $query->where('category_id', $categoryId);
-                });
-            }
-
-            // Stock sitting at or under its product's min_stock, which lives on
-            // products, so this has to reach across the join rather than
-            // compare two columns of this table.
-            if ($request->boolean('low_stock')) {
-                $inventories->whereHas('product', function ($query) {
-                    $query->whereColumn('products.min_stock', '>=', 'inventories.left_quantity');
-                });
-            }
-
-            // The Stock Status dropdown. Three states that do not overlap and
-            // together cover every row, so the filter never hides stock the
-            // user would expect to see under some other option:
-            //   out_of_stock — nothing left on the shelf at all
-            //   low_stock    — some left, but at or under min_stock (still issuable)
-            //   in_stock     — above min_stock
-            if ($request->filled('stock_status')) {
-                switch ($request->stock_status) {
-                    case 'out_of_stock':
-                        $inventories->where('left_quantity', '<=', 0);
-                        break;
-
-                    case 'low_stock':
-                        $inventories->where('left_quantity', '>', 0)
-                            ->whereHas('product', function ($query) {
-                                $query->whereColumn('products.min_stock', '>=', 'inventories.left_quantity');
-                            });
-                        break;
-
-                    case 'in_stock':
-                        $inventories->whereHas('product', function ($query) {
-                            $query->whereColumn('products.min_stock', '<', 'inventories.left_quantity');
-                        });
-                        break;
-                }
-            }
-
-            if ($request->filled('search')) {
-                $search = $request->search;
-                $inventories->where(function ($query) use ($search) {
-                    $query->whereHas('product', function ($q) use ($search) {
-                        $q->where('name', 'LIKE', "%{$search}%")
-                            ->orWhereHas('subCategory', function ($sq) use ($search) {
-                                $sq->where('name', 'LIKE', "%{$search}%")
-                                    ->orWhereHas('category', function ($cq) use ($search) {
-                                        $cq->where('name', 'LIKE', "%{$search}%");
-                                    });
-                            });
-                    })->orWhereHas('store', function ($q) use ($search) {
-                        $q->where('name', 'LIKE', "%{$search}%");
-                    });
-                });
-            }
+            $inventories = Inventory::with($this->with)
+                ->listFilter($request->only(Inventory::LIST_FILTERS));
 
             if ($limit) {
                 $paginated = $inventories->paginate($limit, ['*'], 'page', $page);
@@ -181,6 +107,52 @@ class InventoryController extends Controller
     }
 
     /**
+     * The inventory list, downloaded — the Export button's two options.
+     *
+     *   format=xlsx  (default) Export as Excel
+     *   format=csv             Export as CSV
+     *
+     * Honours every filter the list does (store_id, product_id, category_id,
+     * sub_category_id, low_stock, stock_status, search) so the file matches the
+     * screen; limit/page are ignored and every matching row is written.
+     */
+    public function export(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'format' => 'nullable|in:csv,xlsx',
+            'store_id' => 'nullable|integer',
+            'product_id' => 'nullable|integer',
+            'category_id' => 'nullable|integer',
+            'sub_category_id' => 'nullable|integer',
+            'stock_status' => 'nullable|in:' . implode(',', array_keys(Inventory::STOCK_STATUS_LABELS)),
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+            $export = new InventoryExport($request->only(Inventory::LIST_FILTERS));
+            $filename = 'inventory-' . now()->format('Y-m-d-H-i-s');
+
+            if ($request->input('format') === 'csv') {
+                return Excel::download($export, "{$filename}.csv", \Maatwebsite\Excel\Excel::CSV);
+            }
+
+            return Excel::download($export, "{$filename}.xlsx");
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Add stock for a product at a store.
      *
      * This is the only way stock goes up — there is no edit. Re-posting a pair
@@ -213,7 +185,7 @@ class InventoryController extends Controller
                     'store_id' => $storeId,
                     'user_id' => auth()->id(),
                     'type' => 'in',
-                    'action' => 'replenished',
+                    'action' => 'added',
                     'quantity' => $request->quantity,
                     'remarks' => $request->remarks ?? 'Replenished stock quantity'
                 ]);
@@ -438,6 +410,8 @@ class InventoryController extends Controller
                 ->orderBy('created_at', 'desc')
                 ->get();
 
+            $stockStatus = Inventory::stockStatus($inventory->left_quantity, $product->min_stock);
+
             $allocationHistory = $assignments->map(function ($assignment, $index) {
                 // Fall back to the employee's own site/department when the
                 // assignment wasn't given one explicitly (site_id is optional
@@ -468,6 +442,8 @@ class InventoryController extends Controller
                     'sub_category_name' => optional($product->subCategory)->name,
                     'min_stock' => (float) $product->min_stock,
                     'available_stock' => (float) $inventory->left_quantity,
+                    'stock_status' => $stockStatus,
+                    'stock_status_label' => Inventory::STOCK_STATUS_LABELS[$stockStatus],
                     'allocation_history' => $allocationHistory
                 ]
             ], 200);
@@ -527,12 +503,6 @@ class InventoryController extends Controller
             $successCount = $import->getSuccessCount();
             $storeCount = $import->getStoreCount();
 
-            // Rows are committed one at a time, so a file that fails
-            // validation may still have imported some — announce those.
-            if ($successCount > 0) {
-                $this->alerts->bulkImported($successCount, $storeCount, count($errors), auth()->id());
-            }
-
             if (count($errors) > 0) {
                 return response()->json([
                     'status' => 422,
@@ -588,9 +558,9 @@ class InventoryController extends Controller
                 ], 422);
             }
 
+            // Its alerts go with it (inventory_alerts.inventory_id cascades):
+            // they could only open a stock row that no longer exists.
             $inventory->delete();
-
-            $this->alerts->productRemoved($inventory, auth()->id());
 
             return response()->json([
                 'status' => 200,
@@ -831,6 +801,7 @@ class InventoryController extends Controller
         $product = $inventory->product;
         $leftQuantity = (float) $inventory->left_quantity;
         $minStock = (float) optional($product)->min_stock;
+        $stockStatus = Inventory::stockStatus($leftQuantity, $minStock);
 
         return [
             'inventory_id'       => $inventory->id,
@@ -846,6 +817,8 @@ class InventoryController extends Controller
             'available_quantity' => max(0, $leftQuantity),
             'is_available'       => $leftQuantity > 0,
             'is_low_stock'       => $leftQuantity <= $minStock,
+            'stock_status'       => $stockStatus,
+            'stock_status_label' => Inventory::STOCK_STATUS_LABELS[$stockStatus],
         ];
     }
 }
