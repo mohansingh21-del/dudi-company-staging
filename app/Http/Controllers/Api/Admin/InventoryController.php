@@ -27,7 +27,8 @@ use Maatwebsite\Excel\Facades\Excel;
  * There is no store-less stock and no default store: a row is always somewhere.
  * Stock can be issued down to zero and no further. products.min_stock, set once
  * on the product and applied identically in every store that carries it, is a
- * warning line: crossing it raises an inventory alert but never blocks.
+ * warning line: crossing it raises an inventory alert but never blocks, whether
+ * stock is being added or issued.
  *
  * store_id is required on every write. On the reads it is an optional filter —
  * leaving it off spans every store, so a screen that has not been taught about
@@ -160,9 +161,9 @@ class InventoryController extends Controller
      * unique(store_id, product_id) index is a safety net, not the intended error
      * path. The same product can be stocked at as many stores as needed.
      *
-     * min_stock is only checked when a store first stocks a product. A top-up
-     * can never make the position worse, so any positive quantity is accepted —
-     * including one that leaves a below-floor row still under min_stock.
+     * min_stock does not limit how much can be added: any positive quantity is
+     * accepted, first stock or top-up. A row left at or under min_stock raises
+     * a low-stock alert instead.
      */
     public function store(AddInventoryRequest $request)
     {
@@ -199,18 +200,6 @@ class InventoryController extends Controller
                     'message' => 'Product stock added to inventory successfully',
                     'data' => new InventoryResource($inventory->load($this->with))
                 ]);
-            }
-
-            $product = \App\Models\Product::find($request->product_id);
-
-            if ($product && (float) $request->quantity < (float) $product->min_stock) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Validation failed',
-                    'errors' => [
-                        'quantity' => ["The quantity must be at least {$product->min_stock} (minimum stock level for this product)."]
-                    ]
-                ], 422);
             }
 
             DB::beginTransaction();

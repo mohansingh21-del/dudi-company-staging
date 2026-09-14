@@ -195,17 +195,6 @@ class InventoryImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
-            // Min stock validation
-            if ($quantity < (float) $product->min_stock) {
-                $this->errors[] = [
-                    'row' => $rowNum,
-                    'column' => 'quantity',
-                    'message' => "The quantity ({$quantity}) must be at least {$product->min_stock} (minimum stock level for '{$productName}').",
-                    'value' => $quantity
-                ];
-                continue;
-            }
-
             // Check if product is already stocked at this store. The same
             // product at another store is a different row and no conflict, so
             // a file may well repeat a product once per store.
@@ -244,7 +233,7 @@ class InventoryImport implements ToCollection, WithHeadingRow
                     'remarks' => 'Bulk uploaded via excel file'
                 ]);
 
-                // A row stocked exactly at min_stock is already low.
+                // Stock at or under min_stock is accepted but already low.
                 app(\App\Services\InventoryAlertService::class)
                     ->syncStockLevel($inventory, 'bulk_import', auth()->id());
             });
