@@ -155,6 +155,7 @@ class ServiceRecordReportResource extends JsonResource
                 'id'           => $part->id,
                 'source_label' => $sourceLabel,
                 'inventory_id' => $part->inventory_id,
+                'product_id'   => optional($inventory)->product_id,
                 'store_id'     => optional($inventory)->store_id,
                 'store_name'   => $storeName,
                 'part_name'    => $part->part_name,

@@ -98,13 +98,13 @@ trait NormalizesServiceRecordInput
      * separate row, and a separate balance, at every store that carries it — so
      * it is resolved against this record's store.
      *
-     * Where a line sends both, the resolved row wins over the posted
-     * inventory_id. A client that repeats one inventory_id across lines while
-     * varying store_product_id would otherwise have every one of those lines
-     * saved against the first line's part: the record shows the same part
-     * twice, and that part's stock absorbs a deduction belonging to another.
-     * store_product_id is the field such a payload varies per line, so it is
-     * the one to trust.
+     * A posted inventory_id is discarded outright, for now, on both store and
+     * update. The live form repeats one inventory_id across lines while
+     * varying store_product_id, so trusting it saves every line against the
+     * first line's part: the record shows the same part twice, and that part's
+     * stock absorbs a deduction belonging to another. store_product_id is the
+     * field such a payload varies per line, so it is the only one read — a line
+     * without it is left with no stock row and fails validation.
      *
      * Nothing is guessed when a product is not stocked at the store — the index
      * is recorded for ValidatesSpareParts to report, rather than silently
@@ -123,7 +123,13 @@ trait NormalizesServiceRecordInput
         $storeId = $this->serviceRecordStoreId();
 
         foreach ($parts as $index => $part) {
-            if (!is_array($part) || empty($part['store_product_id'])) {
+            if (!is_array($part)) {
+                continue;
+            }
+
+            $parts[$index]['inventory_id'] = null;
+
+            if (empty($part['store_product_id'])) {
                 continue;
             }
 
@@ -136,8 +142,8 @@ trait NormalizesServiceRecordInput
                 : null;
 
             if (!$resolved) {
-                // The posted inventory_id is left alone: validation fails on
-                // the error added for this index, so it is never read.
+                // inventory_id stays null: validation fails on the error
+                // added for this index, so nothing is guessed.
                 $this->unresolvedStoreProducts[$index] = $productId;
 
                 continue;
