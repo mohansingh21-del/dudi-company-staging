@@ -196,8 +196,8 @@ class ServiceRecordService
                     $quantity = (float) (isset($part['quantity']) ? $part['quantity'] : 1.00);
 
                     // Rejects a part belonging to any store other than the
-                    // record's own, and enforces products.min_stock as a hard
-                    // floor.
+                    // record's own, or more than that store has left. Going
+                    // under products.min_stock only raises an alert.
                     $stockResult = $this->inventoryStockService->deductStock(
                         $inventoryId,
                         $quantity,
@@ -827,8 +827,19 @@ class ServiceRecordService
     }
 
     /**
-     * Soft delete a Service Record.
-     * Note: Inventory deductions are not automatically reversed on delete (manual reversal decision).
+     * Soft delete a Service Record, returning its spare parts to stock.
+     *
+     * The record is only soft deleted and there is no restore route, so parts
+     * can never go back twice. The spare part rows are kept as the history of
+     * what the record used; the audit entry lists what was returned.
+     *
+     * Quantities are summed per stock row, and each return goes through
+     * restockStock, so it is logged and re-checks that row's stock alerts.
+     *
+     * Only parts that still point at a stock row are returned. Legacy
+     * free-text vendor parts never moved stock, and a part whose product was
+     * since removed from its store has lost its pointer (the foreign key is
+     * ON DELETE SET NULL), so there is no row left to return it to.
      *
      * @param ServiceRecord $record
      * @param int $userId
@@ -837,10 +848,34 @@ class ServiceRecordService
     public function delete(ServiceRecord $record, $userId)
     {
         DB::transaction(function () use ($record, $userId) {
+            $parts = ServiceSparePart::where('service_record_id', $record->id)
+                ->whereNotNull('inventory_id')
+                ->get();
+
+            $quantities = [];
+            foreach ($parts as $part) {
+                $inventoryId = (int) $part->inventory_id;
+                $quantities[$inventoryId] = (isset($quantities[$inventoryId]) ? $quantities[$inventoryId] : 0.00)
+                    + (float) $part->quantity;
+            }
+
+            foreach ($quantities as $inventoryId => $quantity) {
+                if ($quantity > 0) {
+                    $this->inventoryStockService->restockStock(
+                        $inventoryId,
+                        $quantity,
+                        $userId,
+                        "Ticket: {$record->ticket_number} (service record deleted)"
+                    );
+                }
+            }
+
             ServiceAuditLog::create([
                 'service_record_id' => $record->id,
                 'action'            => 'deleted',
-                'changes'           => null,
+                'changes'           => $parts->isEmpty()
+                    ? null
+                    : ['spare_parts_returned' => $this->sparePartsSummary($parts)],
                 'performed_by'      => $userId,
                 'created_at'        => now(),
             ]);

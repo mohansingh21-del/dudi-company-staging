@@ -24,10 +24,11 @@ class InventoryResource extends JsonResource
             'total_stock' => (float) $this->quantity,
             'left_quantity' => $leftQuantity,
             'min_stock' => $minStock,
-            // What can actually be issued: min_stock is a hard floor, so stock
-            // sitting at or under it is not available.
-            'available_quantity' => max(0, $leftQuantity - $minStock),
+            // What can actually be issued: everything on the shelf. min_stock
+            // only raises the low-stock flag, it does not hold stock back.
+            'available_quantity' => max(0, $leftQuantity),
             'is_low_stock' => $leftQuantity <= $minStock,
+            'is_out_of_stock' => $leftQuantity <= 0,
             'status' => $this->is_active,
             'created_at' => optional($this->created_at)->toIso8601String(),
             'updated_at' => optional($this->updated_at)->toIso8601String(),

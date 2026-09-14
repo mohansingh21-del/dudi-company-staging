@@ -8,9 +8,9 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * Stock of one product at one store.
  *
- * Every row belongs to a store — there is no store-less "own" stock. The floor
- * a deduction may not cross is products.min_stock, the same number in every
- * store that carries the product.
+ * Every row belongs to a store — there is no store-less "own" stock. Stock can
+ * be issued down to zero. products.min_stock, the same number in every store
+ * that carries the product, is only the line below which an alert is raised.
  */
 class Inventory extends Model
 {

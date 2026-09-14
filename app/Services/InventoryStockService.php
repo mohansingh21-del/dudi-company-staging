@@ -4,19 +4,38 @@ namespace App\Services;
 
 use App\Models\Inventory;
 use App\Models\InventoryLog;
-use App\Services\Concerns\SendsLowStockAlert;
 use Illuminate\Http\Exceptions\HttpResponseException;
 
 /**
  * The one stock service.
  *
  * Every movement is against a single `inventories` row, which already names
- * both the product and the store. The floor a deduction may not cross is
- * products.min_stock — the same number wherever the product is stocked.
+ * both the product and the store. A deduction may take a row down to zero but
+ * never below it. products.min_stock is only a warning line: crossing it raises
+ * an inventory alert, it does not block the issue.
  */
 class InventoryStockService
 {
-    use SendsLowStockAlert;
+    /**
+     * The rejection shared by every path that issues stock.
+     *
+     * @param  string       $productName
+     * @param  string|null  $storeName
+     * @param  float        $availableStock
+     * @return string
+     */
+    public static function insufficientStockMessage($productName, $storeName, $availableStock)
+    {
+        $storeName = $storeName ?: 'Unknown Store';
+
+        if ((float) $availableStock <= 0) {
+            return "'{$productName}' is out of stock at '{$storeName}'. Add stock before issuing it.";
+        }
+
+        $available = rtrim(rtrim(number_format((float) $availableStock, 2, '.', ''), '0'), '.');
+
+        return "Only {$available} units of '{$productName}' are left at '{$storeName}'.";
+    }
 
     /**
      * Issue stock from a store.
@@ -49,17 +68,16 @@ class InventoryStockService
         }
 
         $availableStock = (float) $inventory->left_quantity;
-        $minStock = (float) optional($inventory->product)->min_stock;
         $qtyToDeduct = (float) $quantity;
 
-        if (($availableStock - $qtyToDeduct) < $minStock) {
-            $this->sendLowStockAlert($partName, $availableStock, $storeName);
-
+        // Only an empty shelf stops an issue. Dropping under min_stock is
+        // allowed and raises an alert below.
+        if ($qtyToDeduct > $availableStock) {
             throw new HttpResponseException(response()->json([
                 'status' => 422,
                 'message' => 'Validation failed',
                 'errors' => [
-                    'spare_parts' => ["Cannot issue stock for '{$partName}' from '{$storeName}'. Stock level after deduction would drop below the minimum quantity ({$minStock}). Current available stock: {$availableStock}."]
+                    'spare_parts' => [self::insufficientStockMessage($partName, $storeName, $availableStock)]
                 ]
             ], 422));
         }
@@ -67,10 +85,6 @@ class InventoryStockService
         // Only left_quantity moves; quantity is the running total ever stocked.
         $inventory->left_quantity -= $qtyToDeduct;
         $inventory->save();
-
-        if ((float) $inventory->left_quantity <= $minStock) {
-            $this->sendLowStockAlert($partName, (float) $inventory->left_quantity, $storeName);
-        }
 
         InventoryLog::create([
             'product_id' => $inventory->product_id,
@@ -81,6 +95,8 @@ class InventoryStockService
             'quantity'   => -$qtyToDeduct,
             'remarks'    => "Issued {$qtyToDeduct} units from store '{$storeName}' for service record" . ($remarks ? " - {$remarks}" : "")
         ]);
+
+        $this->alerts()->syncStockLevel($inventory, 'service_record', $userId, $remarks);
 
         return [
             'part_name'  => $partName,
@@ -122,12 +138,23 @@ class InventoryStockService
             'remarks'    => "Returned {$qtyToReturn} units to store '{$storeName}' from service record" . ($remarks ? " - {$remarks}" : "")
         ]);
 
+        // A return can lift a row back over min_stock and close its alerts.
+        $this->alerts()->syncStockLevel($inventory, 'service_record_return', $userId, $remarks);
+
         return [
             'part_name'  => $this->partName($inventory),
             'product_id' => (int) $inventory->product_id,
             'store_id'   => (int) $inventory->store_id,
             'store_name' => $storeName,
         ];
+    }
+
+    /**
+     * @return InventoryAlertService
+     */
+    protected function alerts()
+    {
+        return app(InventoryAlertService::class);
     }
 
     /**

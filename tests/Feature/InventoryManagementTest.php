@@ -150,6 +150,11 @@ class InventoryManagementTest extends TestCase
                     'quantity'
                 ]
             ]);
+
+        $this->assertDatabaseMissing('inventories', [
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id
+        ]);
     }
 
     public function test_can_list_inventory()
@@ -507,7 +512,7 @@ class InventoryManagementTest extends TestCase
             ->assertJsonValidationErrors('file');
     }
 
-    public function test_assign_triggers_low_stock_mail_to_admin_and_supervisor()
+    public function test_assign_emptying_stock_sends_out_of_stock_mail_to_admin_and_supervisor()
     {
         Mail::fake();
 
@@ -538,12 +543,13 @@ class InventoryManagementTest extends TestCase
         ]);
         $supervisorUser->roles()->attach($supervisorRole);
 
-        // Inventory is 0.00
+        // One unit left, already under min_stock of 5. Issuing it is allowed
+        // and empties the shelf.
         Inventory::create([
             'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 10.00,
-            'left_quantity' => 0.00
+            'left_quantity' => 1.00
         ]);
 
         $response = $this->postJson('/api/v1/admin/inventories/assign', [
@@ -556,10 +562,12 @@ class InventoryManagementTest extends TestCase
             'quantity' => 1.00
         ]);
 
-        $response->assertStatus(422);
+        $response->assertStatus(200);
 
         Mail::assertSent(LowStockAlertMail::class, function ($mail) {
-            return $mail->hasTo('another-admin@test.com') && $mail->hasTo('supervisor@test.com');
+            return $mail->outOfStock
+                && $mail->hasTo('another-admin@test.com')
+                && $mail->hasTo('supervisor@test.com');
         });
     }
 
@@ -619,41 +627,47 @@ class InventoryManagementTest extends TestCase
         });
     }
 
-    public function test_can_update_inventory_quantity()
+    public function test_topping_up_existing_inventory_accepts_quantity_below_min_stock()
     {
+        // product min_stock is 5. Stock has run down under the floor; a top-up
+        // of 3 is smaller than min_stock but must still be added on.
         $inventory = Inventory::create([
             'store_id' => $this->store->id,
             'product_id' => $this->product->id,
-            'quantity' => 100.00,
-            'left_quantity' => 50.00
+            'quantity' => 10.00,
+            'left_quantity' => 2.00
         ]);
 
-        $response = $this->postJson("/api/v1/admin/inventories/update-quantity/{$inventory->id}", [
-            'quantity' => 25.00,
-            'remarks' => 'Adding more stock'
+        $response = $this->postJson('/api/v1/admin/inventories/add', [
+            'store_id' => $this->store->id,
+            'product_id' => $this->product->id,
+            'quantity' => 3.00,
+            'remarks' => 'Small top-up'
         ]);
 
         $response->assertStatus(200)
             ->assertJsonFragment([
-                'total_stock' => 125.00,
-                'left_quantity' => 75.00
+                'total_stock' => 13.00,
+                'left_quantity' => 5.00
             ]);
 
         $this->assertDatabaseHas('inventories', [
-            'product_id' => $this->product->id,
-            'quantity' => 125.00,
-            'left_quantity' => 75.00
+            'id' => $inventory->id,
+            'quantity' => 13.00,
+            'left_quantity' => 5.00
         ]);
 
         $this->assertDatabaseHas('inventory_logs', [
             'product_id' => $this->product->id,
+            'store_id' => $this->store->id,
             'type' => 'in',
-            'quantity' => 25.00,
-            'remarks' => 'Adding more stock'
+            'action' => 'replenished',
+            'quantity' => 3.00,
+            'remarks' => 'Small top-up'
         ]);
     }
 
-    public function test_update_inventory_quantity_fails_when_below_min_stock()
+    public function test_update_quantity_endpoint_is_removed()
     {
         $inventory = Inventory::create([
             'store_id' => $this->store->id,
@@ -662,85 +676,15 @@ class InventoryManagementTest extends TestCase
             'left_quantity' => 10.00
         ]);
 
-        // product min_stock is 5
-        // Decreasing by -6 makes the resulting total quantity 4 (which is below min_stock)
-        $response = $this->postJson("/api/v1/admin/inventories/update-quantity/{$inventory->id}", [
-            'quantity' => -6.00,
-            'remarks' => 'Decreasing below min stock'
-        ]);
-
-        $response->assertStatus(422)
-            ->assertJsonFragment([
-                'message' => 'Validation failed'
-            ])
-            ->assertJsonStructure([
-                'errors' => [
-                    'quantity'
-                ]
-            ]);
-    }
-
-    public function test_update_inventory_quantity_can_decrease_quantity()
-    {
-        $inventory = Inventory::create([
-            'store_id' => $this->store->id,
-            'product_id' => $this->product->id,
-            'quantity' => 100.00,
-            'left_quantity' => 50.00
-        ]);
-
-        // product min_stock is 5
-        // Decreasing by -20 makes resulting total 80, available 30
-        $response = $this->postJson("/api/v1/admin/inventories/update-quantity/{$inventory->id}", [
-            'quantity' => -20.00,
-            'remarks' => 'Decreasing stock'
-        ]);
-
-        $response->assertStatus(200)
-            ->assertJsonFragment([
-                'total_stock' => 80.00,
-                'left_quantity' => 30.00
-            ]);
+        $this->postJson("/api/v1/admin/inventories/update-quantity/{$inventory->id}", [
+            'quantity' => -3.00
+        ])->assertStatus(404);
 
         $this->assertDatabaseHas('inventories', [
-            'product_id' => $this->product->id,
-            'quantity' => 80.00,
-            'left_quantity' => 30.00
-        ]);
-
-        $this->assertDatabaseHas('inventory_logs', [
-            'product_id' => $this->product->id,
-            'type' => 'out',
-            'quantity' => -20.00,
-            'remarks' => 'Decreasing stock'
-        ]);
-    }
-
-    public function test_update_inventory_quantity_fails_when_decrease_exceeds_available_stock()
-    {
-        $inventory = Inventory::create([
-            'store_id' => $this->store->id,
-            'product_id' => $this->product->id,
+            'id' => $inventory->id,
             'quantity' => 10.00,
-            'left_quantity' => 2.00 // 8 are assigned
+            'left_quantity' => 10.00
         ]);
-
-        // Trying to decrease by -3.00, which means new total = 7.00, but 8 are assigned.
-        // It should fail and mention that 8 units are already assigned.
-        $response = $this->postJson("/api/v1/admin/inventories/update-quantity/{$inventory->id}", [
-            'quantity' => -3.00,
-            'remarks' => 'Decreasing below assigned'
-        ]);
-
-        $response->assertStatus(422)
-            ->assertJsonFragment([
-                'message' => 'Validation failed'
-            ])
-            ->assertJsonFragment([
-                'quantity' => [
-                    "Cannot reduce quantity. A total of 8 units of this product are already assigned to employees, which exceeds the proposed total stock of 7."
-                ]
-            ]);
     }
 
     public function test_inventory_logs_recording_correct_actions()
@@ -787,18 +731,6 @@ class InventoryManagementTest extends TestCase
             'action' => 'assigned',
             'quantity' => -1.00,
             'remarks' => "Product assigned to employee Code: {$this->employee->employee_code}"
-        ]);
-
-        // 4. Edited (decreased)
-        $inventory = Inventory::where('product_id', $this->product->id)->first();
-        $this->postJson("/api/v1/admin/inventories/update-quantity/{$inventory->id}", [
-            'quantity' => -3.00
-        ]);
-
-        $this->assertDatabaseHas('inventory_logs', [
-            'product_id' => $this->product->id,
-            'action' => 'edited',
-            'quantity' => -3.00
         ]);
     }
 
@@ -945,32 +877,48 @@ class InventoryManagementTest extends TestCase
         $this->assertTrue($response->json('data.0.is_low_stock'));
     }
 
-    public function test_available_products_is_scoped_to_a_store_and_floored_at_min_stock()
+    public function test_available_products_is_scoped_to_a_store_and_hides_only_empty_rows()
     {
         $other = Store::create(['name' => 'North Store', 'is_active' => 1]);
+        $third = Store::create(['name' => 'South Store', 'is_active' => 1]);
 
-        // Above min_stock of 5 — issuable.
+        // Above min_stock of 5.
         $stocked = Inventory::create([
             'store_id' => $this->store->id,
             'product_id' => $this->product->id,
             'quantity' => 20.00,
             'left_quantity' => 20.00
         ]);
-        // Exactly at min_stock — on the shelf, but nothing issuable.
-        Inventory::create([
+        // Under min_stock — low, but still issuable.
+        $low = Inventory::create([
             'store_id' => $other->id,
             'product_id' => $this->product->id,
             'quantity' => 5.00,
-            'left_quantity' => 5.00
+            'left_quantity' => 3.00
+        ]);
+        // Empty — nothing to issue.
+        Inventory::create([
+            'store_id' => $third->id,
+            'product_id' => $this->product->id,
+            'quantity' => 5.00,
+            'left_quantity' => 0.00
         ]);
 
         $response = $this->getJson("/api/v1/available-products?store_id={$this->store->id}");
 
         $response->assertStatus(200)->assertJsonCount(1, 'data');
         $this->assertSame($stocked->id, $response->json('data.0.inventory_id'));
-        $this->assertEquals(15.0, $response->json('data.0.available_quantity'));
+        $this->assertEquals(20.0, $response->json('data.0.available_quantity'));
+        $this->assertFalse($response->json('data.0.is_low_stock'));
 
-        $this->getJson("/api/v1/available-products?store_id={$other->id}")
+        $lowResponse = $this->getJson("/api/v1/available-products?store_id={$other->id}");
+
+        $lowResponse->assertStatus(200)->assertJsonCount(1, 'data');
+        $this->assertSame($low->id, $lowResponse->json('data.0.inventory_id'));
+        $this->assertEquals(3.0, $lowResponse->json('data.0.available_quantity'));
+        $this->assertTrue($lowResponse->json('data.0.is_low_stock'));
+
+        $this->getJson("/api/v1/available-products?store_id={$third->id}")
             ->assertStatus(200)
             ->assertJsonCount(0, 'data');
     }

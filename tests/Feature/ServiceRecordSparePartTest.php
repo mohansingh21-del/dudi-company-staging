@@ -7,6 +7,7 @@ use App\Models\Category;
 use App\Models\Equipment;
 use App\Models\EquipmentName;
 use App\Models\Inventory;
+use App\Models\InventoryAlert;
 use App\Models\Product;
 use App\Models\Role;
 use App\Models\ServiceRecord;
@@ -163,19 +164,39 @@ class ServiceRecordSparePartTest extends TestCase
         ]);
     }
 
-    public function test_min_stock_is_a_hard_floor()
+    public function test_issuing_below_min_stock_is_allowed_and_raises_one_alert()
     {
         Mail::fake();
 
-        // 20 on hand, floor of 5: issuing 16 would land at 4.
+        // 20 on hand, min_stock 5: issuing 16 lands at 4 — under the line but
+        // still on the shelf, so it goes through.
         $this->postJson('/api/v1/admin/service-records', $this->payload([
-            ['inventory_id' => $this->inventory->id, 'quantity' => 16, 'amount' => 160],
+            ['product_id' => $this->product->id, 'quantity' => 16, 'amount' => 160],
+        ]))->assertStatus(201);
+
+        $this->assertSame('4.00', $this->inventory->fresh()->left_quantity);
+
+        Mail::assertSent(LowStockAlertMail::class, 1);
+
+        $alert = InventoryAlert::where('inventory_id', $this->inventory->id)->sole();
+        $this->assertSame('low_stock', $alert->type);
+        $this->assertSame('service_record', $alert->source);
+        $this->assertNull($alert->resolved_at);
+    }
+
+    public function test_issuing_more_than_is_left_is_rejected()
+    {
+        Mail::fake();
+
+        $this->postJson('/api/v1/admin/service-records', $this->payload([
+            ['product_id' => $this->product->id, 'quantity' => 21, 'amount' => 210],
         ]))->assertStatus(422)->assertJsonValidationErrors('spare_parts');
 
         $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
         $this->assertSame(0, ServiceRecord::count());
+        $this->assertSame(0, InventoryAlert::count());
 
-        Mail::assertSent(LowStockAlertMail::class);
+        Mail::assertNothingSent();
     }
 
     public function test_issuing_down_to_the_floor_is_allowed_and_alerts()
@@ -348,14 +369,14 @@ class ServiceRecordSparePartTest extends TestCase
         $secondInventory = Inventory::create([
             'store_id'      => $this->store->id,
             'product_id'    => $second->id,
-            'quantity'      => 6,
-            'left_quantity' => 6,
+            'quantity'      => 1,
+            'left_quantity' => 1,
             'is_active'     => 1,
         ]);
 
-        // Only one unit is issuable above the floor of 5, and it is already out.
+        // The only unit on the shelf goes out, leaving the row empty.
         $id = $this->createRecordWithPart(1, $secondInventory->id);
-        $this->assertSame('5.00', $secondInventory->fresh()->left_quantity);
+        $this->assertSame('0.00', $secondInventory->fresh()->left_quantity);
 
         // Re-posting the same quantity must not fail: nothing net is issued.
         $this->putJson("/api/v1/admin/service-records/{$id}", [
@@ -367,7 +388,7 @@ class ServiceRecordSparePartTest extends TestCase
             ],
         ])->assertStatus(200);
 
-        $this->assertSame('5.00', $secondInventory->fresh()->left_quantity);
+        $this->assertSame('0.00', $secondInventory->fresh()->left_quantity);
     }
 
     public function test_moving_a_record_to_another_store_returns_and_reissues()
@@ -389,6 +410,64 @@ class ServiceRecordSparePartTest extends TestCase
         $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
         $this->assertSame('46.00', $this->otherInventory->fresh()->left_quantity);
         $this->assertSame('400.00', ServiceRecord::find($id)->spare_parts_amount_total);
+    }
+
+    public function test_deleting_a_record_returns_its_parts_to_stock()
+    {
+        Mail::fake();
+
+        $id = $this->postJson('/api/v1/admin/service-records', $this->payload([
+            ['product_id' => $this->product->id, 'quantity' => 16, 'amount' => 160],
+        ]))->assertStatus(201)->json('data.id');
+
+        // 20 - 16 = 4, under min_stock of 5: a low-stock alert is open.
+        $this->assertSame('4.00', $this->inventory->fresh()->left_quantity);
+        $this->assertSame(1, InventoryAlert::openLevel()->count());
+
+        $this->deleteJson("/api/v1/admin/service-records/{$id}")->assertStatus(200);
+
+        $this->assertSoftDeleted('service_records', ['id' => $id]);
+        $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
+        $this->assertSame('50.00', $this->otherInventory->fresh()->left_quantity);
+
+        $this->assertDatabaseHas('inventory_logs', [
+            'product_id' => $this->product->id,
+            'store_id'   => $this->store->id,
+            'type'       => 'in',
+            'action'     => 'service_spare_part_return',
+            'quantity'   => 16.00,
+        ]);
+
+        // Back above min_stock, so the alert the issue raised is closed.
+        $this->assertSame(0, InventoryAlert::openLevel()->count());
+        $this->assertSame(1, InventoryAlert::where('type', 'back_in_stock')->count());
+
+        $audit = \App\Models\ServiceAuditLog::where('service_record_id', $id)
+            ->where('action', 'deleted')
+            ->sole();
+        $this->assertCount(1, $audit->changes['spare_parts_returned']);
+        $this->assertEquals(16, $audit->changes['spare_parts_returned'][0]['quantity']);
+
+        // A deleted record is gone from the API, so its parts cannot go back twice.
+        $this->deleteJson("/api/v1/admin/service-records/{$id}")->assertStatus(404);
+        $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
+    }
+
+    public function test_deleting_a_record_without_parts_touches_no_stock()
+    {
+        $payload = $this->payload([]);
+        $payload['spare_parts_changed'] = false;
+        unset($payload['spare_parts']);
+
+        $id = $this->postJson('/api/v1/admin/service-records', $payload)
+            ->assertStatus(201)
+            ->json('data.id');
+
+        $this->deleteJson("/api/v1/admin/service-records/{$id}")->assertStatus(200);
+
+        $this->assertSoftDeleted('service_records', ['id' => $id]);
+        $this->assertSame('20.00', $this->inventory->fresh()->left_quantity);
+        $this->assertSame(0, \DB::table('inventory_logs')->where('action', 'service_spare_part_return')->count());
     }
 
     /**

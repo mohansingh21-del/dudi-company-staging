@@ -15,15 +15,17 @@ use App\Http\Resources\InventoryResource;
 use App\Http\Resources\InventoryLogResource;
 use App\Http\Resources\EmployeeProductAssignmentResource;
 use App\Imports\InventoryImport;
-use App\Services\Concerns\SendsLowStockAlert;
+use App\Services\InventoryAlertService;
+use App\Services\InventoryStockService;
 use Maatwebsite\Excel\Facades\Excel;
 
 /**
  * Stock, one row per (store, product).
  *
  * There is no store-less stock and no default store: a row is always somewhere.
- * The floor a deduction may not cross is products.min_stock, set once on the
- * product and applied identically in every store that carries it.
+ * Stock can be issued down to zero and no further. products.min_stock, set once
+ * on the product and applied identically in every store that carries it, is a
+ * warning line: crossing it raises an inventory alert but never blocks.
  *
  * store_id is required on every write. On the reads it is an optional filter —
  * leaving it off spans every store, so a screen that has not been taught about
@@ -31,15 +33,23 @@ use Maatwebsite\Excel\Facades\Excel;
  */
 class InventoryController extends Controller
 {
-    use SendsLowStockAlert;
-
     /**
-     * Standard eager loads. The product carries min_stock, which is the floor
+     * Standard eager loads. The product carries min_stock, the low-stock line
      * for every row that points at it.
      *
      * @var array
      */
     protected $with = ['store', 'product.subCategory.category'];
+
+    /**
+     * @var InventoryAlertService
+     */
+    protected $alerts;
+
+    public function __construct(InventoryAlertService $alerts)
+    {
+        $this->alerts = $alerts;
+    }
 
     public function index(Request $request)
     {
@@ -72,7 +82,7 @@ class InventoryController extends Controller
                 });
             }
 
-            // Stock sitting at or under its product's floor. The floor lives on
+            // Stock sitting at or under its product's min_stock, which lives on
             // products, so this has to reach across the join rather than
             // compare two columns of this table.
             if ($request->boolean('low_stock')) {
@@ -85,8 +95,8 @@ class InventoryController extends Controller
             // together cover every row, so the filter never hides stock the
             // user would expect to see under some other option:
             //   out_of_stock — nothing left on the shelf at all
-            //   low_stock    — some left, but at or under the floor
-            //   in_stock     — above the floor, so actually issuable
+            //   low_stock    — some left, but at or under min_stock (still issuable)
+            //   in_stock     — above min_stock
             if ($request->filled('stock_status')) {
                 switch ($request->stock_status) {
                     case 'out_of_stock':
@@ -173,25 +183,19 @@ class InventoryController extends Controller
     /**
      * Add stock for a product at a store.
      *
-     * Re-posting a pair that already exists replenishes it rather than failing —
-     * the unique(store_id, product_id) index is a safety net, not the intended
-     * error path. The same product can be stocked at as many stores as needed.
+     * This is the only way stock goes up — there is no edit. Re-posting a pair
+     * that already exists adds the new quantity on top rather than failing; the
+     * unique(store_id, product_id) index is a safety net, not the intended error
+     * path. The same product can be stocked at as many stores as needed.
+     *
+     * min_stock is only checked when a store first stocks a product. A top-up
+     * can never make the position worse, so any positive quantity is accepted —
+     * including one that leaves a below-floor row still under min_stock.
      */
     public function store(AddInventoryRequest $request)
     {
         try {
             $storeId = (int) $request->store_id;
-            $product = \App\Models\Product::find($request->product_id);
-
-            if ($product && (float) $request->quantity < (float) $product->min_stock) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Validation failed',
-                    'errors' => [
-                        'quantity' => ["The quantity must be at least {$product->min_stock} (minimum stock level for this product)."]
-                    ]
-                ], 422);
-            }
 
             $inventory = Inventory::where('store_id', $storeId)
                 ->where('product_id', $request->product_id)
@@ -214,6 +218,8 @@ class InventoryController extends Controller
                     'remarks' => $request->remarks ?? 'Replenished stock quantity'
                 ]);
 
+                $this->alerts->stockAdded($inventory, (float) $request->quantity, false, 'manual_add', auth()->id(), $request->remarks);
+
                 DB::commit();
 
                 return response()->json([
@@ -221,6 +227,18 @@ class InventoryController extends Controller
                     'message' => 'Product stock added to inventory successfully',
                     'data' => new InventoryResource($inventory->load($this->with))
                 ]);
+            }
+
+            $product = \App\Models\Product::find($request->product_id);
+
+            if ($product && (float) $request->quantity < (float) $product->min_stock) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Validation failed',
+                    'errors' => [
+                        'quantity' => ["The quantity must be at least {$product->min_stock} (minimum stock level for this product)."]
+                    ]
+                ], 422);
             }
 
             DB::beginTransaction();
@@ -242,6 +260,8 @@ class InventoryController extends Controller
                 'quantity' => $request->quantity,
                 'remarks' => $request->remarks
             ]);
+
+            $this->alerts->stockAdded($inventory, (float) $request->quantity, true, 'manual_add', auth()->id(), $request->remarks);
 
             DB::commit();
 
@@ -286,36 +306,31 @@ class InventoryController extends Controller
 
             $availableStock = (float) $inventory->left_quantity;
             $quantity = (float) $request->quantity;
-            $product = $inventory->product;
-            $minStock = $product ? (float) $product->min_stock : 0.00;
-            $productName = optional($product)->name ?? 'Unknown Product';
+            $productName = optional($inventory->product)->name ?? 'Unknown Product';
             $storeName = optional($inventory->store)->name;
 
-            if ($availableStock - $quantity < $minStock) {
-                $this->sendLowStockAlert($productName, $availableStock, $storeName);
-
+            // Only an empty shelf stops an assignment. Dropping under
+            // min_stock is allowed and raises an alert below.
+            if ($quantity > $availableStock) {
                 DB::rollBack();
 
                 return response()->json([
                     'status' => 422,
                     'message' => 'Validation failed',
                     'errors' => [
-                        'quantity' => ["Minimum quantity reached. Please update quantity of product so that assigning product to employee can continue."]
+                        'quantity' => [InventoryStockService::insufficientStockMessage($productName, $storeName, $availableStock)]
                     ]
                 ], 422);
             }
+
+            $employee = \App\Models\Employee::find($request->employee_id);
+            $employeeCode = $employee ? $employee->employee_code : 'Unknown';
 
             // Deduct inventory left_quantity
             $inventory->left_quantity -= $quantity;
             $inventory->save();
 
-            // Send low stock alert if left_quantity drops to or below min_stock
-            if ((float) $inventory->left_quantity <= $minStock) {
-                $this->sendLowStockAlert($productName, (float) $inventory->left_quantity, $storeName);
-            }
-
-            $employee = \App\Models\Employee::find($request->employee_id);
-            $employeeCode = $employee ? $employee->employee_code : 'Unknown';
+            $this->alerts->syncStockLevel($inventory, 'assignment', auth()->id(), "Employee Code: {$employeeCode}");
 
             // Create assignment
             $assignment = EmployeeProductAssignment::create([
@@ -512,6 +527,12 @@ class InventoryController extends Controller
             $successCount = $import->getSuccessCount();
             $storeCount = $import->getStoreCount();
 
+            // Rows are committed one at a time, so a file that fails
+            // validation may still have imported some — announce those.
+            if ($successCount > 0) {
+                $this->alerts->bulkImported($successCount, $storeCount, count($errors), auth()->id());
+            }
+
             if (count($errors) > 0) {
                 return response()->json([
                     'status' => 422,
@@ -545,106 +566,6 @@ class InventoryController extends Controller
     }
 
     /**
-     * Adjust one stock row.
-     *
-     * `quantity` is a DELTA, not a new total — send 5 to add five, -5 to take
-     * five off. The store is not a parameter: it is whichever store the row
-     * belongs to.
-     */
-    public function updateQuantity(Request $request, $id)
-    {
-        try {
-            $request->validate([
-                'quantity' => 'required|numeric',
-                'is_active' => 'nullable|boolean',
-                'remarks' => 'nullable|string|max:255'
-            ]);
-
-            $inventory = Inventory::with($this->with)->find($id);
-
-            if (!$inventory) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Validation failed',
-                    'errors' => [
-                        'id' => ['Inventory record not found.']
-                    ]
-                ], 422);
-            }
-
-            $product = $inventory->product;
-            $minStock = $product ? (float) $product->min_stock : 0.00;
-            $newQuantity = (float) $inventory->quantity + (float) $request->quantity;
-            $newLeftQuantity = (float) $inventory->left_quantity + (float) $request->quantity;
-
-            if ($newQuantity < $minStock) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Validation failed',
-                    'errors' => [
-                        'quantity' => ["The resulting total stock quantity ({$newQuantity}) cannot be lower than the product's minimum stock of {$minStock}."]
-                    ]
-                ], 422);
-            }
-
-            if ($newLeftQuantity < 0) {
-                $assigned = (float) $inventory->quantity - (float) $inventory->left_quantity;
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Validation failed',
-                    'errors' => [
-                        'quantity' => ["Cannot reduce quantity. A total of {$assigned} units of this product are already assigned to employees, which exceeds the proposed total stock of {$newQuantity}."]
-                    ]
-                ], 422);
-            }
-
-            DB::beginTransaction();
-
-            $inventory->quantity = $newQuantity;
-            $inventory->left_quantity = $newLeftQuantity;
-
-            if ($request->filled('is_active')) {
-                $inventory->is_active = (int) $request->is_active;
-            }
-
-            $inventory->save();
-
-            // Create inventory log entry
-            $logType = $request->quantity >= 0 ? 'in' : 'out';
-            $logAction = $request->quantity >= 0 ? 'replenished' : 'edited';
-            InventoryLog::create([
-                'product_id' => $inventory->product_id,
-                'store_id' => $inventory->store_id,
-                'user_id' => auth()->id(),
-                'type' => $logType,
-                'action' => $logAction,
-                'quantity' => $request->quantity,
-                'remarks' => $request->remarks ?? ($logType === 'in' ? 'Replenished stock quantity' : 'Decreased stock quantity')
-            ]);
-
-            DB::commit();
-
-            return response()->json([
-                'status' => 200,
-                'message' => 'Product quantity updated successfully in inventory',
-                'data' => new InventoryResource($inventory->fresh($this->with))
-            ]);
-        } catch (\Illuminate\Validation\ValidationException $e) {
-            return response()->json([
-                'status' => 422,
-                'message' => 'Validation failed',
-                'errors' => $e->errors()
-            ], 422);
-        } catch (\Throwable $th) {
-            DB::rollBack();
-            return response()->json([
-                'status' => 500,
-                'message' => $th->getMessage()
-            ], 500);
-        }
-    }
-
-    /**
      * Unmap a product from a store. Refused while stock is still on the shelf —
      * removing the row would drop that balance with no movement to explain it.
      */
@@ -663,11 +584,13 @@ class InventoryController extends Controller
             if ((float) $inventory->left_quantity > 0) {
                 return response()->json([
                     'status' => 422,
-                    'message' => "Cannot remove this product from the store while {$inventory->left_quantity} units are still in stock. Reduce the quantity to zero first."
+                    'message' => "Cannot remove this product from the store while {$inventory->left_quantity} units are still in stock."
                 ], 422);
             }
 
             $inventory->delete();
+
+            $this->alerts->productRemoved($inventory, auth()->id());
 
             return response()->json([
                 'status' => 200,
@@ -684,9 +607,9 @@ class InventoryController extends Controller
     /**
      * Dropdown for the service-record form: what can actually be issued.
      *
-     * "Available" means left_quantity is strictly above the product's min_stock,
-     * matching the rule InventoryStockService applies on deduction. A row
-     * sitting exactly at min_stock has stock on the shelf but nothing issuable.
+     * "Available" means anything left on the shelf, matching the rule
+     * InventoryStockService applies on deduction. Low stock is still issuable,
+     * so only empty rows drop out; is_low_stock flags the ones running short.
      *
      * Keyed by inventory_id, which is what the form posts back — the same
      * product at two stores is two separate options.
@@ -694,14 +617,14 @@ class InventoryController extends Controller
     public function getAvailableProducts(Request $request)
     {
         try {
-            // Joined rather than a whereHas: min_stock is needed for the
-            // comparison, the ordering and the payload, so one join serves all
+            // Joined rather than a whereHas: products is needed for the active
+            // filter, the ordering and the payload, so one join serves all
             // three and keeps a single reference to products in the query.
             $query = Inventory::with($this->with)
                 ->join('products', 'products.id', '=', 'inventories.product_id')
                 ->where('inventories.is_active', 1)
                 ->where('products.is_active', 1)
-                ->whereColumn('inventories.left_quantity', '>', 'products.min_stock')
+                ->where('inventories.left_quantity', '>', 0)
                 ->orderBy('products.name', 'asc')
                 ->select('inventories.*');
 
@@ -806,11 +729,11 @@ class InventoryController extends Controller
     /**
      * Everything stocked at one store, for a store-then-product picker.
      *
-     * Unlike getAvailableProducts this does not hide rows sitting at or under
-     * min_stock — a store screen that silently dropped them would read as "we
-     * do not carry that", when the truth is "we carry it and it needs
-     * reordering". Each row says so through is_available instead, and
-     * ?only_available=true narrows it to the issuable ones.
+     * Unlike getAvailableProducts this does not hide empty rows — a store
+     * screen that silently dropped them would read as "we do not carry that",
+     * when the truth is "we carry it and it needs reordering". Each row says so
+     * through is_available instead, and ?only_available=true narrows it to the
+     * issuable ones.
      */
     public function getStoreProducts(Request $request, int $storeId)
     {
@@ -824,7 +747,7 @@ class InventoryController extends Controller
                 ], 404);
             }
 
-            // Joined for the same reason as getAvailableProducts: min_stock is
+            // Joined for the same reason as getAvailableProducts: products is
             // wanted for the ordering and the payload either way.
             $query = Inventory::with($this->with)
                 ->join('products', 'products.id', '=', 'inventories.product_id')
@@ -835,7 +758,7 @@ class InventoryController extends Controller
                 ->select('inventories.*');
 
             if ($request->boolean('only_available')) {
-                $query->whereColumn('inventories.left_quantity', '>', 'products.min_stock');
+                $query->where('inventories.left_quantity', '>', 0);
             }
 
             if ($request->filled('search')) {
@@ -897,8 +820,8 @@ class InventoryController extends Controller
 
     /**
      * One stock row as the product pickers want it: keyed by inventory_id,
-     * which is what those forms post back, with the floor carried alongside so
-     * the caller can show why a row is or is not issuable.
+     * which is what those forms post back, with min_stock carried alongside so
+     * the caller can flag the rows running low.
      *
      * @param  \App\Models\Inventory  $inventory
      * @return array
@@ -919,10 +842,10 @@ class InventoryController extends Controller
             'category_name'      => optional(optional(optional($product)->subCategory)->category)->name,
             'left_quantity'      => $leftQuantity,
             'min_stock'          => $minStock,
-            'available_quantity' => max(0, $leftQuantity - $minStock),
-            // min_stock is a hard floor, so stock sitting at or under it is on
-            // the shelf but cannot be issued.
-            'is_available'       => $leftQuantity > $minStock,
+            // Everything on the shelf can be issued; min_stock only flags it.
+            'available_quantity' => max(0, $leftQuantity),
+            'is_available'       => $leftQuantity > 0,
+            'is_low_stock'       => $leftQuantity <= $minStock,
         ];
     }
 }

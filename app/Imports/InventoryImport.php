@@ -243,6 +243,11 @@ class InventoryImport implements ToCollection, WithHeadingRow
                     'quantity' => $quantity,
                     'remarks' => 'Bulk uploaded via excel file'
                 ]);
+
+                // A row stocked exactly at min_stock is already low. The
+                // upload as a whole is announced once, by the controller.
+                app(\App\Services\InventoryAlertService::class)
+                    ->syncStockLevel($inventory, 'bulk_import', auth()->id());
             });
 
             $this->importedStoreIds[$storeId] = true;

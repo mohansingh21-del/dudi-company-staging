@@ -37,6 +37,7 @@ use App\Http\Controllers\Api\Admin\CategoryController;
 use App\Http\Controllers\Api\Admin\SubCategoryController;
 use App\Http\Controllers\Api\Admin\ProductController;
 use App\Http\Controllers\Api\Admin\InventoryController;
+use App\Http\Controllers\Api\Admin\InventoryAlertController;
 use App\Http\Controllers\Api\Admin\StoreController;
 use App\Http\Controllers\Api\Admin\PenaltyController;
 use App\Http\Controllers\Api\Admin\PayrollController;
@@ -477,12 +478,30 @@ Route::prefix('v1')->group(function () {
                 Route::get('/', [InventoryController::class, 'index']);
                 Route::post('add', [InventoryController::class, 'store']);
                 Route::post('assign', [InventoryController::class, 'assign']);
-                Route::post('update-quantity/{id}', [InventoryController::class, 'updateQuantity']);
                 Route::post('bulk-upload', [InventoryController::class, 'bulkUpload']);
                 Route::get('assignments', [InventoryController::class, 'assignments']);
                 Route::get('{id}/logs', [InventoryController::class, 'logs']);
                 Route::get('{id}', [InventoryController::class, 'show']);
                 Route::delete('{id}', [InventoryController::class, 'destroy']);
+            });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Inventory Alerts
+            |--------------------------------------------------------------------------
+            | Low stock, out of stock, back in stock, stock added/replenished,
+            | product removed, bulk imports and min stock changes. Written as
+            | stock moves; these routes only read them and track read state.
+            |
+            | Literal segments must stay above {id} or they resolve as one.
+            */
+
+            Route::prefix('inventory-alerts')->group(function () {
+                Route::get('/', [InventoryAlertController::class, 'index']);
+                Route::get('summary', [InventoryAlertController::class, 'summary']);
+                Route::post('read-all', [InventoryAlertController::class, 'markAllRead']);
+                Route::post('{id}/read', [InventoryAlertController::class, 'markRead']);
+                Route::get('{id}', [InventoryAlertController::class, 'show']);
             });
 
             /*

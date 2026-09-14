@@ -176,9 +176,10 @@ class ServiceRecordManagementTest extends TestCase
         ]);
     }
 
-    public function test_cannot_deduct_inventory_stock_below_minimum_stock()
+    public function test_cannot_deduct_more_inventory_stock_than_is_left()
     {
-        // Available: 20, min_stock: 5. Deducting 18 leaves 2 (< 5), so it should fail validation.
+        // Available: 20. Deducting 21 would go negative, so it should fail
+        // validation. (Going under min_stock is allowed and only alerts.)
         $payload = [
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
@@ -189,8 +190,8 @@ class ServiceRecordManagementTest extends TestCase
             'spare_parts'          => [
                 [
                     'inventory_id'         => $this->inventory->id,
-                    'quantity'             => 18,
-                    'amount'               => 180.00,
+                    'quantity'             => 21,
+                    'amount'               => 210.00,
                 ]
             ],
         ];
@@ -996,9 +997,24 @@ class ServiceRecordManagementTest extends TestCase
         $this->postJson('/api/v1/admin/service-records', $payload)->assertStatus(201);
     }
 
-    public function test_available_products_excludes_stock_at_or_below_min_stock()
+    public function test_available_products_includes_low_stock_and_excludes_empty_rows()
     {
-        // Sitting exactly at min_stock: on the shelf, but not deductable.
+        // Nothing left at all: not deductable.
+        $empty = Product::create([
+            'sub_category_id' => $this->product->sub_category_id,
+            'name'            => 'Coolant CL-5',
+            'min_stock'       => 0,
+            'is_active'       => 1
+        ]);
+        Inventory::create([
+            'store_id'      => $this->store->id,
+            'product_id'    => $empty->id,
+            'quantity'      => 10.00,
+            'left_quantity' => 0.00,
+            'is_active'     => 1,
+        ]);
+
+        // Sitting exactly at min_stock: low, but still deductable.
         $atMinStock = Product::create([
             'sub_category_id' => $this->product->sub_category_id,
             'name'            => 'Gear Oil GX-10',
@@ -1025,12 +1041,17 @@ class ServiceRecordManagementTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('status', 200);
 
-        // The three stocked above their floor, and neither of the other two.
+        // Everything with stock on the shelf, low or not; neither the empty
+        // row nor the product stocked nowhere.
         $productIds = array_column($response->json('data'), 'product_id');
         sort($productIds);
-        $expected = [$this->product->id, $this->product2->id, $this->product3->id];
+        $expected = [$this->product->id, $this->product2->id, $this->product3->id, $atMinStock->id];
         sort($expected);
         $this->assertSame($expected, $productIds);
+
+        $gearOil = collect($response->json('data'))->firstWhere('product_id', $atMinStock->id);
+        $this->assertEquals(10, $gearOil['available_quantity']);
+        $this->assertTrue($gearOil['is_low_stock']);
 
         $oilFilter = collect($response->json('data'))
             ->firstWhere('product_id', $this->product->id);
@@ -1039,7 +1060,8 @@ class ServiceRecordManagementTest extends TestCase
         $this->assertSame($this->store->id, $oilFilter['store_id']);
         $this->assertEquals(20, $oilFilter['left_quantity']);
         $this->assertEquals(5, $oilFilter['min_stock']);
-        $this->assertEquals(15, $oilFilter['available_quantity']);
+        $this->assertEquals(20, $oilFilter['available_quantity']);
+        $this->assertFalse($oilFilter['is_low_stock']);
     }
 
     public function test_can_create_service_record_from_multipart_string_booleans()

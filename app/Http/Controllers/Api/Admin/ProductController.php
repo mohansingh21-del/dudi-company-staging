@@ -135,11 +135,20 @@ class ProductController extends Controller
                 ], 404);
             }
 
+            $oldMinStock = (int) $product->min_stock;
+
             $product->update([
                 'sub_category_id' => $request->sub_category_id,
                 'name' => $request->name,
                 'min_stock' => $request->min_stock
             ]);
+
+            // Moving the line can put stocked rows under it, or lift them over,
+            // without a unit moving — the alerts are re-checked either way.
+            if ((int) $product->min_stock !== $oldMinStock) {
+                app(\App\Services\InventoryAlertService::class)
+                    ->minStockChanged($product, $oldMinStock, (int) $product->min_stock, auth()->id());
+            }
 
             return response()->json([
                 'status' => 200,
