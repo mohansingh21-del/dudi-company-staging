@@ -195,32 +195,31 @@ class InventoryImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
-            // Check if product is already stocked at this store. The same
-            // product at another store is a different row and no conflict, so
+            // A product already stocked at this store is replenished, same as
+            // adding stock by hand; otherwise the (store, product) row is
+            // created. The same product at another store is a separate row, so
             // a file may well repeat a product once per store.
-            $inventoryExists = Inventory::where('store_id', $storeId)
-                ->where('product_id', $product->id)
-                ->exists();
-            if ($inventoryExists) {
-                $storeName = optional($this->storeById($storeId))->name ?? "store #{$storeId}";
-                $this->errors[] = [
-                    'row' => $rowNum,
-                    'column' => 'product_name',
-                    'message' => "Product '{$productName}' is already added to the inventory of '{$storeName}'.",
-                    'value' => $productName
-                ];
-                continue;
-            }
-
-            // Save to database
             DB::transaction(function () use ($product, $quantity, $storeId) {
-                $inventory = Inventory::create([
-                    'store_id' => $storeId,
-                    'product_id' => $product->id,
-                    'quantity' => $quantity,
-                    'left_quantity' => $quantity,
-                    'is_active' => 1
-                ]);
+                $inventory = Inventory::where('store_id', $storeId)
+                    ->where('product_id', $product->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                $isNew = !$inventory;
+
+                if ($isNew) {
+                    $inventory = Inventory::create([
+                        'store_id' => $storeId,
+                        'product_id' => $product->id,
+                        'quantity' => $quantity,
+                        'left_quantity' => $quantity,
+                        'is_active' => 1
+                    ]);
+                } else {
+                    $inventory->quantity += $quantity;
+                    $inventory->left_quantity += $quantity;
+                    $inventory->save();
+                }
 
                 // Create log entry
                 InventoryLog::create([
@@ -230,12 +229,12 @@ class InventoryImport implements ToCollection, WithHeadingRow
                     'type' => 'in',
                     'action' => 'added',
                     'quantity' => $quantity,
-                    'remarks' => 'Bulk uploaded via excel file'
+                    'remarks' => $isNew ? 'Bulk uploaded via excel file' : 'Replenished stock via excel file'
                 ]);
 
-                // Stock at or under min_stock is accepted but already low.
+                // Raises added/replenished, then re-checks low stock.
                 app(\App\Services\InventoryAlertService::class)
-                    ->syncStockLevel($inventory, 'bulk_import', auth()->id());
+                    ->stockAdded($inventory, $quantity, $isNew, 'bulk_import', auth()->id());
             });
 
             $this->importedStoreIds[$storeId] = true;
@@ -259,17 +258,6 @@ class InventoryImport implements ToCollection, WithHeadingRow
         }
 
         return $this->storeCache[$value];
-    }
-
-    /**
-     * The store behind an already-resolved id, for error messages.
-     *
-     * @param  int  $storeId
-     * @return \App\Models\Store|null
-     */
-    protected function storeById($storeId)
-    {
-        return $this->resolveStore((string) $storeId);
     }
 
     public function getSuccessCount(): int
