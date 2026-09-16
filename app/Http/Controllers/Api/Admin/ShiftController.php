@@ -312,9 +312,13 @@ class ShiftController extends Controller
                     }
                 }
 
+                // Closed / completed plans must still be resolvable: the shift that
+                // covers a given datetime does not stop existing once it is closed.
+                // Open plans win when both exist for the same shift + date.
                 $shiftPlan = ShiftPlan::with('site')->where('shift_id', $matchedShift->id)
                     ->whereDate('planning_date', $planningDate)
-                    ->whereIn('status', ['published', 'in_progress', 'active', 'planned'])
+                    ->whereIn('status', ['published', 'in_progress', 'active', 'planned', 'completed', 'closed'])
+                    ->orderByRaw("CASE WHEN status IN ('completed', 'closed') THEN 1 ELSE 0 END")
                     ->first();
 
                 if (!$shiftPlan) {
@@ -413,6 +417,8 @@ class ShiftController extends Controller
                         'start_time' => $matchedShift->start_time,
                         'end_time' => $matchedShift->end_time,
                         'shift_plan_id' => $shiftPlan ? $shiftPlan->id : null,
+                        'shift_plan_status' => $shiftPlan ? $shiftPlan->status : null,
+                        'is_closed' => $shiftPlan ? in_array($shiftPlan->status, ['completed', 'closed']) : false,
                         'site' => $siteData,
                         'drivers' => $drivers,
                         'workforce' => $workforce,
@@ -439,7 +445,7 @@ class ShiftController extends Controller
 
                 $shiftPlans = ShiftPlan::with(['shift', 'site', 'equipmentAllocations.equipmentName.equipment'])
                     ->whereDate('planning_date', $targetDate)
-                    ->whereIn('status', ['published', 'in_progress', 'active', 'planned'])
+                    ->whereIn('status', ['published', 'in_progress', 'active', 'planned', 'completed', 'closed'])
                     ->get();
 
                 $data = [];
@@ -530,6 +536,8 @@ class ShiftController extends Controller
                         'start_time' => $matchedShift->start_time,
                         'end_time' => $matchedShift->end_time,
                         'shift_plan_id' => $shiftPlan->id,
+                        'shift_plan_status' => $shiftPlan->status,
+                        'is_closed' => in_array($shiftPlan->status, ['completed', 'closed']),
                         'site' => $siteData,
                         'drivers' => $drivers,
                         'workforce' => $workforce,

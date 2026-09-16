@@ -18,6 +18,9 @@ class ServiceRecordListResource extends JsonResource
         return [
             'id'                   => $this->id,
             'ticket_number'        => $this->ticket_number,
+            'job_card_number'      => $this->job_card_number,
+            'store_id'             => $this->store_id,
+            'store_name'           => optional($this->store)->name,
             'machine_id'           => $this->machine_id,
             'machine_name'         => optional($this->machine)->equipment_name,
             'site_id'              => $this->site_id,

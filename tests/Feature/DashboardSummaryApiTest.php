@@ -23,6 +23,11 @@ use App\Models\Delay;
 use App\Models\DelayCategory;
 use App\Models\BreakdownTicket;
 use App\Models\BreakdownType;
+use App\Models\Category;
+use App\Models\SubCategory;
+use App\Models\Product;
+use App\Models\Store;
+use App\Models\Inventory;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
 
@@ -380,6 +385,62 @@ class DashboardSummaryApiTest extends TestCase
         // 7. dispatch/recent-trips
         $res = $this->getJson('/api/v1/dashboard/dispatch/recent-trips?date_range=yesterday');
         $res->assertStatus(200)->assertJsonStructure(['status', 'message', 'data' => ['items', 'current_page', 'last_page', 'total', 'per_page']]);
+    }
+
+    public function test_inventory_endpoints_return_stock_lists_with_summary()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $category = Category::create(['name' => 'Spares', 'is_active' => 1]);
+        $subCategory = SubCategory::create(['category_id' => $category->id, 'name' => 'Valves', 'is_active' => 1]);
+        $valve = Product::create(['sub_category_id' => $subCategory->id, 'name' => 'DI Sluice Valve', 'min_stock' => 20, 'is_active' => 1]);
+        $tape = Product::create(['sub_category_id' => $subCategory->id, 'name' => 'B-tape', 'min_stock' => 10, 'is_active' => 1]);
+        $udaipur = Store::create(['name' => 'Udaipur', 'is_active' => 1]);
+        $kamalpur = Store::create(['name' => 'Kamalpur', 'is_active' => 1]);
+
+        // in stock, below min level, out of stock (zero), out of stock (negative)
+        Inventory::create(['store_id' => $udaipur->id, 'product_id' => $valve->id, 'quantity' => 50, 'left_quantity' => 50]);
+        Inventory::create(['store_id' => $kamalpur->id, 'product_id' => $valve->id, 'quantity' => 30, 'left_quantity' => 7]);
+        Inventory::create(['store_id' => $udaipur->id, 'product_id' => $tape->id, 'quantity' => 10, 'left_quantity' => 0]);
+        Inventory::create(['store_id' => $kamalpur->id, 'product_id' => $tape->id, 'quantity' => 10, 'left_quantity' => -3]);
+
+        // Inventory lives only on its own endpoints, not the dashboard summary.
+        $summary = $this->getJson('/api/v1/dashboard/summary?date_range=last_30_days');
+        $summary->assertStatus(200);
+        $this->assertNull($summary->json('data.inventory'));
+
+        // Both lists carry the same card counts.
+        $this->getJson('/api/v1/dashboard/inventory/below-min-level')
+            ->assertStatus(200)
+            ->assertJsonPath('data.summary.total_products', 4)
+            ->assertJsonPath('data.summary.below_min_level', 1)
+            ->assertJsonPath('data.summary.out_of_stock', 2)
+            ->assertJsonPath('data.total', 1)
+            ->assertJsonPath('data.items.0.product', 'DI Sluice Valve')
+            ->assertJsonPath('data.items.0.location', 'Kamalpur')
+            ->assertJsonPath('data.items.0.minimum_stock', 20)
+            ->assertJsonPath('data.items.0.quantity', 7);
+
+        $this->getJson('/api/v1/dashboard/inventory/out-of-stock?per_page=1&page=2')
+            ->assertStatus(200)
+            ->assertJsonPath('data.summary.total_products', 4)
+            ->assertJsonPath('data.summary.out_of_stock', 2)
+            ->assertJsonPath('data.current_page', 2)
+            ->assertJsonPath('data.last_page', 2)
+            ->assertJsonCount(1, 'data.items')
+            ->assertJsonStructure(['data' => [
+                'summary' => ['total_products', 'below_min_level', 'out_of_stock'],
+                'items' => [['inventory_id', 'product_id', 'product', 'store_id', 'location', 'minimum_stock', 'quantity', 'stock_status', 'stock_status_label']],
+                'current_page', 'last_page', 'total', 'per_page',
+            ]]);
+
+        // store_id narrows the counts and the rows to one store.
+        $this->getJson('/api/v1/dashboard/inventory/out-of-stock?store_id=' . $udaipur->id)
+            ->assertStatus(200)
+            ->assertJsonPath('data.summary.total_products', 2)
+            ->assertJsonPath('data.summary.below_min_level', 0)
+            ->assertJsonPath('data.summary.out_of_stock', 1)
+            ->assertJsonPath('data.total', 1);
     }
 
     public function test_custom_date_range_validation()

@@ -37,6 +37,8 @@ use App\Http\Controllers\Api\Admin\CategoryController;
 use App\Http\Controllers\Api\Admin\SubCategoryController;
 use App\Http\Controllers\Api\Admin\ProductController;
 use App\Http\Controllers\Api\Admin\InventoryController;
+use App\Http\Controllers\Api\Admin\InventoryAlertController;
+use App\Http\Controllers\Api\Admin\StoreController;
 use App\Http\Controllers\Api\Admin\PenaltyController;
 use App\Http\Controllers\Api\Admin\PayrollController;
 use App\Http\Controllers\Api\Admin\EmployeePayrollController;
@@ -162,6 +164,8 @@ Route::prefix('v1')->group(function () {
             Route::get('delay/critical-delays', [DashboardController::class, 'criticalDelays']);
             Route::get('delay/recent-delays', [DashboardController::class, 'recentDelays']);
             Route::get('dispatch/recent-trips', [DashboardController::class, 'recentTrips']);
+            Route::get('inventory/below-min-level', [DashboardController::class, 'belowMinLevelProducts']);
+            Route::get('inventory/out-of-stock', [DashboardController::class, 'outOfStockProducts']);
 
             /*
             | Live fleet telematics (VECV rFMS).
@@ -215,6 +219,13 @@ Route::prefix('v1')->group(function () {
         Route::get('machine-categories', [EquipmentController::class, 'listCategories']);
         Route::get('active-machines', [EquipmentNameController::class, 'getActiveMachines']);
         Route::get('available-products', [InventoryController::class, 'getAvailableProducts']);
+        // Every product in inventory regardless of stock level, for filter dropdowns.
+        Route::get('inventory-products', [InventoryController::class, 'getInventoryProducts']);
+        Route::get('stores', [StoreController::class, 'publicIndex']);
+        // What a chosen store carries, low stock included — the picker shows
+        // those greyed out rather than pretending the store has no such
+        // product. ?only_available=true drops them.
+        Route::get('stores/{store_id}/products', [InventoryController::class, 'getStoreProducts']);
         Route::get('open-breakdowns', [BreakdownController::class, 'getOpenBreakdowns']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
         Route::get('shift-plans/{shift_id}/machines', [EquipmentAllocationController::class, 'getPublicMachines']);
@@ -456,18 +467,58 @@ Route::prefix('v1')->group(function () {
             |--------------------------------------------------------------------------
             | Inventory Management
             |--------------------------------------------------------------------------
+            | Stock, scoped to a store. Every row belongs to one, so store_id is
+            | required to add or assign; on the reads it is an optional filter
+            | and leaving it off spans every store. Bulk upload names the store
+            | per sheet row instead, so one file can stock several stores, and
+            | only falls back to the request field for rows that name none.
+            |
+            | Literal segments must stay above {id} or they resolve as one.
             */
 
             Route::prefix('inventories')->group(function () {
                 Route::get('/', [InventoryController::class, 'index']);
                 Route::post('add', [InventoryController::class, 'store']);
                 Route::post('assign', [InventoryController::class, 'assign']);
-                Route::post('update-quantity/{id}', [InventoryController::class, 'updateQuantity']);
                 Route::post('bulk-upload', [InventoryController::class, 'bulkUpload']);
-                Route::get('{productId}/logs', [InventoryController::class, 'logs']);
                 Route::get('assignments', [InventoryController::class, 'assignments']);
+                Route::get('export', [InventoryController::class, 'export']);
+                Route::get('{id}/logs', [InventoryController::class, 'logs']);
                 Route::get('{id}', [InventoryController::class, 'show']);
+                Route::delete('{id}', [InventoryController::class, 'destroy']);
             });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Inventory Alerts
+            |--------------------------------------------------------------------------
+            | Low stock, out of stock, back in stock, stock added/replenished
+            | and min stock changes. Written as stock moves; these routes only
+            | read them and track read state. Each alert carries a `redirect`
+            | naming the inventory filters (product_id, store_id) to open.
+            |
+            | Literal segments must stay above {id} or they resolve as one.
+            */
+
+            Route::prefix('inventory-alerts')->group(function () {
+                Route::get('/', [InventoryAlertController::class, 'index']);
+                Route::get('summary', [InventoryAlertController::class, 'summary']);
+                Route::post('read-all', [InventoryAlertController::class, 'markAllRead']);
+                Route::post('{id}/read', [InventoryAlertController::class, 'markRead']);
+                Route::get('{id}', [InventoryAlertController::class, 'show']);
+            });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Stores
+            |--------------------------------------------------------------------------
+            | Every store stock is held at, this mine's own included. The stock
+            | itself lives in the inventories group above; this is the master only.
+            */
+
+            Route::apiResource('stores', StoreController::class);
+            Route::post('stores/{id}', [StoreController::class, 'update']);
+            Route::patch('stores/{id}/status', [StoreController::class, 'toggleStatus']);
 
             /*
             |--------------------------------------------------------------------------
@@ -619,6 +670,9 @@ Route::prefix('v1')->group(function () {
             */
             Route::get('service-records/machine/{machine}/history', [ServiceRecordController::class, 'history']);
             Route::get('service-records/{serviceRecord}/audit-trail', [ServiceRecordController::class, 'auditTrail']);
+            // Images are added through the store/update payload but removed one
+            // at a time, so the edit form can free up a slot without resubmitting.
+            Route::delete('service-records/{serviceRecord}/attachments/{attachment}', [ServiceRecordController::class, 'destroyAttachment']);
             Route::apiResource('service-records', ServiceRecordController::class);
 
 

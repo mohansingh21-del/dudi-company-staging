@@ -12,6 +12,33 @@ use Illuminate\Support\Facades\DB;
 class WorkforceDeploymentService
 {
     /**
+     * Shift plan IDs on this date that still hold a claim on their deployed employees.
+     *
+     * A closed shift plan has already been worked and its summary frozen, so a
+     * deployment sitting on it no longer occupies the employee: once their shift is
+     * overridden onto another shift for the same date they must still be loadable
+     * into that shift's plan. Open plans keep blocking, so nobody ends up standing
+     * on two live shifts at once.
+     *
+     * @param  string    $planningDate
+     * @param  int|null  $alwaysInclude  plan that counts as occupying even when closed
+     * @return array
+     */
+    private function occupyingPlanIds($planningDate, $alwaysInclude = null)
+    {
+        $planIds = ShiftPlan::whereDate('planning_date', $planningDate)
+            ->notClosed()
+            ->pluck('id')
+            ->toArray();
+
+        if ($alwaysInclude && !in_array((int) $alwaysInclude, array_map('intval', $planIds), true)) {
+            $planIds[] = (int) $alwaysInclude;
+        }
+
+        return $planIds;
+    }
+
+    /**
      * BR-SHFT-008: Auto-load all active employees from the shift's relay
      * into shift_workforce_deployments. Idempotent — skips already-deployed employees.
      *
@@ -94,13 +121,12 @@ class WorkforceDeploymentService
             return $employee->getShiftIdForDate($planningDate) == $shiftPlan->shift_id;
         });
 
-        // Get all shift plan IDs on this planning date
-        $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
-            ->pluck('id')
-            ->toArray();
-
-        // Get IDs already actively deployed on any shift plan on this date
-        $alreadyDeployedIds = ShiftWorkforceDeployment::whereIn('shift_plan_id', $sameDatePlanIds)
+        // Get IDs already actively deployed on any still-open shift plan on this date.
+        // This plan is always counted so a repeat call stays idempotent on its own rows.
+        $alreadyDeployedIds = ShiftWorkforceDeployment::whereIn(
+                'shift_plan_id',
+                $this->occupyingPlanIds($planningDate, $shiftPlanId)
+            )
             ->active()
             ->pluck('employee_id')
             ->toArray();
@@ -672,13 +698,13 @@ class WorkforceDeploymentService
             return $d->status === 'removed';
         })->keyBy('employee_id');
 
-        // Get all shift plan IDs on this planning date
-        $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
-            ->pluck('id')
-            ->toArray();
-
-        // Get all active deployments on OTHER shift plans for this date
-        $otherDeployments = ShiftWorkforceDeployment::whereIn('shift_plan_id', $sameDatePlanIds)
+        // Get all active deployments on OTHER still-open shift plans for this date.
+        // A deployment on a closed plan no longer occupies the employee, so it must
+        // not report them as busy elsewhere here either.
+        $otherDeployments = ShiftWorkforceDeployment::whereIn(
+                'shift_plan_id',
+                $this->occupyingPlanIds($planningDate)
+            )
             ->where('shift_plan_id', '!=', $shiftPlanId)
             ->active()
             ->with('shiftPlan.shift')

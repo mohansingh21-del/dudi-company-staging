@@ -7,10 +7,19 @@ use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Support\Facades\Schema;
 use App\Http\Requests\Traits\NormalizesServiceRecordInput;
+use App\Http\Requests\Traits\ValidatesSpareParts;
+use App\Models\ServiceRecord;
 
 class UpdateServiceRecordRequest extends FormRequest
 {
     use NormalizesServiceRecordInput;
+
+    // This request needs an attachment check of its own on top of the shared
+    // one, and a withValidator() declared here would shadow the trait's
+    // silently. Aliasing keeps both running — see withValidator() below.
+    use ValidatesSpareParts {
+        withValidator as validateSparePartsStore;
+    }
 
     public function authorize()
     {
@@ -21,12 +30,16 @@ class UpdateServiceRecordRequest extends FormRequest
     {
         $breakdownTable = Schema::hasTable('breakdowns') ? 'breakdowns' : 'breakdown_tickets';
         $machineTable = Schema::hasTable('machines') ? 'machines' : 'equipment_names';
-        $productTable = Schema::hasTable('inventory_products') ? 'inventory_products' : 'products';
 
         return [
             'is_breakdown_service'                 => 'sometimes|boolean',
             'breakdown_id'                         => 'required_if:is_breakdown_service,true,1|nullable|integer|exists:' . $breakdownTable . ',id',
             'machine_id'                           => 'nullable|integer|exists:' . $machineTable . ',id',
+            // Every service carries a job card. The store is required once the
+            // record has parts, and every part must come from it — see
+            // ValidatesSpareParts.
+            'store_id'                             => 'nullable|integer|exists:stores,id',
+            'job_card_number'                      => 'sometimes|required|string|max:64',
             'service_date'                         => 'sometimes|date',
             'hours_odometer_reading'               => 'nullable|numeric|min:0',
             'km_run'                               => 'nullable|numeric|min:0',
@@ -56,17 +69,77 @@ class UpdateServiceRecordRequest extends FormRequest
 
             'spare_parts_changed'                  => 'nullable|boolean',
             'spare_parts'                          => 'required_if:spare_parts_changed,true,1|nullable|array',
-            'spare_parts.*.source'                 => 'required_with:spare_parts|string|in:inventory,vendor',
-            'spare_parts.*.inventory_product_id'   => 'required_if:spare_parts.*.source,inventory|nullable|integer|exists:' . $productTable . ',id',
-            'spare_parts.*.part_name'              => 'required_if:spare_parts.*.source,vendor|nullable|string|max:255',
+            // The product the line is for. inventory_id is never read from the
+            // payload — the service resolves it from this and the record's store.
+            'spare_parts.*.store_product_id'       => 'nullable|integer',
+            'spare_parts.*.product_id'             => 'nullable|integer',
+            // The name is resolved from the product catalog, so a
+            // caller-supplied one is only ever a fallback.
+            'spare_parts.*.part_name'              => 'nullable|string|max:255',
             'spare_parts.*.vendor_name'            => 'nullable|string|max:255',
             'spare_parts.*.quantity'               => 'required_with:spare_parts|numeric|min:0.01',
-            'spare_parts.*.amount'                 => 'required_if:spare_parts.*.source,vendor|nullable|numeric|min:0',
+            // The per-unit price, not the line total: a quantity of 4 at an
+            // amount of 100 is a 400 line, worked out server-side. A part left
+            // unpriced costs nothing.
+            'spare_parts.*.amount'                 => 'nullable|numeric|min:0',
 
+            // Uploads add to what the record already holds, they don't replace
+            // it, so the cap can't be a flat max here — it's checked against the
+            // stored count in withValidator().
             'attachments'                          => 'nullable|array',
             'attachments.*'                        => 'file|mimes:jpg,jpeg,png,pdf|max:5120',
             'remarks'                              => 'nullable|string',
         ];
+    }
+
+    /**
+     * Run the shared spare-parts store check, then reject an upload that would
+     * push the record past its attachment cap.
+     *
+     * The client is told how many slots are actually free so it can prompt the
+     * user to remove images first — DELETE /service-records/{id}/attachments/{id}.
+     *
+     * @param  Validator  $validator
+     * @return void
+     */
+    public function withValidator(Validator $validator)
+    {
+        $this->validateSparePartsStore($validator);
+
+        $validator->after(function (Validator $validator) {
+            $incoming = $this->file('attachments');
+
+            if (!is_array($incoming) || empty($incoming)) {
+                return;
+            }
+
+            $record = $this->route('service_record');
+
+            if (!$record instanceof ServiceRecord) {
+                return;
+            }
+
+            $existing = $record->attachments()->count();
+            $remaining = ServiceRecord::MAX_ATTACHMENTS - $existing;
+
+            if (count($incoming) <= $remaining) {
+                return;
+            }
+
+            if ($remaining <= 0) {
+                $message = 'This service record already has the maximum of '
+                    . ServiceRecord::MAX_ATTACHMENTS . ' images. Remove one before uploading another.';
+            } elseif ($existing === 0) {
+                $message = 'A service record can hold at most '
+                    . ServiceRecord::MAX_ATTACHMENTS . ' images.';
+            } else {
+                $message = 'This service record already has ' . $existing . ' of '
+                    . ServiceRecord::MAX_ATTACHMENTS . ' images. You can upload ' . $remaining
+                    . ' more — remove an existing image to add others.';
+            }
+
+            $validator->errors()->add('attachments', $message);
+        });
     }
 
     protected function failedValidation(Validator $validator)

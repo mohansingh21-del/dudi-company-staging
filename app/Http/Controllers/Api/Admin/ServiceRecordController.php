@@ -58,6 +58,7 @@ class ServiceRecordController extends Controller
                 'machine:id,equipment_name',
                 'site:id,site_name',
                 'breakdown:id,ticket_number',
+                'store:id,name',
                 'creator:id,email',
             ]);
 
@@ -71,6 +72,10 @@ class ServiceRecordController extends Controller
 
             if ($request->filled('service_type')) {
                 $query->where('service_type', $request->input('service_type'));
+            }
+
+            if ($request->filled('store_id')) {
+                $query->where('store_id', $request->input('store_id'));
             }
 
             if ($request->filled('date_from')) {
@@ -88,6 +93,7 @@ class ServiceRecordController extends Controller
 
                 $query->where(function ($q) use ($search) {
                     $q->where('ticket_number', 'LIKE', "%{$search}%")
+                        ->orWhere('job_card_number', 'LIKE', "%{$search}%")
                         ->orWhere('performed_by', 'LIKE', "%{$search}%")
                         ->orWhereHas('machine', function ($q2) use ($search) {
                             $q2->where('equipment_name', 'LIKE', "%{$search}%");
@@ -166,7 +172,8 @@ class ServiceRecordController extends Controller
                 'site',
                 'breakdown:id,ticket_number,status',
                 'checklistDetail',
-                'spareParts',
+                'spareParts.inventory.store',
+                'store',
                 'attachments',
                 'creator:id,email',
                 'updater:id,email',
@@ -230,6 +237,42 @@ class ServiceRecordController extends Controller
                 'message' => 'Service record deleted successfully.',
                 'data'    => null,
             ], 200);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status'  => 500,
+                'message' => $th->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Remove a single attachment from a service record.
+     *
+     * Returns the attachments that remain, in the same shape the record detail
+     * uses, so the edit form can repaint its image list from the response.
+     *
+     * @param ServiceRecord $serviceRecord
+     * @param int $attachment
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function destroyAttachment(ServiceRecord $serviceRecord, $attachment)
+    {
+        try {
+            $userId = auth()->id() ? auth()->id() : 1;
+            $remaining = $this->service->deleteAttachment($serviceRecord, (int) $attachment, $userId);
+
+            return response()->json([
+                'status'  => 200,
+                'message' => 'Attachment deleted successfully.',
+                'data'    => [
+                    'attachments'         => $remaining,
+                    'attachments_count'   => count($remaining),
+                    'max_attachments'     => ServiceRecord::MAX_ATTACHMENTS,
+                    'remaining_slots'     => ServiceRecord::MAX_ATTACHMENTS - count($remaining),
+                ],
+            ], 200);
+        } catch (HttpResponseException $e) {
+            throw $e;
         } catch (\Throwable $th) {
             return response()->json([
                 'status'  => 500,

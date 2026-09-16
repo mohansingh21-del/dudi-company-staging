@@ -10,6 +10,7 @@ use App\Models\Product;
 use App\Models\Role;
 use App\Models\ServiceRecord;
 use App\Models\Site;
+use App\Models\Store;
 use App\Models\SubCategory;
 use App\Models\Category;
 use App\Models\User;
@@ -27,6 +28,11 @@ class ServiceRecordManagementTest extends TestCase
     protected $site;
     protected $product;
     protected $inventory;
+    protected $store;
+    protected $inventory2;
+    protected $product2;
+    protected $product3;
+    protected $inventory3;
 
     protected function setUp(): void
     {
@@ -66,10 +72,50 @@ class ServiceRecordManagementTest extends TestCase
             'is_active'       => 1
         ]);
 
+        $this->store = Store::create([
+            'name'        => 'ABC Traders',
+            'description' => 'Spare parts store',
+            'is_active'   => 1,
+        ]);
+
         $this->inventory = Inventory::create([
+            'store_id'      => $this->store->id,
             'product_id'    => $this->product->id,
             'quantity'      => 50.00,
             'left_quantity' => 20.00,
+            'is_active'     => 1,
+        ]);
+
+        // Further products at the same store, for records that draw more than
+        // one part. A record draws from one store, so they all live here.
+        $this->product2 = Product::create([
+            'sub_category_id' => $subCategory->id,
+            'name'            => 'Hydraulic Hose HX-12',
+            'min_stock'       => 0,
+            'is_active'       => 1
+        ]);
+
+        $this->inventory2 = Inventory::create([
+            'store_id'      => $this->store->id,
+            'product_id'    => $this->product2->id,
+            'quantity'      => 30.00,
+            'left_quantity' => 30.00,
+            'is_active'     => 1,
+        ]);
+
+        $this->product3 = Product::create([
+            'sub_category_id' => $subCategory->id,
+            'name'            => 'Air Filter AF-20',
+            'min_stock'       => 0,
+            'is_active'       => 1
+        ]);
+
+        $this->inventory3 = Inventory::create([
+            'store_id'      => $this->store->id,
+            'product_id'    => $this->product3->id,
+            'quantity'      => 15.00,
+            'left_quantity' => 15.00,
+            'is_active'     => 1,
         ]);
     }
 
@@ -88,21 +134,20 @@ class ServiceRecordManagementTest extends TestCase
                 'fuel_filter_change'  => true,
                 'fuel_filter_change_amount' => 100.00,
             ],
+            'store_id'               => $this->store->id,
+            'job_card_number'        => 'JC-2026-0001',
             'spare_parts_changed'    => true,
             'spare_parts'            => [
                 [
-                    'source'               => 'inventory',
-                    'inventory_product_id' => $this->product->id,
+                    'inventory_id'         => $this->inventory->id,
                     'quantity'             => 2,
-                    'unit_price'           => 50.00,
+                    // A per-unit rate: 2 at 50 is a 100 line.
+                    'amount'               => 50.00,
                 ],
                 [
-                    'source'      => 'vendor',
-                    'part_name'   => 'Custom Gasket',
-                    'vendor_name' => 'ABC Traders',
-                    'quantity'    => 1,
-                    'unit_price'  => 80.00,
-                    'amount'      => 80.00,
+                    'inventory_id'     => $this->inventory2->id,
+                    'quantity'         => 1,
+                    'amount'           => 80.00,
                 ]
             ],
             'remarks'                => 'Routine quarterly maintenance.'
@@ -131,20 +176,22 @@ class ServiceRecordManagementTest extends TestCase
         ]);
     }
 
-    public function test_cannot_deduct_inventory_stock_below_minimum_stock()
+    public function test_cannot_deduct_more_inventory_stock_than_is_left()
     {
-        // Available: 20, min_stock: 5. Deducting 18 leaves 2 (< 5), so it should fail validation.
+        // Available: 20. Deducting 21 would go negative, so it should fail
+        // validation. (Going under min_stock is allowed and only alerts.)
         $payload = [
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-23',
+            'job_card_number'      => 'JC-2026-T000',
+            'store_id'             => $this->store->id,
             'spare_parts_changed'  => true,
             'spare_parts'          => [
                 [
-                    'source'               => 'inventory',
-                    'inventory_product_id' => $this->product->id,
-                    'quantity'             => 18,
-                    'unit_price'           => 10.00,
+                    'inventory_id'         => $this->inventory->id,
+                    'quantity'             => 21,
+                    'amount'               => 10.00,
                 ]
             ],
         ];
@@ -186,6 +233,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => true,
             'breakdown_id'         => $breakdown->id,
             'service_date'         => '2026-07-23',
+            'job_card_number'      => 'JC-2026-T001',
             'base_service_amount'  => 300.00,
         ];
 
@@ -258,6 +306,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => true,
             'breakdown_id'         => $breakdown->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T002',
             'downtime_start'       => '07:15',
             'downtime_end'         => '09:45',
             'base_service_amount'  => 300.00,
@@ -280,6 +329,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T003',
             'downtime_start'       => '10:00:00',
             'downtime_end'         => '11:00:00',
         ]);
@@ -300,6 +350,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T004',
         ])->assertStatus(201)
             ->assertJsonPath('data.status', 'pending')
             ->assertJsonPath('data.downtime_minutes', null);
@@ -312,6 +363,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T005',
             'downtime_end'         => '11:00',
         ])->assertStatus(422)
             ->assertJsonValidationErrors(['downtime_start']);
@@ -321,6 +373,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T006',
             'downtime_start'       => '11:00',
             'downtime_end'         => '11:00',
         ])->assertStatus(422)
@@ -331,6 +384,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T007',
             'downtime_start'       => '2026-07-27 11:00:00',
             'downtime_end'         => '2026-07-27 12:00:00',
         ])->assertStatus(422)
@@ -341,6 +395,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T008',
             'downtime_start'       => '25:99',
             'downtime_end'         => '12:00',
         ])->assertStatus(422)
@@ -354,6 +409,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T009',
             'downtime_start'       => '22:00',
             'downtime_end'         => '02:00',
         ]);
@@ -414,6 +470,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-23',
+            'job_card_number'      => 'JC-2026-T010',
         ];
 
         $createRes = $this->postJson('/api/v1/admin/service-records', $payload);
@@ -454,10 +511,12 @@ class ServiceRecordManagementTest extends TestCase
             'site_id'              => $this->site->id,
             'service_date'         => '2026-07-20',
             'base_service_amount'  => 5000,
+            'store_id'             => $this->store->id,
+            'job_card_number'      => 'JC-2026-0042',
             'spare_parts_changed'  => true,
             'spare_parts'          => [
-                ['source' => 'inventory', 'inventory_product_id' => $this->product->id, 'quantity' => 2],
-                ['source' => 'vendor', 'part_name' => 'Custom Valve', 'quantity' => 1, 'amount' => 5200],
+                ['inventory_id' => $this->inventory->id, 'quantity' => 2],
+                ['inventory_id' => $this->inventory2->id, 'quantity' => 1, 'amount' => 5200],
             ],
         ]);
         $created->assertStatus(201);
@@ -478,16 +537,25 @@ class ServiceRecordManagementTest extends TestCase
             ->assertJsonPath('data.checklist.gear_oil.done', false)
             ->assertJsonPath('data.checklist.filters.changed', []);
 
-        // Spare Parts Used — an unpriced inventory issue must not read as ₹0.
+        // Spare Parts Used — every part is labelled with the store it came
+        // from, and its name is resolved from the shared product catalog
+        // rather than typed in free text. An unpriced issue must not read as ₹0.
         $report->assertJsonCount(2, 'data.spare_parts')
-            ->assertJsonPath('data.spare_parts.0.source_label', 'Inventory')
+            ->assertJsonPath('data.spare_parts.0.source_label', 'ABC Traders')
+            ->assertJsonPath('data.spare_parts.0.store_id', $this->store->id)
             ->assertJsonPath('data.spare_parts.0.part_name', 'Oil Filter XP-90')
             ->assertJsonPath('data.spare_parts.0.quantity', 2)
             ->assertJsonPath('data.spare_parts.0.is_priced', false)
-            ->assertJsonPath('data.spare_parts.1.source_label', 'Other Vendors')
-            ->assertJsonPath('data.spare_parts.1.part_name', 'Custom Valve')
+            ->assertJsonPath('data.spare_parts.1.source_label', 'ABC Traders')
+            ->assertJsonPath('data.spare_parts.1.store_id', $this->store->id)
+            ->assertJsonPath('data.spare_parts.1.part_name', 'Hydraulic Hose HX-12')
             ->assertJsonPath('data.spare_parts.1.amount', 5200)
             ->assertJsonPath('data.spare_parts.1.is_priced', true);
+
+        // The record carries the one store and one job card its parts came from.
+        $report->assertJsonPath('data.job_card_number', 'JC-2026-0042')
+            ->assertJsonPath('data.store.id', $this->store->id)
+            ->assertJsonPath('data.store.name', 'ABC Traders');
 
         $report->assertJsonPath('data.totals.base_service_amount', 5000)
             ->assertJsonPath('data.totals.spare_parts_amount_total', 5200)
@@ -504,6 +572,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-20',
+            'job_card_number'      => 'JC-2026-T011',
             'base_service_amount'  => 1000,
             'checklist'            => [
                 'oil_change'                => true,
@@ -535,10 +604,12 @@ class ServiceRecordManagementTest extends TestCase
             'service_date'           => '2026-07-20',
             'hours_odometer_reading' => 450,
             'base_service_amount'    => 6600,
+            'store_id'               => $this->store->id,
+            'job_card_number'        => 'JC-2026-0077',
             'spare_parts_changed'    => true,
             'spare_parts'            => [
-                ['source' => 'vendor', 'part_name' => 'Hydraulic Hose', 'quantity' => 1, 'amount' => 2400],
-                ['source' => 'vendor', 'part_name' => 'Seal Kit', 'quantity' => 1, 'amount' => 1200],
+                ['inventory_id' => $this->inventory2->id, 'quantity' => 1, 'amount' => 2400],
+                ['inventory_id' => $this->inventory3->id, 'quantity' => 1, 'amount' => 1200],
             ],
         ])->assertStatus(201);
         \DB::table('service_records')->where('hours_odometer_reading', 450)->update(['service_type' => 'repair']);
@@ -548,6 +619,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service'   => false,
             'machine_id'             => $this->machine->id,
             'service_date'           => '2026-07-16',
+            'job_card_number'        => 'JC-2026-T012',
             'hours_odometer_reading' => 5000,
             'base_service_amount'    => 3300,
             'checklist'              => ['oil_change' => true, 'oil_change_amount' => 1200],
@@ -558,6 +630,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-18',
+            'job_card_number'      => 'JC-2026-T013',
             'base_service_amount'  => 99999,
         ]);
         $this->putJson("/api/v1/admin/service-records/{$cancelled->json('data.id')}", ['status' => 'cancelled'])
@@ -641,6 +714,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T014',
             'base_service_amount'  => 100.00,
         ]);
         $created->assertStatus(201);
@@ -693,6 +767,7 @@ class ServiceRecordManagementTest extends TestCase
             'machine_id'           => $this->machine->id,
             'site_id'              => $this->site->id,
             'service_date'         => '2026-07-20',
+            'job_card_number'      => 'JC-2026-T015',
             'performed_by'         => 'Ramesh Kumar',
         ]);
         $first->assertStatus(201);
@@ -703,6 +778,7 @@ class ServiceRecordManagementTest extends TestCase
             'machine_id'           => $otherMachine->id,
             'site_id'              => $otherSite->id,
             'service_date'         => '2026-07-25',
+            'job_card_number'      => 'JC-2026-T016',
             'performed_by'         => 'Anil Sharma',
         ])->assertStatus(201);
 
@@ -764,6 +840,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T017',
             'base_service_amount'  => 100.00,
         ]);
         $created->assertStatus(201);
@@ -791,6 +868,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => false,
             'machine_id'           => $this->machine->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T018',
             'base_service_amount'  => 100.00,
         ]);
         $created->assertStatus(201);
@@ -891,6 +969,7 @@ class ServiceRecordManagementTest extends TestCase
             'is_breakdown_service' => true,
             'breakdown_id'         => $breakdown->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T019',
             'base_service_amount'  => 300.00,
         ];
 
@@ -918,9 +997,24 @@ class ServiceRecordManagementTest extends TestCase
         $this->postJson('/api/v1/admin/service-records', $payload)->assertStatus(201);
     }
 
-    public function test_available_products_excludes_stock_at_or_below_min_stock()
+    public function test_available_products_includes_low_stock_and_excludes_empty_rows()
     {
-        // Sitting exactly at min_stock: on the shelf, but not deductable.
+        // Nothing left at all: not deductable.
+        $empty = Product::create([
+            'sub_category_id' => $this->product->sub_category_id,
+            'name'            => 'Coolant CL-5',
+            'min_stock'       => 0,
+            'is_active'       => 1
+        ]);
+        Inventory::create([
+            'store_id'      => $this->store->id,
+            'product_id'    => $empty->id,
+            'quantity'      => 10.00,
+            'left_quantity' => 0.00,
+            'is_active'     => 1,
+        ]);
+
+        // Sitting exactly at min_stock: low, but still deductable.
         $atMinStock = Product::create([
             'sub_category_id' => $this->product->sub_category_id,
             'name'            => 'Gear Oil GX-10',
@@ -928,12 +1022,14 @@ class ServiceRecordManagementTest extends TestCase
             'is_active'       => 1
         ]);
         Inventory::create([
+            'store_id'      => $this->store->id,
             'product_id'    => $atMinStock->id,
             'quantity'      => 30.00,
             'left_quantity' => 10.00,
+            'is_active'     => 1,
         ]);
 
-        // Active product with no inventory record at all.
+        // Active product not stocked anywhere.
         Product::create([
             'sub_category_id' => $this->product->sub_category_id,
             'name'            => 'Brake Pad BP-77',
@@ -941,15 +1037,31 @@ class ServiceRecordManagementTest extends TestCase
             'is_active'       => 1
         ]);
 
-        $response = $this->getJson('/api/v1/available-products');
+        $response = $this->getJson('/api/v1/available-products')
+            ->assertStatus(200)
+            ->assertJsonPath('status', 200);
 
-        $response->assertStatus(200)
-            ->assertJsonPath('status', 200)
-            ->assertJsonCount(1, 'data')
-            ->assertJsonPath('data.0.product_id', $this->product->id)
-            ->assertJsonPath('data.0.left_quantity', 20)
-            ->assertJsonPath('data.0.min_stock', 5)
-            ->assertJsonPath('data.0.available_quantity', 15);
+        // Everything with stock on the shelf, low or not; neither the empty
+        // row nor the product stocked nowhere.
+        $productIds = array_column($response->json('data'), 'product_id');
+        sort($productIds);
+        $expected = [$this->product->id, $this->product2->id, $this->product3->id, $atMinStock->id];
+        sort($expected);
+        $this->assertSame($expected, $productIds);
+
+        $gearOil = collect($response->json('data'))->firstWhere('product_id', $atMinStock->id);
+        $this->assertEquals(10, $gearOil['available_quantity']);
+        $this->assertTrue($gearOil['is_low_stock']);
+
+        $oilFilter = collect($response->json('data'))
+            ->firstWhere('product_id', $this->product->id);
+
+        $this->assertSame($this->inventory->id, $oilFilter['inventory_id']);
+        $this->assertSame($this->store->id, $oilFilter['store_id']);
+        $this->assertEquals(20, $oilFilter['left_quantity']);
+        $this->assertEquals(5, $oilFilter['min_stock']);
+        $this->assertEquals(20, $oilFilter['available_quantity']);
+        $this->assertFalse($oilFilter['is_low_stock']);
     }
 
     public function test_can_create_service_record_from_multipart_string_booleans()
@@ -960,6 +1072,7 @@ class ServiceRecordManagementTest extends TestCase
             'machine_id'           => $this->machine->id,
             'site_id'              => $this->site->id,
             'service_date'         => '2026-07-27',
+            'job_card_number'      => 'JC-2026-T020',
             'base_service_amount'  => '500.00',
             'performed_by'         => 'Ramesh Kumar',
             'checklist'            => [

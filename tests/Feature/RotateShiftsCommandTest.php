@@ -187,6 +187,15 @@ class RotateShiftsCommandTest extends TestCase
             'is_active' => 1
         ]);
 
+        // Shift Evening needs an owning relay: the rotated employee moves into it.
+        $relayB = \App\Models\Relay::create(['name' => 'Relay B', 'is_rotating' => true, 'is_active' => true]);
+        \App\Models\RelayShiftMapping::create([
+            'week_start_date' => now()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString(),
+            'week_end_date' => now()->startOfWeek(\Carbon\Carbon::MONDAY)->addDays(6)->toDateString(),
+            'relay_id' => $relayB->id,
+            'shift_id' => $newShift->id,
+        ]);
+
         $response = $this->postJson('/api/v1/admin/shift-rotation', [
             'employee_ids' => [$employeeGeneral->id, $employeeRelay->id],
             'target_shift_id' => $newShift->id

@@ -156,15 +156,17 @@ class BreakdownController extends Controller
             $updatedTicket = $this->service->update($ticket, $request->validated());
 
             $responsePayload = [
-                'id'               => $updatedTicket->id,
-                'status'           => $updatedTicket->status,
-                'severity'         => $updatedTicket->severity,
-                'description'      => $updatedTicket->description,
-                'downtime_end'     => $updatedTicket->downtime_end ? $updatedTicket->downtime_end->toDateTimeString() : null,
-                'downtime_minutes' => $updatedTicket->downtime_minutes,
-                'resolution_notes' => $updatedTicket->resolution_notes,
-                'resolved_by'      => $updatedTicket->resolved_by ? (optional($updatedTicket->resolver->employee)->name ?? (optional($updatedTicket->resolver)->email ?? null)) : null,
-                'resolved_at'      => $updatedTicket->resolved_at ? $updatedTicket->resolved_at->toDateTimeString() : null,
+                'id'                  => $updatedTicket->id,
+                'status'              => $updatedTicket->status,
+                'breakdown_date_time' => $updatedTicket->breakdown_date_time ? $updatedTicket->breakdown_date_time->toDateTimeString() : null,
+                'date'                => $updatedTicket->date ? $updatedTicket->date->toDateString() : null,
+                'severity'            => $updatedTicket->severity,
+                'description'         => $updatedTicket->description,
+                'downtime_end'        => $updatedTicket->downtime_end ? $updatedTicket->downtime_end->toDateTimeString() : null,
+                'downtime_minutes'    => $updatedTicket->downtime_minutes,
+                'resolution_notes'    => $updatedTicket->resolution_notes,
+                'resolved_by'         => $updatedTicket->resolved_by ? (optional($updatedTicket->resolver->employee)->name ?? (optional($updatedTicket->resolver)->email ?? null)) : null,
+                'resolved_at'         => $updatedTicket->resolved_at ? $updatedTicket->resolved_at->toDateTimeString() : null,
             ];
 
             return response()->json([

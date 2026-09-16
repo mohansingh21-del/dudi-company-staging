@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\Storage;
+use App\Models\ServiceRecord;
 
 /**
  * The Detailed Service Report shown behind "View Full Details".
@@ -20,6 +21,9 @@ class ServiceRecordReportResource extends JsonResource
         return [
             'id'                     => $this->id,
             'ticket_number'          => $this->ticket_number,
+            // The outside store's own job card, present only when this record
+            // drew parts from one. Unrelated to the VECV dealer job cards.
+            'job_card_number'        => $this->job_card_number,
 
             'service_type'           => $this->service_type,
             'service_type_label'     => $this->service_type === 'repair' ? 'Repair' : 'General Service',
@@ -35,6 +39,11 @@ class ServiceRecordReportResource extends JsonResource
                 'id'   => $this->site_id,
                 'name' => optional($this->site)->site_name,
             ],
+            // One record draws store-sourced parts from one store only.
+            'store' => $this->store_id ? [
+                'id'   => $this->store_id,
+                'name' => optional($this->store)->name,
+            ] : null,
 
             'is_breakdown_service'   => (bool) $this->is_breakdown_service,
             'breakdown' => $this->breakdown ? [
@@ -61,6 +70,15 @@ class ServiceRecordReportResource extends JsonResource
             'checklist'    => $this->checklist(),
             'spare_parts'  => $this->spareParts(),
             'attachments'  => $this->attachments(),
+
+            // The edit form shows the saved images and has to know when the
+            // upload control should stop accepting more, so the cap ships with
+            // them rather than being hardcoded client-side.
+            'attachment_limits' => [
+                'max'             => ServiceRecord::MAX_ATTACHMENTS,
+                'used'            => $this->attachments->count(),
+                'remaining_slots' => max(0, ServiceRecord::MAX_ATTACHMENTS - $this->attachments->count()),
+            ],
 
             'totals' => [
                 'base_service_amount'      => (float) $this->base_service_amount,
@@ -125,22 +143,29 @@ class ServiceRecordReportResource extends JsonResource
     protected function spareParts()
     {
         return $this->spareParts->map(function ($part) {
-            $isInventory = $part->source === 'inventory';
+            $inventory = $part->inventory;
+            $storeName = optional(optional($inventory)->store)->name;
+
+            // Rows written before the two inventories were merged, and the
+            // older free-text vendor rows, point at no stock row — the only
+            // name they ever carried is the free-text vendor_name.
+            $sourceLabel = $storeName ?: ($part->vendor_name ?: 'Other Vendors');
 
             return [
-                'id'                   => $part->id,
-                'source'               => $part->source,
-                'source_label'         => $isInventory ? 'Inventory' : 'Other Vendors',
-                'inventory_product_id' => $part->inventory_product_id,
-                'part_name'            => $part->part_name,
-                'vendor_name'          => $part->vendor_name,
-                'quantity'             => (float) $part->quantity,
-                'unit_price'           => (float) $part->unit_price,
-                'amount'               => (float) $part->amount,
-                // Inventory products carry no price in this system, so an issued
-                // part has no billable amount to show — that is not the same as
-                // costing zero rupees, and the report must not imply it is.
-                'is_priced'            => !($isInventory && (float) $part->unit_price === 0.00),
+                'id'           => $part->id,
+                'source_label' => $sourceLabel,
+                'inventory_id' => $part->inventory_id,
+                'product_id'   => optional($inventory)->product_id,
+                'store_id'     => optional($inventory)->store_id,
+                'store_name'   => $storeName,
+                'part_name'    => $part->part_name,
+                'quantity'     => (float) $part->quantity,
+                'unit_price'   => (float) $part->unit_price,
+                'amount'       => (float) $part->amount,
+                // A part the caller did not price has no billable amount to
+                // show — that is not the same as costing zero rupees, and the
+                // report must not imply it is.
+                'is_priced'    => (float) $part->unit_price > 0.00,
             ];
         })->values()->toArray();
     }

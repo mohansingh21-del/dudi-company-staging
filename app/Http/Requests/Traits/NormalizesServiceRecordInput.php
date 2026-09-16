@@ -2,6 +2,9 @@
 
 namespace App\Http\Requests\Traits;
 
+use App\Models\Inventory;
+use App\Models\ServiceRecord;
+
 trait NormalizesServiceRecordInput
 {
     /**
@@ -26,6 +29,14 @@ trait NormalizesServiceRecordInput
         'fuel_filter_change',
         'oil_filter_change',
     ];
+
+    /**
+     * spare_parts indexes whose store_product_id names no stock row at this
+     * record's store, as index => product id. Reported by ValidatesSpareParts.
+     *
+     * @var array
+     */
+    protected $unresolvedStoreProducts = [];
 
     /**
      * Cast "true"/"false"/"yes"/"on" strings to real booleans.
@@ -57,6 +68,12 @@ trait NormalizesServiceRecordInput
             $merge['checklist'] = $checklist;
         }
 
+        $parts = $this->resolveSparePartStockRows();
+
+        if ($parts !== null) {
+            $merge['spare_parts'] = $parts;
+        }
+
         if (!empty($merge)) {
             $this->merge($merge);
         }
@@ -70,6 +87,106 @@ trait NormalizesServiceRecordInput
             $this->request->remove('spare_parts');
             $this->query->remove('spare_parts');
         }
+    }
+
+    /**
+     * Point every spare part line at the stock row it actually came out of.
+     *
+     * Clients still post the pre-migration field name (store_product_id,
+     * alongside a now-unused source flag), which carries the product's own id.
+     * A product id does not name a stock row on its own — the same product is a
+     * separate row, and a separate balance, at every store that carries it — so
+     * it is resolved against this record's store.
+     *
+     * product_id — the field the show response returns per part — is accepted
+     * in its place, so an edit form can post back what it was given.
+     *
+     * A posted inventory_id is always discarded, on both store and update. The
+     * live form repeats one inventory_id across lines while varying
+     * store_product_id, so trusting it saves every line against the first
+     * line's part: the record shows the same part twice, and that part's stock
+     * absorbs a deduction belonging to another. The product id is the field
+     * such a payload varies per line, so it is the only one read.
+     *
+     * Nothing is guessed when a product is not stocked at the store — the index
+     * is recorded for ValidatesSpareParts to report, rather than silently
+     * falling back to an id that points somewhere else.
+     *
+     * @return array|null  The rewritten lines, or null when there are none.
+     */
+    protected function resolveSparePartStockRows()
+    {
+        $parts = $this->input('spare_parts');
+
+        if (!is_array($parts)) {
+            return null;
+        }
+
+        $storeId = $this->serviceRecordStoreId();
+
+        foreach ($parts as $index => $part) {
+            if (!is_array($part)) {
+                continue;
+            }
+
+            $parts[$index]['inventory_id'] = null;
+
+            $productId = !empty($part['store_product_id'])
+                ? (int) $part['store_product_id']
+                : (!empty($part['product_id']) ? (int) $part['product_id'] : null);
+
+            if (!$productId) {
+                continue;
+            }
+
+            $resolved = $storeId
+                ? Inventory::where('store_id', $storeId)
+                    ->where('product_id', $productId)
+                    ->value('id')
+                : null;
+
+            if (!$resolved) {
+                // inventory_id stays null: validation fails on the error
+                // added for this index, so nothing is guessed.
+                $this->unresolvedStoreProducts[$index] = $productId;
+
+                continue;
+            }
+
+            $parts[$index]['inventory_id'] = (int) $resolved;
+        }
+
+        return $parts;
+    }
+
+    /**
+     * The store this record draws its parts from.
+     *
+     * An update that changes only the parts does not have to resend store_id,
+     * so the stored one stands in — without it every line on such a request
+     * would be unresolvable.
+     *
+     * @return int|null
+     */
+    protected function serviceRecordStoreId()
+    {
+        if ($this->filled('store_id')) {
+            return (int) $this->input('store_id');
+        }
+
+        $record = $this->route('service_record');
+
+        return $record instanceof ServiceRecord && $record->store_id
+            ? (int) $record->store_id
+            : null;
+    }
+
+    /**
+     * @return array  index => product id
+     */
+    public function unresolvedStoreProducts()
+    {
+        return $this->unresolvedStoreProducts;
     }
 
     /**

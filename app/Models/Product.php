@@ -26,9 +26,12 @@ class Product extends Model
         return $this->belongsTo(SubCategory::class, 'sub_category_id');
     }
 
-    public function inventory()
+    /**
+     * This product's stock at each store that carries it — one row per store.
+     */
+    public function inventories()
     {
-        return $this->hasOne(Inventory::class, 'product_id');
+        return $this->hasMany(Inventory::class, 'product_id');
     }
 
     public function inventoryLogs()
