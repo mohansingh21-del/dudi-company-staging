@@ -429,6 +429,40 @@ class LeaveBalanceService
     }
 
     /**
+     * Guard against leave dated before the employee joined.
+     *
+     * Nothing used to compare the leave dates against joining_date, so a leave
+     * could be filed for days the employee was not yet on the rolls. Those days
+     * land on the Form E register and in the payroll month as paid absence for
+     * a period no wage was ever due for.
+     *
+     * Only from_date is checked: to_date is already validated as on or after
+     * from_date, so a from_date on or after joining puts the whole block inside
+     * service.
+     *
+     * Returns null when the leave may be filed, or the refusal message.
+     */
+    public static function joiningDateMessage(int $employeeId, string $fromDate): ?string
+    {
+        $employee = Employee::find($employeeId);
+
+        if (! $employee || ! $employee->joining_date) {
+            return null;
+        }
+
+        $joining = Carbon::parse($employee->joining_date)->startOfDay();
+        $from = Carbon::parse($fromDate)->startOfDay();
+
+        if ($from->greaterThanOrEqualTo($joining)) {
+            return null;
+        }
+
+        return 'Leave cannot start before the date of joining ('
+            . $joining->format('d/m/Y') . '). '
+            . 'The employee was not on the rolls on ' . $from->format('d/m/Y') . '.';
+    }
+
+    /**
      * Paid and unpaid leave days per employee for a payroll month.
      *
      * Counted as **distinct calendar dates**, not as a sum of leave lengths.

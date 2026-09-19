@@ -61,19 +61,21 @@ class HolidayController extends Controller
     }
     public function store(StoreHolidayRequest $request)
     {
+        // `status` was being passed here and silently dropped — it is neither a
+        // column nor fillable. New rows only looked active because the column
+        // defaults to 1; is_active is now set on purpose.
         $dept = Holiday::create([
             'holiday_name' => $request->holiday_name,
             'holiday_date' => $request->holiday_date,
             'holiday_type' => $request->holiday_type,
             'site_id' => $request->site_id,
-            'status' => 1,
-
+            'is_active' => 1,
         ]);
 
         return response()->json([
             'status' => 200,
-            'message' => 'Holiday created'
-            // 'data' => new DepartmentResource($dept)
+            'message' => 'Holiday created',
+            'data' => new HolidayResource($dept->load('site')),
         ]);
     }
 
@@ -105,18 +107,18 @@ class HolidayController extends Controller
             ]);
         }
 
-        $dept->fill(array_filter([
-            'holiday_name' => $request->holiday_name,
-            'holiday_date' => $request->holiday_date,
-            'holiday_type' => $request->holiday_type,
-            'site_id'      => $request->site_id,
-        ], fn ($value) => !is_null($value)));
+        // Only the keys actually submitted are applied. The old array_filter
+        // dropped every null, which made site_id impossible to clear — a
+        // site holiday could never be turned back into a general one.
+        $payload = $request->only(['holiday_name', 'holiday_date', 'holiday_type', 'site_id']);
 
+        $dept->fill($payload);
         $dept->save();
 
         return response()->json([
             'status' => 200,
-            'message' => 'Holiday updated successfully'
+            'message' => 'Holiday updated successfully',
+            'data' => new HolidayResource($dept->load('site')),
         ]);
     }
 
@@ -127,7 +129,7 @@ class HolidayController extends Controller
         if (!$dept) {
             return response()->json([
                 'status' => 404,
-                'message' => 'Department not found'
+                'message' => 'Holiday not found'
             ]);
         }
 
@@ -135,7 +137,7 @@ class HolidayController extends Controller
 
         return response()->json([
             'status' => 200,
-            'message' => 'Department deleted successfully'
+            'message' => 'Holiday deleted successfully'
         ]);
     }
     public function toggleStatus(Request $request, int $id)
@@ -151,6 +153,29 @@ class HolidayController extends Controller
         $request->validate([
             'status' => 'required|in:0,1'
         ]);
+
+        // Re-activating is a duplicate risk the store/update rules never see:
+        // the row is already saved, and the DB index only constrains active
+        // rows. Without this check, switching an archived duplicate back on
+        // would surface as a raw integrity-constraint error.
+        if ($request->status && !$dept->is_active) {
+            $clash = Holiday::active()
+                ->whereDate('holiday_date', $dept->holiday_date)
+                ->where('id', '!=', $dept->id)
+                ->when(
+                    $dept->site_id === null,
+                    fn ($q) => $q->whereNull('site_id'),
+                    fn ($q) => $q->where('site_id', $dept->site_id)
+                )
+                ->exists();
+
+            if ($clash) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'A holiday already exists for this site on this date.',
+                ], 422);
+            }
+        }
 
         $dept->is_active = $request->status ? 1 : 0;
         $dept->save();

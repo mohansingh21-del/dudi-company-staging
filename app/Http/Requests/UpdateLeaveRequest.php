@@ -84,6 +84,21 @@ public function withValidator($validator)
             return;
         }
 
+        // Leave dated before the employee joined is refused outright: those days
+        // are outside service and would otherwise reach the Form E register and
+        // the payroll month as paid absence for a period no wage was due for.
+        $joiningMessage = \App\Services\LeaveBalanceService::joiningDateMessage(
+            (int) $this->employee_id,
+            $this->from_date
+        );
+
+        if ($joiningMessage) {
+
+            $validator->errors()->add('from_date', $joiningMessage);
+
+            return;
+        }
+
         $leaveId = $this->route('leave')?->id
             ?? $this->route('leave');
 

@@ -80,6 +80,21 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
+            // Same rule as the apply form: days before the employee joined are
+            // outside service and must not reach the register or the payroll.
+            $joiningMessage = \App\Services\LeaveBalanceService::joiningDateMessage(
+                $employee->id,
+                $fromDate->toDateString()
+            );
+
+            if ($joiningMessage) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Employee {$employee->employee_code}: {$joiningMessage}"
+                ];
+                continue;
+            }
+
             $existingLeave = Leave::where('employee_id', $employee->id)
                 ->where(function ($query) use ($fromDate, $toDate) {
                     $query->whereBetween('from_date', [$fromDate->toDateString(), $toDate->toDateString()])

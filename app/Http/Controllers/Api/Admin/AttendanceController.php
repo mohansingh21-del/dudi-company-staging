@@ -1732,22 +1732,6 @@ class AttendanceController extends Controller
                 $year = $statsDate->year;
                 $daysInMonth = Carbon::create($year, $month)->daysInMonth;
 
-                // Count holidays for the month
-                $generalHolidays = Holiday::whereMonth('holiday_date', $month)
-                    ->whereYear('holiday_date', $year)
-                    ->where('is_active', true)
-                    ->whereNull('site_id')
-                    ->count();
-
-                $siteHolidays = Holiday::whereMonth('holiday_date', $month)
-                    ->whereYear('holiday_date', $year)
-                    ->where('is_active', true)
-                    ->whereNotNull('site_id')
-                    ->selectRaw('site_id, COUNT(*) as count')
-                    ->groupBy('site_id')
-                    ->pluck('count', 'site_id')
-                    ->toArray();
-
                 // Build Employee query
                 $employeeQuery = \App\Models\Employee::with(['site', 'department']);
                 if ($applyActiveFilter) {
@@ -1828,7 +1812,13 @@ class AttendanceController extends Controller
                     }
                 }
 
-                $data = collect($employees->items())->map(function ($employee) use ($attendanceCounts, $leaveSummary, $generalHolidays, $siteHolidays, $daysInMonth) {
+                // Paid holiday days per employee. Counted as distinct dates,
+                // so a general and a site holiday on the same day - or plain
+                // duplicate rows - are one day, and a holiday landing on a
+                // weekly off or any other already-paid day adds nothing.
+                $holidayDays = \App\Services\HolidayService::monthlyHolidayDays($employeeIds, $month, $year);
+
+                $data = collect($employees->items())->map(function ($employee) use ($attendanceCounts, $leaveSummary, $holidayDays, $daysInMonth) {
                     $att = $attendanceCounts->get($employee->id);
                     $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
 
@@ -1840,7 +1830,7 @@ class AttendanceController extends Controller
                     $paidRestDays = min($restDay, $restDaysSetting);
                     $leave = $empLeave['paid'] + $empLeave['unpaid'];
 
-                    $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
+                    $holidays = $holidayDays[$employee->id] ?? 0;
                     // Payable days calculation matching payroll logic:
                     // Payable Days = Present + (Half Day * 0.5) + Rest Day + Paid Leave + Holiday
                     $payableDays = $present + ($halfDay * 0.5) + $paidRestDays + $empLeave['paid'] + $holidays;
@@ -2224,22 +2214,6 @@ class AttendanceController extends Controller
                 $year = $statsDate->year;
                 $daysInMonth = Carbon::create($year, $month)->daysInMonth;
 
-                // Count holidays for the month
-                $generalHolidays = Holiday::whereMonth('holiday_date', $month)
-                    ->whereYear('holiday_date', $year)
-                    ->where('is_active', true)
-                    ->whereNull('site_id')
-                    ->count();
-
-                $siteHolidays = Holiday::whereMonth('holiday_date', $month)
-                    ->whereYear('holiday_date', $year)
-                    ->where('is_active', true)
-                    ->whereNotNull('site_id')
-                    ->selectRaw('site_id, COUNT(*) as count')
-                    ->groupBy('site_id')
-                    ->pluck('count', 'site_id')
-                    ->toArray();
-
                 // Build Employee query
                 $employeeQuery = \App\Models\Employee::with(['site', 'department']);
                 if ($applyActiveFilter) {
@@ -2320,7 +2294,13 @@ class AttendanceController extends Controller
                     }
                 }
 
-                $data = collect($employees->items())->map(function ($employee) use ($attendanceCounts, $leaveSummary, $generalHolidays, $siteHolidays, $daysInMonth) {
+                // Paid holiday days per employee. Counted as distinct dates,
+                // so a general and a site holiday on the same day - or plain
+                // duplicate rows - are one day, and a holiday landing on a
+                // weekly off or any other already-paid day adds nothing.
+                $holidayDays = \App\Services\HolidayService::monthlyHolidayDays($employeeIds, $month, $year);
+
+                $data = collect($employees->items())->map(function ($employee) use ($attendanceCounts, $leaveSummary, $holidayDays, $daysInMonth) {
                     $att = $attendanceCounts->get($employee->id);
                     $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
 
@@ -2332,7 +2312,7 @@ class AttendanceController extends Controller
                     $paidRestDays = min($restDay, $restDaysSetting);
                     //$leave = $att ? (int) $att->leave_days : 0;
                     $leave = $empLeave['paid'] + $empLeave['unpaid'];
-                    $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
+                    $holidays = $holidayDays[$employee->id] ?? 0;
 
                     // Payable days calculation matching payroll logic:
                     // Payable Days = Present + (Half Day * 0.5) + Rest Day + Paid Leave + Holiday
@@ -2731,22 +2711,6 @@ class AttendanceController extends Controller
                 $year = $statsDate->year;
                 $daysInMonth = Carbon::create($year, $month)->daysInMonth;
 
-                // Count holidays for the month
-                $generalHolidays = Holiday::whereMonth('holiday_date', $month)
-                    ->whereYear('holiday_date', $year)
-                    ->where('is_active', true)
-                    ->whereNull('site_id')
-                    ->count();
-
-                $siteHolidays = Holiday::whereMonth('holiday_date', $month)
-                    ->whereYear('holiday_date', $year)
-                    ->where('is_active', true)
-                    ->whereNotNull('site_id')
-                    ->selectRaw('site_id, COUNT(*) as count')
-                    ->groupBy('site_id')
-                    ->pluck('count', 'site_id')
-                    ->toArray();
-
                 // Build Employee query
                 $employeeQuery = \App\Models\Employee::with(['site', 'department'])
                     ->whereDate('joining_date', '<=', $endDate->format('Y-m-d'));
@@ -2837,7 +2801,13 @@ class AttendanceController extends Controller
                     }
                 }
 
-                $data = collect($employees->items())->map(function ($employee) use ($attendanceCounts, $leaveSummary, $generalHolidays, $siteHolidays, $daysInMonth) {
+                // Paid holiday days per employee. Counted as distinct dates,
+                // so a general and a site holiday on the same day - or plain
+                // duplicate rows - are one day, and a holiday landing on a
+                // weekly off or any other already-paid day adds nothing.
+                $holidayDays = \App\Services\HolidayService::monthlyHolidayDays($employeeIds, $month, $year);
+
+                $data = collect($employees->items())->map(function ($employee) use ($attendanceCounts, $leaveSummary, $holidayDays, $daysInMonth) {
                     $att = $attendanceCounts->get($employee->id);
                     $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
 
@@ -2853,7 +2823,7 @@ class AttendanceController extends Controller
                     $paidRestDays = min($restDay, $restDaysSetting);
                     $leave = $empLeave['paid'] + $empLeave['unpaid'];
 
-                    $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
+                    $holidays = $holidayDays[$employee->id] ?? 0;
 
                     // Payable days calculation matching payroll logic:
                     // Payable Days = Present + (Half Day * 0.5) + Rest Day + Paid Leave + Holiday

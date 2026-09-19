@@ -7,7 +7,6 @@ use App\Models\Payroll;
 use App\Models\Employee;
 use App\Models\AttendanceProcessed;
 use App\Models\Leave;
-use App\Models\Holiday;
 use App\Http\Resources\PayrollResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -76,13 +75,6 @@ class PayrollController extends Controller
             // ── Calculate working days in the month ──
             $daysInMonth = Carbon::create($year, $month)->daysInMonth;
 
-            // Count holidays for the month (site-specific ones handled per-employee below)
-            $generalHolidays = Holiday::whereMonth('holiday_date', $month)
-                ->whereYear('holiday_date', $year)
-                ->where('is_active', true)
-                ->whereNull('site_id')
-                ->count();
-
             // ── Gather data for each employee ──
             $employeeIds = $employees->pluck('id');
 
@@ -116,14 +108,15 @@ class PayrollController extends Controller
             // front — it is resolved per employee once gross is known below.
             $recoveryService = app(\App\Services\LoanRecoveryService::class);
 
-            // Site-specific holidays
-            $siteHolidays = Holiday::whereMonth('holiday_date', $month)
-                ->whereYear('holiday_date', $year)
-                ->where('is_active', true)
-                ->whereNotNull('site_id')
-                ->selectRaw('site_id, COUNT(*) as count')
-                ->groupBy('site_id')
-                ->pluck('count', 'site_id');
+            // Paid holiday days per employee. A general and a site holiday on
+            // the same date are one day, duplicate rows are one day, and a
+            // holiday landing on a day attendance or paid leave already covers
+            // adds nothing — all of that is resolved in HolidayService.
+            $holidayDays = \App\Services\HolidayService::monthlyHolidayDays(
+                $employeeIds->all(),
+                $month,
+                $year
+            );
 
             // Existing payroll records
             $existingPayrolls = Payroll::whereIn('employee_id', $employeeIds)
@@ -141,11 +134,11 @@ class PayrollController extends Controller
             );
 
             // ── Build result collection ──
-            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $recoveryService, $generalHolidays, $siteHolidays, $daysInMonth, $existingPayrolls, $month, $year, $overtimeHoursMap, $overtimeRates) {
+            $result = $employees->getCollection()->map(function ($employee) use ($attendanceCounts, $leaveSummary, $recoveryService, $holidayDays, $daysInMonth, $existingPayrolls, $month, $year, $overtimeHoursMap, $overtimeRates) {
                 $att = $attendanceCounts->get($employee->id);
                 $empLeave = $leaveSummary[$employee->id] ?? ['paid' => 0, 'unpaid' => 0];
 
-                $holidays = $generalHolidays + ($siteHolidays[$employee->site_id] ?? 0);
+                $holidays = $holidayDays[$employee->id] ?? 0;
                 $activePayroll = $employee->activePayroll;
                 $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
 
@@ -348,7 +341,17 @@ class PayrollController extends Controller
                 $year
             );
 
-            DB::transaction(function () use ($employees, $month, $year, $daysInMonth, $monthStart, $monthEnd, &$generated, $overtimeHoursMap, $overtimeRates, $leaveSummary) {
+            // Same rule as the listing: distinct holiday dates per employee,
+            // netted against the days attendance and paid leave already cover.
+            // Resolved up front rather than inside the loop so generating a
+            // full month stays four queries, not four per employee.
+            $holidayDays = \App\Services\HolidayService::monthlyHolidayDays(
+                $employees->pluck('id')->all(),
+                $month,
+                $year
+            );
+
+            DB::transaction(function () use ($employees, $month, $year, $daysInMonth, $monthStart, $monthEnd, &$generated, $overtimeHoursMap, $overtimeRates, $leaveSummary, $holidayDays) {
                 foreach ($employees as $employee) {
 
                     // ── Attendance summary ──
@@ -374,11 +377,8 @@ class PayrollController extends Controller
                     $unpaidLeaveDays = $empLeave['unpaid'];
 
                     // ── Holidays for this employee's site ──
-                    $holidays = Holiday::whereMonth('holiday_date', $month)->whereYear('holiday_date', $year)
-                        ->where('is_active', true)
-                        ->where(function ($q) use ($employee) {
-                            $q->whereNull('site_id')->orWhere('site_id', $employee->site_id);
-                        })->count();
+                    // Distinct dates, netted against days already paid for.
+                    $holidays = $holidayDays[$employee->id] ?? 0;
 
                     // ── Earnings ──
                     $activePayroll = $employee->activePayroll;
@@ -545,14 +545,8 @@ class PayrollController extends Controller
             $unpaidLeaveDays = $empLeave['unpaid'];
 
             // ── Holidays ──
-            $holidays = Holiday::whereMonth('holiday_date', $month)
-                ->whereYear('holiday_date', $year)
-                ->where('is_active', true)
-                ->where(function ($q) use ($employee) {
-                    $q->whereNull('site_id')
-                        ->orWhere('site_id', $employee->site_id);
-                })
-                ->count();
+            // Distinct dates, netted against days already paid for.
+            $holidays = \App\Services\HolidayService::employeeHolidayDays($employee->id, $month, $year);
 
             // ── Salary calculation ──
             $presentDays = $attendance ? (int) $attendance->present_days : 0;

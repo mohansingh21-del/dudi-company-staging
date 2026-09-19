@@ -6,7 +6,6 @@ use App\Models\AttendanceProcessed;
 use App\Models\Employee;
 use App\Models\EmployeePayroll;
 use App\Models\EmployeeWage;
-use App\Models\Holiday;
 use App\Models\Leave;
 use App\Models\WageRegisterReport;
 use App\Models\WageRegisterReportRow;
@@ -91,7 +90,7 @@ class WageRegisterService
         // figure depends on a gross that is only known inside the loop.
         $recoveryService = app(LoanRecoveryService::class);
 
-        $holidays = $this->holidayCounts($month, $year);
+        $holidays = $this->holidayCounts($ids, $month, $year);
         $overtime = $this->overtimeSummary($ids, $month, $year);
 
         // The rate revision in force at month end prices the whole month.
@@ -109,7 +108,7 @@ class WageRegisterService
             $halfDays = $att ? (int) $att->half_days : 0;
             $restDays = $att ? (int) $att->rest_days : 0;
 
-            $siteHolidays = ($holidays['general'] ?? 0) + ($holidays['sites'][$employee->site_id] ?? 0);
+            $siteHolidays = $holidays[$employee->id] ?? 0;
             $paidLeaveDays = $leave['paid'] + min($restDays, $restDayCap);
 
             // Unmarked days count as absent, matching PayrollController.
@@ -471,22 +470,18 @@ class WageRegisterService
     }
 
     /**
-     * Holidays split into establishment-wide and per site, so each employee is
-     * credited only with the ones that apply to them.
+     * Paid holiday days per employee.
+     *
+     * Was an establishment-wide count plus a per-site count, added together.
+     * That paid a day per holiday ROW, so a date carrying both a general and a
+     * site row - or plain duplicates, which the table allowed for most of its
+     * life - was paid twice. HolidayService counts distinct dates and nets
+     * them against the days attendance and paid leave already cover.
+     *
+     * @return array  [employee_id => int]
      */
-    protected function holidayCounts(int $month, int $year): array
+    protected function holidayCounts(array $employeeIds, int $month, int $year): array
     {
-        $holidays = Holiday::whereMonth('holiday_date', $month)
-            ->whereYear('holiday_date', $year)
-            ->where('is_active', true)
-            ->get();
-
-        return [
-            'general' => $holidays->whereNull('site_id')->count(),
-            'sites' => $holidays->whereNotNull('site_id')
-                ->groupBy('site_id')
-                ->map->count()
-                ->all(),
-        ];
+        return HolidayService::monthlyHolidayDays($employeeIds, $month, $year);
     }
 }

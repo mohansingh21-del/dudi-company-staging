@@ -584,11 +584,19 @@ class ShiftChangeController extends Controller
             $endOfMonth = Carbon::create($yearInput, $monthInput, 1)->endOfMonth();
             $daysInMonth = $startOfMonth->daysInMonth;
 
-            // Fetch Holidays for the site of the employee in this month
-            $holidays = \App\Models\Holiday::where('site_id', $employee->site_id)
-                ->where('is_active', 1)
+            // Fetch Holidays that apply to this employee in this month: the
+            // site's own, plus the establishment-wide ones (site_id NULL),
+            // which this roster was silently skipping. Keyed by date, so a
+            // date carrying more than one row still paints a single day - the
+            // site row wins the label over the general one.
+            $holidays = \App\Models\Holiday::where('is_active', 1)
+                ->where(function ($q) use ($employee) {
+                    $q->whereNull('site_id')
+                        ->orWhere('site_id', $employee->site_id);
+                })
                 ->whereYear('holiday_date', $yearInput)
                 ->whereMonth('holiday_date', $monthInput)
+                ->orderByRaw('site_id IS NULL DESC')
                 ->get()
                 ->keyBy(fn($h) => Carbon::parse($h->holiday_date)->toDateString());
 
