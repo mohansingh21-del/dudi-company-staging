@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Http\Concerns\GuardsMasterDeactivation;
 use Illuminate\Http\Request;
 use App\Models\Relay;
 use App\Http\Requests\StoreRelayRequest;
@@ -12,7 +11,6 @@ use App\Http\Resources\RelayResource;
 
 class RelayController extends Controller
 {
-    use GuardsMasterDeactivation;
 
     public function index(Request $request)
     {
@@ -177,10 +175,6 @@ class RelayController extends Controller
                 'status' => 404,
                 'message' => 'Relay not found'
             ], 404);
-        }
-
-        if ($blocked = $this->blockDeactivation($relay, !$relay->is_active)) {
-            return $blocked;
         }
 
         // Auto toggle status (true -> false, false -> true)

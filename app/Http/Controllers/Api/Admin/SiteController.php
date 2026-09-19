@@ -9,6 +9,7 @@ use App\Models\Site;
 use App\Http\Requests\StoreSiteRequest;
 use App\Http\Requests\UpdateSiteRequest;
 use App\Http\Resources\SiteResource;
+use Illuminate\Support\Facades\Log;
 
 class SiteController extends Controller
 {
@@ -61,17 +62,27 @@ class SiteController extends Controller
 
     public function store(StoreSiteRequest $request)
     {
-        $dept = Site::create([
-            'site_name' => $request->name,
-            'address' => $request->address,
-            'status' => 1
-        ]);
+        try {
 
-        return response()->json([
-            'status' => 200,
-            'message' => 'Site created'
-            // 'data' => new DepartmentResource($dept)
-        ]);
+            Site::create([
+                'site_name' => $request->name,
+                'address' => $request->address,
+                'is_active' => 1
+            ]);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Site created'
+            ]);
+        } catch (\Throwable $th) {
+
+            Log::error('Site create failed', ['error' => $th->getMessage()]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Unable to create site. Please try again.'
+            ], 500);
+        }
     }
 
     public function show(int $id)
@@ -101,15 +112,26 @@ class SiteController extends Controller
             ]);
         }
 
-        $dept->update([
-            'site_name' => $request->name,
-            'address' => $request->address
-        ]);
+        try {
 
-        return response()->json([
-            'status' => 200,
-            'message' => 'Site updated successfully'
-        ]);
+            $dept->update([
+                'site_name' => $request->name,
+                'address' => $request->address
+            ]);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Site updated successfully'
+            ]);
+        } catch (\Throwable $th) {
+
+            Log::error('Site update failed', ['id' => $id, 'error' => $th->getMessage()]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Unable to update site. Please try again.'
+            ], 500);
+        }
     }
 
     public function destroy(int $id)
@@ -119,7 +141,7 @@ class SiteController extends Controller
         if (!$dept) {
             return response()->json([
                 'status' => 404,
-                'message' => 'Department not found'
+                'message' => 'Site not found'
             ]);
         }
 
@@ -127,7 +149,7 @@ class SiteController extends Controller
 
         return response()->json([
             'status' => 200,
-            'message' => 'Department deleted successfully'
+            'message' => 'Site deleted successfully'
         ]);
     }
     public function toggleStatus(Request $request, int $id)

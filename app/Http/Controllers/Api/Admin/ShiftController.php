@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Http\Concerns\GuardsMasterDeactivation;
 use Illuminate\Http\Request;
 use App\Models\Shift;
 use App\Http\Requests\StoreShiftRequest;
@@ -15,7 +14,6 @@ use App\Models\ShiftEquipmentAllocation;
 
 class ShiftController extends Controller
 {
-    use GuardsMasterDeactivation;
 
     public function index(Request $request)
     {
@@ -167,10 +165,6 @@ class ShiftController extends Controller
             'status' => 'required|in:0,1'
         ]);
 
-
-        if ($blocked = $this->blockDeactivation($dept, $request->status)) {
-            return $blocked;
-        }
 
         $dept->is_active = $request->status ? 1 : 0;
         $dept->save();

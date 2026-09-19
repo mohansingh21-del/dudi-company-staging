@@ -16,14 +16,17 @@ class UpdateSiteRequest extends FormRequest
 
     public function rules(): array
     {
-        $departmentId = $this->route('site');
+        $siteId = $this->route('site');
 
         return [
 
             'name' => [
                 'required',
-                Rule::unique('sites', 'site_name')->ignore($departmentId)
-            ]
+                'string',
+                'max:255',
+                Rule::unique('sites', 'site_name')->ignore($siteId)
+            ],
+            'address' => 'nullable|string|max:65535',
         ];
     }
 
@@ -32,6 +35,10 @@ class UpdateSiteRequest extends FormRequest
         return [
             'name.unique' => 'Site name already exists.',
             'name.required' => 'Site name is required.',
+            'name.string' => 'Site name must be a valid text value.',
+            'name.max' => 'Site name may not be greater than 255 characters.',
+            'address.string' => 'Address must be a valid text value.',
+            'address.max' => 'Address is too long.',
         ];
     }
 

@@ -103,7 +103,7 @@ class DesignationController extends Controller
 
         return response()->json([
             'status' => 200,
-            'message' => 'Role status updated successfully'
+            'message' => 'Designation status updated successfully'
         ]);
     }
 

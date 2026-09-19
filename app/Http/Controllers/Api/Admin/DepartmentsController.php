@@ -9,6 +9,7 @@ use App\Models\Department;
 use App\Http\Requests\StoreDepartmentRequest;
 use App\Http\Requests\UpdateDepartmentRequest;
 use App\Http\Resources\DepartmentResource;
+use Illuminate\Support\Facades\Log;
 
 class DepartmentsController extends Controller
 {
@@ -60,17 +61,26 @@ class DepartmentsController extends Controller
 
     public function store(StoreDepartmentRequest $request)
     {
-        $dept = Department::create([
-            'code' => $request->code,
-            'name' => $request->name,
-            'status' => 1
-        ]);
+        try {
 
-        return response()->json([
-            'status' => 200,
-            'message' => 'Department created'
-            // 'data' => new DepartmentResource($dept)
-        ]);
+            Department::create([
+                'name' => $request->name,
+                'is_active' => 1
+            ]);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Department created'
+            ]);
+        } catch (\Throwable $th) {
+
+            Log::error('Department create failed', ['error' => $th->getMessage()]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Unable to create department. Please try again.'
+            ], 500);
+        }
     }
 
     public function show(int $id)
@@ -100,15 +110,25 @@ class DepartmentsController extends Controller
             ]);
         }
 
-        $dept->update([
-            'code' => $request->code,
-            'name' => $request->name
-        ]);
+        try {
 
-        return response()->json([
-            'status' => 200,
-            'message' => 'Department updated successfully'
-        ]);
+            $dept->update([
+                'name' => $request->name
+            ]);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Department updated successfully'
+            ]);
+        } catch (\Throwable $th) {
+
+            Log::error('Department update failed', ['id' => $id, 'error' => $th->getMessage()]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Unable to update department. Please try again.'
+            ], 500);
+        }
     }
 
     public function destroy(int $id)

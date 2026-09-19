@@ -11,8 +11,6 @@ use App\Models\Department;
 use App\Models\DispatchTrip;
 use App\Models\Employee;
 use App\Models\EmployeeProductAssignment;
-use App\Models\EmployeeShiftAssignment;
-use App\Models\EmployeeShiftOverride;
 use App\Models\FuelEntry;
 use App\Models\Holiday;
 use App\Models\Incident;
@@ -21,14 +19,10 @@ use App\Models\Inventory;
 use App\Models\Leave;
 use App\Models\LeaveType;
 use App\Models\Product;
-use App\Models\Relay;
-use App\Models\RelayShiftMapping;
 use App\Models\Role;
 use App\Models\ServiceRecord;
 use App\Models\ServiceSparePart;
-use App\Models\Shift;
 use App\Models\ShiftPlan;
-use App\Models\ShiftWorkforceDeployment;
 use App\Models\Site;
 use App\Models\SitePoint;
 use App\Models\Store;
@@ -172,25 +166,12 @@ class MasterUsageGuard
                     ->whereHas('employee', fn($q) => $q->where('is_active', 1))->count(),
             ],
 
-            Shift::class => [
-                'shift assignment(s) for active employees' => fn($id) => EmployeeShiftAssignment::where('shift_id', $id)
-                    ->whereHas('employee', fn($q) => $q->where('is_active', 1))->count(),
-                'shift override(s) for active employees' => fn($id) => EmployeeShiftOverride::where('shift_id', $id)
-                    ->whereHas('employee', fn($q) => $q->where('is_active', 1))->count(),
-                'relay mapping(s)' => fn($id) => RelayShiftMapping::where('shift_id', $id)->count(),
-                'open shift plan(s)' => fn($id) => ShiftPlan::where('shift_id', $id)->notClosed()->count(),
-                'open breakdown ticket(s)' => fn($id) => BreakdownTicket::where('shift_id', $id)->where('status', '!=', 'closed')->count(),
-                'incident(s) under review' => fn($id) => Incident::where('shift_id', $id)->where('status', 'Under Review')->count(),
-                'active fuel entr(y/ies)' => fn($id) => FuelEntry::where('shift_id', $id)->where('status', 'active')->count(),
-                'dispatch trip(s)' => fn($id) => DispatchTrip::where('shift_id', $id)->count(),
-            ],
-
-            Relay::class => [
-                'active employee(s)' => fn($id) => Employee::where('relay_id', $id)->where('is_active', 1)->count(),
-                'shift mapping(s)' => fn($id) => RelayShiftMapping::where('relay_id', $id)->count(),
-                'active workforce deployment(s)' => fn($id) => ShiftWorkforceDeployment::where('status', 'active')
-                    ->where(fn($q) => $q->where('relay_id', $id)->orWhere('home_relay_id', $id))->count(),
-            ],
+            // Shifts and relays are deliberately unguarded: the client wants both
+            // switchable at any time. Their only real blocker was the weekly
+            // relay_shift_mappings rota, which each of them held the other
+            // hostage with, and the rest of their usage (shift plans, tickets,
+            // trips) is reporting history. If a screen ever reopens holding a
+            // retired shift or relay, its picker shows blank, not a wrong value.
 
             LeaveType::class => [
                 'pending or approved leave(s)' => fn($id) => Leave::where('leave_type_id', $id)

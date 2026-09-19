@@ -16,7 +16,17 @@ class StoreDepartmentRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => 'required|unique:departments,name'
+            'name' => 'required|string|max:255|unique:departments,name'
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'name.required' => 'Department name is required.',
+            'name.string'   => 'Department name must be a valid text value.',
+            'name.max'      => 'Department name may not be greater than 255 characters.',
+            'name.unique'   => 'Department name already exists.',
         ];
     }
 

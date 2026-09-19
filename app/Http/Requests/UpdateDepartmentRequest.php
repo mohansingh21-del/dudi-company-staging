@@ -22,6 +22,8 @@ class UpdateDepartmentRequest extends FormRequest
 
             'name' => [
                 'required',
+                'string',
+                'max:255',
                 Rule::unique('departments', 'name')->ignore($departmentId)
             ]
         ];
@@ -32,6 +34,8 @@ class UpdateDepartmentRequest extends FormRequest
         return [
             'name.unique' => 'Department name already exists.',
             'name.required' => 'Department name is required.',
+            'name.string' => 'Department name must be a valid text value.',
+            'name.max' => 'Department name may not be greater than 255 characters.',
         ];
     }
 
