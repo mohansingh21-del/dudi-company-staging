@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use Illuminate\Http\Request;
 use App\Models\Product;
 use App\Http\Requests\StoreProductRequest;
@@ -11,6 +12,8 @@ use App\Http\Resources\ProductResource;
 
 class ProductController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function index(Request $request)
     {
         try {
@@ -199,6 +202,10 @@ class ProductController extends Controller
                     'status' => 404,
                     'message' => 'Product not found'
                 ], 404);
+            }
+
+            if ($blocked = $this->blockDeactivation($product, !$product->is_active)) {
+                return $blocked;
             }
 
             $product->is_active = $product->is_active ? 0 : 1;

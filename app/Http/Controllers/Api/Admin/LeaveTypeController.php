@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use App\Http\Requests\UpdateLeaveTypeRequest;
 use App\Http\Resources\LeaveTypeResource;
 use App\Models\LeaveType;
@@ -17,6 +18,8 @@ use Illuminate\Http\Request;
  */
 class LeaveTypeController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function index(Request $request)
     {
         try {
@@ -169,6 +172,11 @@ class LeaveTypeController extends Controller
         $request->validate([
             'status' => 'required|in:0,1'
         ]);
+
+
+        if ($blocked = $this->blockDeactivation($leaveType, $request->status)) {
+            return $blocked;
+        }
 
         $leaveType->is_active = $request->status ? 1 : 0;
         $leaveType->save();

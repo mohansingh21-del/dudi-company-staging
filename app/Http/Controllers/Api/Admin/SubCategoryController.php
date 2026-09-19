@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use Illuminate\Http\Request;
 use App\Models\SubCategory;
 use App\Http\Requests\StoreSubCategoryRequest;
@@ -11,6 +12,8 @@ use App\Http\Resources\SubCategoryResource;
 
 class SubCategoryController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function index(Request $request)
     {
         try {
@@ -185,6 +188,10 @@ class SubCategoryController extends Controller
                     'status' => 404,
                     'message' => 'Subcategory not found'
                 ], 404);
+            }
+
+            if ($blocked = $this->blockDeactivation($subCategory, !$subCategory->is_active)) {
+                return $blocked;
             }
 
             $subCategory->is_active = $subCategory->is_active ? 0 : 1;

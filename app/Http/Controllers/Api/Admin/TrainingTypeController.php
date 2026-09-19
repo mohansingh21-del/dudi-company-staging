@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use Illuminate\Http\Request;
 use App\Models\TrainingType;
 use App\Http\Requests\StoreTrainingTypeRequest;
@@ -11,6 +12,8 @@ use App\Http\Resources\TrainingTypeResource;
 
 class TrainingTypeController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     /**
      * Active types only, unpaginated — the Schedule Training "Training Type"
      * dropdown.
@@ -163,6 +166,11 @@ class TrainingTypeController extends Controller
         $request->validate([
             'status' => 'required|in:0,1'
         ]);
+
+
+        if ($blocked = $this->blockDeactivation($dept, $request->status)) {
+            return $blocked;
+        }
 
         $dept->is_active = $request->status ? 1 : 0;
         $dept->save();

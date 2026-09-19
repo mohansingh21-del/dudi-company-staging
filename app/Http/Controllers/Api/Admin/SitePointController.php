@@ -3,15 +3,19 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use App\Http\Requests\StoreSitePointRequest;
 use App\Http\Requests\UpdateSitePointRequest;
 use App\Http\Resources\SitePointResource;
+use App\Models\SitePoint;
 use App\Services\SitePointService;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 
 class SitePointController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     /**
      * @var SitePointService
      */
@@ -167,6 +171,14 @@ class SitePointController extends Controller
     public function toggleStatus($id)
     {
         try {
+            // The service flips the flag, so the guard has to see the row
+            // before it does — the new status is the flip of the current one.
+            $point = SitePoint::findOrFail($id);
+
+            if ($blocked = $this->blockDeactivation($point, !$point->is_active)) {
+                return $blocked;
+            }
+
             $point = $this->service->toggleStatus($id);
 
             return response()->json([

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use App\Models\BreakdownType;
 use App\Http\Requests\StoreBreakdownTypeRequest;
 use App\Http\Requests\UpdateBreakdownTypeRequest;
@@ -11,6 +12,8 @@ use Illuminate\Http\Request;
 
 class BreakdownTypeController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function publicIndex()
     {
         $types = BreakdownType::where('is_active', 1)
@@ -255,6 +258,10 @@ class BreakdownTypeController extends Controller
             'status' => 'required|in:0,1'
 
         ]);
+
+        if ($blocked = $this->blockDeactivation($breakdownType, $request->status)) {
+            return $blocked;
+        }
 
         $breakdownType->is_active =
             $request->status ? 1 : 0;

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use App\Http\Requests\StoreStoreRequest;
 use App\Http\Requests\UpdateStoreRequest;
 use App\Http\Resources\StoreResource;
@@ -18,6 +19,8 @@ use Illuminate\Http\Request;
  */
 class StoreController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     /**
      * Active stores for dropdowns.
      */
@@ -226,6 +229,10 @@ class StoreController extends Controller
         $request->validate([
             'status' => 'required|in:0,1'
         ]);
+
+        if ($blocked = $this->blockDeactivation($store, $request->status)) {
+            return $blocked;
+        }
 
         try {
             $store->is_active = $request->status ? 1 : 0;

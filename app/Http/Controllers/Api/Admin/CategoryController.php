@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use Illuminate\Http\Request;
 use App\Models\Category;
 use App\Http\Requests\StoreCategoryRequest;
@@ -11,6 +12,8 @@ use App\Http\Resources\CategoryResource;
 
 class CategoryController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function index(Request $request)
     {
         try {
@@ -174,6 +177,10 @@ class CategoryController extends Controller
                     'status' => 404,
                     'message' => 'Category not found'
                 ], 404);
+            }
+
+            if ($blocked = $this->blockDeactivation($category, !$category->is_active)) {
+                return $blocked;
             }
 
             $category->is_active = $category->is_active ? 0 : 1;

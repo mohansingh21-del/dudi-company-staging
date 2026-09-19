@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use App\Models\DelayCategory;
 use App\Http\Requests\StoreDelayCategoryRequest;
 use App\Http\Requests\UpdateDelayCategoryRequest;
@@ -11,6 +12,8 @@ use Illuminate\Http\Request;
 
 class DelayCategoryController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function publicIndex()
     {
         $categories = DelayCategory::where('is_active', 1)
@@ -151,6 +154,11 @@ class DelayCategoryController extends Controller
         $request->validate([
             'status' => 'required|in:0,1'
         ]);
+
+
+        if ($blocked = $this->blockDeactivation($category, $request->status)) {
+            return $blocked;
+        }
 
         $category->is_active = $request->status ? 1 : 0;
         $category->save();

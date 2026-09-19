@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use Illuminate\Http\Request;
 use App\Models\Department;
 use App\Http\Requests\StoreDepartmentRequest;
@@ -11,6 +12,8 @@ use App\Http\Resources\DepartmentResource;
 
 class DepartmentsController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function index(Request $request)
     {
         try {
@@ -139,6 +142,11 @@ class DepartmentsController extends Controller
         $request->validate([
             'status' => 'required|in:0,1'
         ]);
+
+
+        if ($blocked = $this->blockDeactivation($dept, $request->status)) {
+            return $blocked;
+        }
 
         $dept->is_active = $request->status ? 1 : 0;
         $dept->save();

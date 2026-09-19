@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use App\Models\IncidentType;
 use App\Http\Requests\StoreIncidentTypeRequest;
 use App\Http\Requests\UpdateIncidentTypeRequest;
@@ -12,6 +13,8 @@ use Illuminate\Http\Request;
 
 class IncidentTypeController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function publicIndex()
     {
         $types = IncidentType::where('is_active', 1)
@@ -271,6 +274,10 @@ class IncidentTypeController extends Controller
         ]);
 
 
+
+        if ($blocked = $this->blockDeactivation($equipmentName, $request->status)) {
+            return $blocked;
+        }
 
         $equipmentName->is_active =
             $request->status ? 1 : 0;

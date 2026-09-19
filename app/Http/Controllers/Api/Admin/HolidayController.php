@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Concerns\GuardsMasterDeactivation;
 use Illuminate\Http\Request;
 use App\Models\Holiday;
 use App\Http\Requests\StoreHolidayRequest;
@@ -11,6 +12,8 @@ use App\Http\Resources\HolidayResource;
 
 class HolidayController extends Controller
 {
+    use GuardsMasterDeactivation;
+
     public function index(Request $request)
     {
 
@@ -175,6 +178,10 @@ class HolidayController extends Controller
                     'message' => 'A holiday already exists for this site on this date.',
                 ], 422);
             }
+        }
+
+        if ($blocked = $this->blockDeactivation($dept, $request->status)) {
+            return $blocked;
         }
 
         $dept->is_active = $request->status ? 1 : 0;
