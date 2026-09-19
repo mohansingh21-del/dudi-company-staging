@@ -11,6 +11,8 @@ use App\Http\Resources\ShiftResource;
 use App\Models\ShiftPlan;
 use App\Http\Resources\ShiftPlanResource;
 use App\Models\ShiftEquipmentAllocation;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\Log;
 
 class ShiftController extends Controller
 {
@@ -69,20 +71,29 @@ class ShiftController extends Controller
             ], 422);
         }
 
-        $dept = Shift::create([
-            'shift_name' => $request->name,
-            'start_time' => $request->start_time,
-            'end_time' => $request->end_time,
-            'minimum_working_hours' => $request->minimum_working_hours,
-            'is_night_shift' => $request->is_night_shift,
-            'status' => 1
-        ]);
+        try {
 
-        return response()->json([
-            'status' => 200,
-            'message' => 'Shift created'
-            // 'data' => new DepartmentResource($dept)
-        ]);
+            Shift::create([
+                'shift_name' => $request->name,
+                'start_time' => $request->start_time,
+                'end_time' => $request->end_time,
+                'minimum_working_hours' => $request->minimum_working_hours,
+                'is_night_shift' => $request->is_night_shift
+            ]);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Shift created'
+            ]);
+        } catch (\Throwable $th) {
+
+            Log::error('Shift create failed', ['error' => $th->getMessage()]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Unable to create shift. Please try again.'
+            ], 500);
+        }
     }
 
     public function show(int $id)
@@ -108,7 +119,7 @@ class ShiftController extends Controller
         if (!$dept) {
             return response()->json([
                 'status' => 404,
-                'message' => 'Site not found'
+                'message' => 'Shift not found'
             ]);
         }
 
@@ -119,18 +130,29 @@ class ShiftController extends Controller
             ], 422);
         }
 
-        $dept->update([
-            'shift_name' => $request->name,
-            'start_time' => $request->start_time,
-            'end_time' => $request->end_time,
-            'minimum_working_hours' => $request->minimum_working_hours,
-            'is_night_shift' => $request->is_night_shift
-        ]);
+        try {
 
-        return response()->json([
-            'status' => 200,
-            'message' => 'Shift updated successfully'
-        ]);
+            $dept->update([
+                'shift_name' => $request->name,
+                'start_time' => $request->start_time,
+                'end_time' => $request->end_time,
+                'minimum_working_hours' => $request->minimum_working_hours,
+                'is_night_shift' => $request->is_night_shift
+            ]);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Shift updated successfully'
+            ]);
+        } catch (\Throwable $th) {
+
+            Log::error('Shift update failed', ['id' => $id, 'error' => $th->getMessage()]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Unable to update shift. Please try again.'
+            ], 500);
+        }
     }
 
     public function destroy(int $id)
@@ -140,16 +162,35 @@ class ShiftController extends Controller
         if (!$dept) {
             return response()->json([
                 'status' => 404,
-                'message' => 'Department not found'
+                'message' => 'Shift not found'
             ]);
         }
 
-        $dept->delete();
+        try {
 
-        return response()->json([
-            'status' => 200,
-            'message' => 'Department deleted successfully'
-        ]);
+            $dept->delete();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Shift deleted successfully'
+            ]);
+        } catch (QueryException $e) {
+
+            // shift_plans.shift_id is ON DELETE RESTRICT
+            if ($e->getCode() === '23000') {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'This shift is in use and cannot be deleted.'
+                ], 422);
+            }
+
+            Log::error('Shift delete failed', ['id' => $id, 'error' => $e->getMessage()]);
+
+            return response()->json([
+                'status' => 500,
+                'message' => 'Unable to delete shift. Please try again.'
+            ], 500);
+        }
     }
     public function toggleStatus(Request $request, int $id)
     {
@@ -165,8 +206,22 @@ class ShiftController extends Controller
             'status' => 'required|in:0,1'
         ]);
 
+        $activate = $request->status ? 1 : 0;
 
-        $dept->is_active = $request->status ? 1 : 0;
+        // Re-activating must not resurrect a timing clash: another shift may have
+        // been created on the same slot while this one was inactive.
+        if ($activate && !$dept->is_active) {
+            $conflict = $this->findOverlappingShift($dept->start_time, $dept->end_time, $dept->id);
+
+            if ($conflict) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Shift timings overlap with an existing active shift: ' . $conflict->shift_name . ' (' . $conflict->start_time . ' - ' . $conflict->end_time . '). Deactivate that shift first.'
+                ], 422);
+            }
+        }
+
+        $dept->is_active = $activate;
         $dept->save();
 
 
@@ -565,6 +620,11 @@ class ShiftController extends Controller
 
     private function isShiftOverlapping($startTime, $endTime, $excludeId = null)
     {
+        return $this->findOverlappingShift($startTime, $endTime, $excludeId) !== null;
+    }
+
+    private function findOverlappingShift($startTime, $endTime, $excludeId = null)
+    {
         $newStart = \Carbon\Carbon::parse($startTime)->format('H:i:s');
         $newEnd = \Carbon\Carbon::parse($endTime)->format('H:i:s');
 
@@ -605,12 +665,12 @@ class ShiftController extends Controller
                     $minEnd = min($newInt['end'], $existInt['end']);
 
                     if ($maxStart < $minEnd) {
-                        return true;
+                        return $existingShift;
                     }
                 }
             }
         }
 
-        return false;
+        return null;
     }
 }

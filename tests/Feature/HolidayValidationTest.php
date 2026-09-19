@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Holiday;
+use Carbon\Carbon;
 use App\Models\Role;
 use App\Models\Site;
 use App\Models\User;
@@ -15,6 +16,15 @@ class HolidayValidationTest extends TestCase
     use RefreshDatabase;
 
     protected $site;
+
+    /**
+     * Holidays can only be declared for days still to come, so the fixtures
+     * have to move with the clock - a hard-coded date would start failing the
+     * past-date rule the day it went by.
+     */
+    protected $futureDate;
+
+    protected $pastDate;
 
     protected function setUp(): void
     {
@@ -36,13 +46,16 @@ class HolidayValidationTest extends TestCase
         Sanctum::actingAs($admin);
 
         $this->site = Site::create(['site_name' => 'Alpha', 'is_active' => true]);
+
+        $this->futureDate = Carbon::today()->addMonth()->format('Y-m-d');
+        $this->pastDate = Carbon::today()->subMonth()->format('Y-m-d');
     }
 
     private function payload(array $overrides = []): array
     {
         return array_merge([
             'holiday_name' => 'Independence Day',
-            'holiday_date' => '2026-08-15',
+            'holiday_date' => $this->futureDate,
             'holiday_type' => 'national',
             'site_id' => $this->site->id,
         ], $overrides);
@@ -63,7 +76,7 @@ class HolidayValidationTest extends TestCase
     {
         $this->postJson('/api/v1/admin/holiday', $this->payload())->assertStatus(200);
 
-        $this->postJson('/api/v1/admin/holiday', $this->payload(['holiday_date' => '15-08-2026']))
+        $this->postJson('/api/v1/admin/holiday', $this->payload(['holiday_date' => Carbon::parse($this->futureDate)->format('d-m-Y')]))
             ->assertStatus(422)
             ->assertJsonPath('errors.holiday_date.0', 'A holiday already exists for this site on this date.');
     }
@@ -132,7 +145,7 @@ class HolidayValidationTest extends TestCase
     public function test_update_onto_another_rows_date_is_rejected()
     {
         Holiday::create($this->payload());
-        $second = Holiday::create($this->payload(['holiday_name' => 'Local Festival', 'holiday_date' => '2026-08-20']));
+        $second = Holiday::create($this->payload(['holiday_name' => 'Local Festival', 'holiday_date' => Carbon::parse($this->futureDate)->addDays(5)->format('Y-m-d')]));
 
         $this->putJson("/api/v1/admin/holiday/{$second->id}", $this->payload(['holiday_name' => 'Local Festival']))
             ->assertStatus(422)
@@ -150,5 +163,52 @@ class HolidayValidationTest extends TestCase
 
         $this->assertSame(0, (int) $archived->fresh()->is_active);
         $this->assertSame(1, (int) $live->fresh()->is_active);
+    }
+
+    public function test_a_holiday_cannot_be_created_in_the_past()
+    {
+        $this->postJson('/api/v1/admin/holiday', $this->payload(['holiday_date' => $this->pastDate]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.holiday_date.0', 'Holiday date cannot be in the past.');
+
+        $this->assertSame(0, Holiday::count());
+    }
+
+    public function test_a_holiday_can_be_created_for_today()
+    {
+        $this->postJson('/api/v1/admin/holiday', $this->payload(['holiday_date' => Carbon::today()->format('Y-m-d')]))
+            ->assertStatus(200);
+    }
+
+    public function test_a_past_date_is_rejected_when_it_arrives_in_another_format()
+    {
+        $this->postJson('/api/v1/admin/holiday', $this->payload([
+            'holiday_date' => Carbon::parse($this->pastDate)->format('d-m-Y'),
+        ]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.holiday_date.0', 'Holiday date cannot be in the past.');
+    }
+
+    public function test_an_existing_holiday_cannot_be_moved_into_the_past()
+    {
+        $holiday = Holiday::create($this->payload());
+
+        $this->putJson("/api/v1/admin/holiday/{$holiday->id}", $this->payload(['holiday_date' => $this->pastDate]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.holiday_date.0', 'Holiday date cannot be in the past.');
+
+        $this->assertSame($this->futureDate, $holiday->fresh()->holiday_date->format('Y-m-d'));
+    }
+
+    public function test_a_past_holiday_can_still_be_renamed_on_its_own_date()
+    {
+        $holiday = Holiday::create($this->payload(['holiday_date' => $this->pastDate]));
+
+        $this->putJson("/api/v1/admin/holiday/{$holiday->id}", $this->payload([
+            'holiday_name' => 'Corrected name',
+            'holiday_date' => $this->pastDate,
+        ]))->assertStatus(200);
+
+        $this->assertSame('Corrected name', $holiday->fresh()->holiday_name);
     }
 }

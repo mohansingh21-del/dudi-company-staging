@@ -55,6 +55,18 @@ trait ValidatesHolidayUniqueness
     }
 
     /**
+     * The date already stored on the row being edited, or null on create.
+     *
+     * Overridden by the update request. It is what lets a holiday that has
+     * already passed keep its date while its name or type is corrected -
+     * without it, every edit of a historical row would be rejected.
+     */
+    protected function existingHolidayDate(): ?string
+    {
+        return null;
+    }
+
+    /**
      * @param  int|null  $ignoreId  the row being updated, excluded from the
      *                              duplicate check so saving it unchanged is
      *                              not reported as a clash with itself
@@ -91,11 +103,7 @@ trait ValidatesHolidayUniqueness
                 // length check on punctuation alone.
                 'regex:/\pL/u',
             ],
-            'holiday_date' => [
-                'required',
-                'date',
-                $unique,
-            ],
+            'holiday_date' => $this->holidayDateRules($unique),
             'site_id' => [
                 'nullable',
                 'integer',
@@ -109,12 +117,39 @@ trait ValidatesHolidayUniqueness
         ];
     }
 
+    /**
+     * A holiday is an instruction for days still to be worked, so it cannot be
+     * declared after the fact: attendance for a past date has already been
+     * marked and, once the month is closed, paid on the rules that applied
+     * then. Back-dating one silently changes what those days were worth.
+     *
+     * The rule is skipped when the submitted date is the one already on the
+     * row, so an existing past holiday can still be renamed or re-typed - only
+     * moving a date, or creating one, has to land today or later.
+     */
+    protected function holidayDateRules($unique): array
+    {
+        $rules = ['required', 'date'];
+
+        $existing = $this->existingHolidayDate();
+        $submitted = $this->input('holiday_date');
+
+        if ($existing === null || $submitted !== $existing) {
+            $rules[] = 'after_or_equal:today';
+        }
+
+        $rules[] = $unique;
+
+        return $rules;
+    }
+
     protected function holidayMessages(): array
     {
         return [
             'holiday_date.unique' => 'A holiday already exists for this site on this date.',
             'holiday_date.required' => 'Holiday date is required.',
             'holiday_date.date' => 'Holiday date must be a valid date.',
+            'holiday_date.after_or_equal' => 'Holiday date cannot be in the past.',
             'holiday_name.required' => 'Holiday name is required.',
             'holiday_name.min' => 'Holiday name must be at least ' . Holiday::MIN_NAME_LENGTH . ' characters long.',
             'holiday_name.regex' => 'Holiday name must contain at least one letter.',
