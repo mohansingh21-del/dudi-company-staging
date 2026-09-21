@@ -22,6 +22,7 @@ class StoreRelayRequest extends FormRequest
             'shift_id' => [
                 'nullable',
                 'exists:shifts,id',
+                new \App\Rules\ActiveShift(),
                 function ($attribute, $value, $fail) {
                     if ($value && $this->input('is_rotating', true)) {
                         $holder = \App\Models\RelayShiftMapping::getHolderOfShift(

@@ -44,7 +44,7 @@ class UpdateShiftPlanRequest extends FormRequest
                         ->where('site_id', $siteId);
                 })->ignore($id),
             ],
-            'shift_id' => 'sometimes|required|numeric|exists:shifts,id',
+            'shift_id' => ['sometimes', 'required', 'numeric', 'exists:shifts,id', new \App\Rules\ActiveShift(optional(\App\Models\ShiftPlan::find($id))->shift_id)],
             'site_id' => 'sometimes|required|numeric|exists:sites,id',
             'target_bcm' => 'sometimes|required|numeric|gt:0|max:' . ShiftPlan::MAX_BCM,
             'supervisor_id' => 'sometimes|required|exists:employees,id',

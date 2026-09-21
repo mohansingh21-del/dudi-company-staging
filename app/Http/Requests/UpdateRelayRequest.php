@@ -24,6 +24,7 @@ class UpdateRelayRequest extends FormRequest
             'shift_id' => [
                 'nullable',
                 'exists:shifts,id',
+                new \App\Rules\ActiveShift(optional(\App\Models\Relay::find($relayId))->current_shift_id),
                 function ($attribute, $value, $fail) use ($relayId) {
                     if ($value) {
                         $isRotating = $this->input('is_rotating');

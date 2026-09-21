@@ -78,7 +78,7 @@ class EmployeeShiftAssignmentController extends Controller
             $request->validate([
                 'employee_id' => 'required_without:employee_ids',
                 'employee_ids' => 'required_without:employee_id|array',
-                'shift_id' => 'required|exists:shifts,id',
+                'shift_id' => ['required', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             ]);
 
             $shiftId = $request->shift_id;
@@ -132,6 +132,8 @@ class EmployeeShiftAssignmentController extends Controller
                 'status' => 200,
                 'message' => $message
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->validationFailed($e);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -178,7 +180,7 @@ class EmployeeShiftAssignmentController extends Controller
 
             $request->validate([
                 'employee_id' => 'sometimes|required',
-                'shift_id' => 'sometimes|required|exists:shifts,id',
+                'shift_id' => ['sometimes', 'required', 'exists:shifts,id', new \App\Rules\ActiveShift($assignment->shift_id)],
             ]);
 
             $updateData = [];
@@ -215,6 +217,8 @@ class EmployeeShiftAssignmentController extends Controller
                 'status' => 200,
                 'message' => 'Shift assignment updated successfully'
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->validationFailed($e);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -284,5 +288,17 @@ class EmployeeShiftAssignmentController extends Controller
                 'message' => $th->getMessage()
             ]);
         }
+    }
+
+    /**
+     * Validation errors are caught here instead of by the generic 500 handler.
+     */
+    private function validationFailed(\Illuminate\Validation\ValidationException $e)
+    {
+        return response()->json([
+            'status' => 422,
+            'message' => $e->validator->errors()->first(),
+            'errors' => $e->errors(),
+        ], 422);
     }
 }

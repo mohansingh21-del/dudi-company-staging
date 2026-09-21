@@ -42,7 +42,7 @@ class UpdateDispatchTripRequest extends FormRequest
             'site_id' => 'sometimes|required|exists:sites,id',
             'dumper_equipment_id' => 'sometimes|required|exists:equipment_names,id',
             'shift_plan_id' => 'sometimes|required|exists:shift_plans,id',
-            'shift_id' => 'sometimes|required|exists:shifts,id',
+            'shift_id' => ['sometimes', 'required', 'exists:shifts,id', new \App\Rules\ActiveShift($this->currentShiftId())],
             'trip_reference_no' => 'sometimes|required|string',
             'status' => 'sometimes|required|string',
             'created_by' => 'sometimes|required|exists:users,id',
@@ -292,5 +292,19 @@ class UpdateDispatchTripRequest extends FormRequest
                 'errors'  => $validator->errors()
             ], 422)
         );
+    }
+
+    /**
+     * The shift the record is saved on now, which may stay even if inactive.
+     */
+    private function currentShiftId()
+    {
+        $record = $this->route('id');
+
+        if (!is_object($record)) {
+            $record = \App\Models\DispatchTrip::find($record);
+        }
+
+        return $record ? $record->shift_id : null;
     }
 }

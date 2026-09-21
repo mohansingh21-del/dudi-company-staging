@@ -670,6 +670,17 @@ class ShiftPlanService
             ];
         }
 
+        // Closing or dropping back to draft is always fine; putting a plan live on
+        // a deactivated shift is not.
+        if (in_array($status, ['published', 'in_progress', 'planned', 'active'], true)
+            && $inactiveError = \App\Rules\ActiveShift::check($shiftPlan->shift_id)) {
+            return [
+                'status' => 422,
+                'message' => $inactiveError,
+                'data' => null,
+            ];
+        }
+
         $shiftPlan->update(['status' => $status]);
 
         return [
@@ -773,6 +784,14 @@ class ShiftPlanService
             return [
                 'status' => 404,
                 'message' => 'Shift Plan not found.',
+                'data' => null,
+            ];
+        }
+
+        if ($inactiveError = \App\Rules\ActiveShift::check($shiftPlan->shift_id)) {
+            return [
+                'status' => 422,
+                'message' => $inactiveError,
                 'data' => null,
             ];
         }

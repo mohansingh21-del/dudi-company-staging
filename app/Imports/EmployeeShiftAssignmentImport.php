@@ -82,6 +82,11 @@ class EmployeeShiftAssignmentImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
+            if (!$shift->is_active) {
+                $this->errors[] = "Row {$rowNum}: Shift '{$shiftName}' is inactive and cannot be assigned.";
+                continue;
+            }
+
             // Check if employee already has a shift assignment
             $existingAssignment = EmployeeShiftAssignment::with('shift')->where('employee_id', $employee->id)->first();
             if ($existingAssignment) {

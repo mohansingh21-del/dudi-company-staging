@@ -18,7 +18,7 @@ class StoreFuelEntryRequest extends FormRequest
         return [
             'shift_plan_id' => 'required|integer|exists:shift_plans,id',
             'fuel_log_date' => 'nullable|date',
-            'shift_id' => 'nullable|integer|exists:shifts,id',
+            'shift_id' => ['nullable', 'integer', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             'equipment_allocation_id' => 'nullable|integer|exists:shift_equipment_allocations,id',
             'equipment_id' => 'nullable|integer|exists:equipments,id',
             'equipment_name_id' => 'nullable|integer|exists:equipment_names,id',

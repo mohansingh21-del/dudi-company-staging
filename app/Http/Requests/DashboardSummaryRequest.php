@@ -107,16 +107,19 @@ class DashboardSummaryRequest extends FormRequest
                 $to = $today->toDateString();
                 if (empty($shiftId)) {
                     $currentTime = Carbon::now()->toTimeString();
-                    $activeShift = \App\Models\Shift::where(function ($q) use ($currentTime) {
-                        $q->where('start_time', '<=', $currentTime)
-                          ->where('end_time', '>=', $currentTime);
-                    })->orWhere(function ($q) use ($currentTime) {
-                        $q->whereColumn('start_time', '>', 'end_time')
-                          ->where(function ($sub) use ($currentTime) {
-                              $sub->where('start_time', '<=', $currentTime)
-                                  ->orWhere('end_time', '>=', $currentTime);
-                          });
-                    })->first();
+                    $activeShift = \App\Models\Shift::where('is_active', 1)
+                        ->where(function ($query) use ($currentTime) {
+                            $query->where(function ($q) use ($currentTime) {
+                                $q->where('start_time', '<=', $currentTime)
+                                  ->where('end_time', '>=', $currentTime);
+                            })->orWhere(function ($q) use ($currentTime) {
+                                $q->whereColumn('start_time', '>', 'end_time')
+                                  ->where(function ($sub) use ($currentTime) {
+                                      $sub->where('start_time', '<=', $currentTime)
+                                          ->orWhere('end_time', '>=', $currentTime);
+                                  });
+                            });
+                        })->first();
 
                     if ($activeShift) {
                         $shiftId = $activeShift->id;

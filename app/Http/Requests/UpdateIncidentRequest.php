@@ -95,7 +95,8 @@ class UpdateIncidentRequest extends FormRequest
             ],
             'shift_id' => [
                 'required',
-                'exists:shifts,id'
+                'exists:shifts,id',
+                new \App\Rules\ActiveShift($this->currentShiftId())
             ],
 
             'incident_type_id' => [
@@ -296,5 +297,19 @@ class UpdateIncidentRequest extends FormRequest
                 }
             }
         });
+    }
+
+    /**
+     * The shift the record is saved on now, which may stay even if inactive.
+     */
+    private function currentShiftId()
+    {
+        $record = $this->route('incident') ?: $this->route('id');
+
+        if (!is_object($record)) {
+            $record = \App\Models\Incident::find($record);
+        }
+
+        return $record ? $record->shift_id : null;
     }
 }

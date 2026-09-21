@@ -36,7 +36,7 @@ class StoreShiftPlanRequest extends FormRequest
                         ->where('site_id', $this->site_id);
                 }),
             ],
-            'shift_id' => 'required|exists:shifts,id',
+            'shift_id' => ['required', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             'site_id' => 'required|exists:sites,id',
             'target_bcm' => 'required|numeric|gt:0|max:' . ShiftPlan::MAX_BCM,
             'supervisor_id' => 'required|exists:employees,id',

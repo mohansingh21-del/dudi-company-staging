@@ -161,11 +161,32 @@ class ShiftController extends Controller
             ]);
         }
 
-        $dept->delete();
+        // Deleting cascades into assignments, overrides and relay mappings, so an
+        // in-use shift would silently wipe those employees' rosters.
+        $blocked = $this->blockedByDependencies($dept, 'delete');
+
+        if ($blocked) {
+            return $blocked;
+        }
+
+        try {
+            $dept->delete();
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Shift plans, breakdowns, delays, fuel entries and dispatch trips keep
+            // their shift with ON DELETE RESTRICT, so historical records block this.
+            if (($e->errorInfo[1] ?? null) === 1451) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Cannot delete shift '{$dept->shift_name}' because it is referenced by existing records (shift plans, breakdowns, delays, fuel entries or dispatch trips). Deactivate the shift instead."
+                ], 422);
+            }
+
+            throw $e;
+        }
 
         return response()->json([
             'status' => 200,
-            'message' => 'Department deleted successfully'
+            'message' => 'Shift deleted successfully'
         ]);
     }
     public function toggleStatus(Request $request, int $id)
@@ -184,6 +205,17 @@ class ShiftController extends Controller
         }
 
         $activate = (int) $request->status === 1;
+
+        // Deactivating a shift that people are still rostered on would leave them
+        // pointing at a shift the rest of the app no longer offers, so the admin
+        // has to move them to another shift first.
+        if (!$activate && $dept->is_active) {
+            $blocked = $this->blockedByDependencies($dept, 'deactivate');
+
+            if ($blocked) {
+                return $blocked;
+            }
+        }
 
         // Re-activating a shift re-occupies its time slot, so the slot must be
         // re-validated here: while this shift was inactive another shift may
@@ -600,6 +632,120 @@ class ShiftController extends Controller
                 'data' => []
             ], 500);
         }
+    }
+
+    /**
+     * A 422 response listing what still uses the shift, or null when it is free.
+     */
+    private function blockedByDependencies(Shift $shift, string $action)
+    {
+        $dependencies = $this->getActiveShiftDependencies($shift);
+
+        $labels = [
+            'employees' => 'active employee(s) rostered on it',
+            'relays' => 'relay(s) mapped to it for the current or upcoming weeks',
+            'shift_plans' => 'upcoming or running shift plan(s)',
+            'open_attendance' => 'open attendance record(s) not yet checked out',
+        ];
+
+        $parts = [];
+        foreach ($labels as $key => $label) {
+            if ($dependencies[$key] > 0) {
+                $parts[] = "{$dependencies[$key]} {$label}";
+            }
+        }
+
+        if (empty($parts)) {
+            return null;
+        }
+
+        return response()->json([
+            'status' => 422,
+            'message' => "Cannot {$action} shift '{$shift->shift_name}': it has " . implode(', ', $parts) . '. Reassign them to another shift first.',
+            'dependencies' => $dependencies,
+        ], 422);
+    }
+
+    /**
+     * Count what is still using a shift today or later.
+     */
+    private function getActiveShiftDependencies(Shift $shift): array
+    {
+        $today = \Carbon\Carbon::today();
+        $todayStr = $today->toDateString();
+
+        // Employees rostered on this shift today, resolved with the same
+        // precedence as attendance and payroll (override > relay > assignment).
+        $employees = \App\Models\Employee::with('relay')->where('is_active', 1)->get();
+        $resolver = app(\App\Services\ShiftRosterResolver::class);
+        $ctx = $resolver->preload($employees, $today, $today);
+
+        $employeeIds = $employees
+            ->filter(function ($employee) use ($resolver, $todayStr, $ctx, $shift) {
+                return (int) $resolver->resolve($employee, $todayStr, $ctx) === (int) $shift->id;
+            })
+            ->pluck('id');
+
+        // Plus employees moving onto this shift on a later date.
+        $activeEmployeeIds = $employees->pluck('id');
+
+        $futureOverrideIds = \App\Models\EmployeeShiftOverride::where('shift_id', $shift->id)
+            ->whereIn('employee_id', $activeEmployeeIds)
+            ->whereDate('effective_from', '>', $todayStr)
+            ->pluck('employee_id');
+
+        $futureAssignmentIds = \App\Models\EmployeeShiftAssignment::where('shift_id', $shift->id)
+            ->whereIn('employee_id', $activeEmployeeIds)
+            ->whereDate('from_date', '>', $todayStr)
+            ->pluck('employee_id');
+
+        $employeeCount = $employeeIds
+            ->merge($futureOverrideIds)
+            ->merge($futureAssignmentIds)
+            ->unique()
+            ->count();
+
+        // Active relays holding this shift this week or later. A relay with no
+        // mapping for this week falls back to its latest one (see
+        // RelayShiftMapping::getLatestForRelay), so that counts as current too.
+        $relayCount = 0;
+        foreach (\App\Models\Relay::where('is_active', 1)->pluck('id') as $relayId) {
+            $current = \App\Models\RelayShiftMapping::getForDate($relayId, $todayStr)
+                ?? \App\Models\RelayShiftMapping::getLatestForRelay($relayId);
+
+            $holdsShift = ($current && (int) $current->shift_id === (int) $shift->id)
+                || \App\Models\RelayShiftMapping::where('relay_id', $relayId)
+                    ->where('shift_id', $shift->id)
+                    ->whereDate('week_start_date', '>', $todayStr)
+                    ->exists();
+
+            if ($holdsShift) {
+                $relayCount++;
+            }
+        }
+
+        // Plans not yet closed that are dated today or later, or still running.
+        $planCount = ShiftPlan::where('shift_id', $shift->id)
+            ->notClosed()
+            ->where(function ($q) use ($todayStr) {
+                $q->whereDate('planning_date', '>=', $todayStr)
+                    ->orWhere('status', 'in_progress');
+            })
+            ->count();
+
+        // Checked in but not out; yesterday included for night shifts past midnight.
+        $openAttendanceCount = \App\Models\AttendanceProcessed::where('shift_id', $shift->id)
+            ->whereDate('date', '>=', $today->copy()->subDay()->toDateString())
+            ->whereNotNull('check_in')
+            ->whereNull('check_out')
+            ->count();
+
+        return [
+            'employees' => $employeeCount,
+            'relays' => $relayCount,
+            'shift_plans' => $planCount,
+            'open_attendance' => $openAttendanceCount,
+        ];
     }
 
     private function isShiftOverlapping($startTime, $endTime, $excludeId = null)

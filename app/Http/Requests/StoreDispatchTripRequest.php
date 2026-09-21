@@ -29,7 +29,7 @@ class StoreDispatchTripRequest extends FormRequest
     {
         return [
             'shift_plan_id' => 'required_without:shift_id|exists:shift_plans,id',
-            'shift_id' => 'required_without:shift_plan_id|exists:shifts,id',
+            'shift_id' => ['required_without:shift_plan_id', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             'site_id' => 'required|exists:sites,id',
             'dumper_equipment_id' => 'required|exists:equipment_names,id',
             'driver_id' => 'required|exists:employees,id',

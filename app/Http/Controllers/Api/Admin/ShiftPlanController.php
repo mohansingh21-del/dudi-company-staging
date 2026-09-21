@@ -290,12 +290,12 @@ class ShiftPlanController extends Controller
 
             $result = $this->service->updateStatus($id, $request->status);
 
-            if ($result['status'] === 404) {
+            if ($result['status'] !== 200) {
                 return response()->json([
-                    'status' => 404,
+                    'status' => $result['status'],
                     'message' => $result['message'],
                     'data' => [],
-                ], 404);
+                ], $result['status']);
             }
 
             return response()->json([

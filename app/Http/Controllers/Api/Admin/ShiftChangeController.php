@@ -143,6 +143,8 @@ class ShiftChangeController extends Controller
                     'total' => $employees->total(),
                 ]
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->validationFailed($e);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -160,8 +162,8 @@ class ShiftChangeController extends Controller
             $request->validate([
                 'employee_id' => 'required_without:employee_ids',
                 'employee_ids' => 'required_without:employee_id|array',
-                'target_shift_id' => 'required_without:shift_id|exists:shifts,id',
-                'shift_id' => 'required_without:target_shift_id|exists:shifts,id',
+                'target_shift_id' => ['required_without:shift_id', 'exists:shifts,id', new \App\Rules\ActiveShift()],
+                'shift_id' => ['required_without:target_shift_id', 'exists:shifts,id', new \App\Rules\ActiveShift()],
                 'current_shift_id' => 'nullable|exists:shifts,id',
             ]);
 
@@ -309,6 +311,8 @@ class ShiftChangeController extends Controller
                 'status' => 200,
                 'message' => $message
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->validationFailed($e);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -324,7 +328,7 @@ class ShiftChangeController extends Controller
     {
         try {
             $request->validate([
-                'shift_id' => 'required|exists:shifts,id',
+                'shift_id' => ['required', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             ]);
 
             $employee = Employee::with('relay')->find($id);
@@ -388,6 +392,8 @@ class ShiftChangeController extends Controller
                 'status' => 200,
                 'message' => "Shift override applied successfully. Shift changed to {$targetShiftName}."
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->validationFailed($e);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -413,7 +419,7 @@ class ShiftChangeController extends Controller
         try {
             $request->validate([
                 'employee_id' => 'required|exists:employees,id',
-                'shift_id' => 'required|exists:shifts,id',
+                'shift_id' => ['required', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             ]);
 
             $employee = Employee::with('relay')->find($request->employee_id);
@@ -477,6 +483,8 @@ class ShiftChangeController extends Controller
                 'status' => 200,
                 'message' => "Shift override applied successfully. Shift changed to {$targetShiftName}."
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->validationFailed($e);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -541,6 +549,16 @@ class ShiftChangeController extends Controller
                 ], 422);
             }
 
+            // Each employee lands on the other's shift, so both must still be active.
+            foreach ([$shiftId1, $shiftId2] as $swapShiftId) {
+                if ($inactiveError = \App\Rules\ActiveShift::check($swapShiftId)) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => $inactiveError
+                    ], 422);
+                }
+            }
+
             if ((int) $employee1->relay_id === (int) $employee2->relay_id) {
                 return response()->json([
                     'status' => 422,
@@ -593,6 +611,8 @@ class ShiftChangeController extends Controller
                 'status' => 200,
                 'message' => "Shifts swapped successfully. {$employee1->name} is now on {$shiftName2} and {$employee2->name} is now on {$shiftName1}."
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->validationFailed($e);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -871,6 +891,8 @@ class ShiftChangeController extends Controller
                     'timeline_weeks' => $weeks
                 ]
             ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return $this->validationFailed($e);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -1068,6 +1090,18 @@ class ShiftChangeController extends Controller
         return response()->json([
             'status' => 422,
             'message' => "{$subject} already on shift '{$shiftName}'. No change applied.",
+        ], 422);
+    }
+
+    /**
+     * Validation errors are caught here instead of by the generic 500 handler.
+     */
+    private function validationFailed(\Illuminate\Validation\ValidationException $e)
+    {
+        return response()->json([
+            'status' => 422,
+            'message' => $e->validator->errors()->first(),
+            'errors' => $e->errors(),
         ], 422);
     }
 }

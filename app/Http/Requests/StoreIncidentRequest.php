@@ -96,7 +96,8 @@ class StoreIncidentRequest extends FormRequest
 
             'shift_id' => [
                 'required',
-                'exists:shifts,id'
+                'exists:shifts,id',
+                new \App\Rules\ActiveShift()
             ],
 
 
