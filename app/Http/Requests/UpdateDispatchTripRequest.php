@@ -36,9 +36,9 @@ class UpdateDispatchTripRequest extends FormRequest
             'trip_date_time' => 'sometimes|required|date_format:Y-m-d H:i:s',
             'start_time' => 'sometimes|required|date_format:H:i:s',
             'end_time' => 'sometimes|required|date_format:H:i:s',
-            'quantity_bcm' => 'sometimes|required|numeric|gt:0',
-            'distance_meters' => 'nullable|numeric|gt:0',
-            'total_cycles' => 'sometimes|nullable|integer|gt:0',
+            'quantity_bcm' => 'sometimes|required|numeric|gt:0|max:' . DispatchTrip::MAX_QUANTITY_BCM,
+            'distance_meters' => 'nullable|numeric|gt:0|max:' . DispatchTrip::MAX_DISTANCE_METERS,
+            'total_cycles' => 'sometimes|nullable|integer|gt:0|max:' . DispatchTrip::MAX_TOTAL_CYCLES,
             'site_id' => 'sometimes|required|exists:sites,id',
             'dumper_equipment_id' => 'sometimes|required|exists:equipment_names,id',
             'shift_plan_id' => 'sometimes|required|exists:shift_plans,id',
@@ -47,7 +47,25 @@ class UpdateDispatchTripRequest extends FormRequest
             'status' => 'sometimes|required|string',
             'created_by' => 'sometimes|required|exists:users,id',
             'created_date' => 'sometimes|required|date_format:Y-m-d H:i:s',
-            'cycle_time_minutes' => 'sometimes|required|numeric',
+            'cycle_time_minutes' => 'sometimes|required|numeric|max:' . DispatchTrip::MAX_CYCLE_TIME_MINUTES,
+        ];
+    }
+
+    /**
+     * Get custom messages for validator errors.
+     *
+     * @return array
+     */
+    public function messages()
+    {
+        return [
+            'quantity_bcm.max' => 'Quantity Moved (BCM) may not be greater than 99,999,999.99.',
+            'quantity_bcm.gt' => 'Quantity Moved (BCM) must be greater than 0.',
+            'quantity_bcm.numeric' => 'Quantity Moved (BCM) must be a number.',
+            'quantity_bcm.required' => 'Quantity Moved (BCM) is required.',
+            'distance_meters.max' => 'Distance may not be greater than 99,999,999.99 meters.',
+            'total_cycles.max' => 'Total cycles may not be greater than 2,147,483,647.',
+            'cycle_time_minutes.max' => 'Cycle time may not be greater than 999,999.99 minutes.',
         ];
     }
 

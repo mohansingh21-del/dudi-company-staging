@@ -8,7 +8,9 @@ use App\Http\Requests\UpdateShiftPlanRequest;
 use App\Http\Resources\ShiftPlanResource;
 use App\Services\ShiftPlanService;
 use App\Services\ShiftPlanSummaryService;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class ShiftPlanController extends Controller
 {
@@ -20,6 +22,42 @@ class ShiftPlanController extends Controller
     public function __construct(ShiftPlanService $service)
     {
         $this->service = $service;
+    }
+
+    /**
+     * Turns a database error into a user-facing response without leaking the SQL.
+     *
+     * @param  \Illuminate\Database\QueryException  $e
+     * @param  string  $action
+     * @return \Illuminate\Http\JsonResponse
+     */
+    protected function databaseErrorResponse(QueryException $e, $action)
+    {
+        Log::error('Shift plan ' . $action . ' failed: ' . $e->getMessage());
+
+        // 1264 = out of range value, 1406 = data too long for column.
+        $code = $e->errorInfo[1] ?? null;
+
+        if (in_array($code, [1264, 1406], true)) {
+            $column = 'target_bcm';
+            if (preg_match("/column '([^']+)'/", $e->getMessage(), $matches)) {
+                $column = $matches[1];
+            }
+
+            return response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => [
+                    $column => ['The value entered for ' . str_replace('_', ' ', $column) . ' is too large.'],
+                ],
+            ], 422);
+        }
+
+        return response()->json([
+            'status' => 500,
+            'message' => 'Unable to ' . $action . ' the shift plan. Please try again.',
+            'data' => [],
+        ], 500);
     }
 
     /**
@@ -125,6 +163,8 @@ class ShiftPlanController extends Controller
                 'message' => $result['message'],
                 'data' => new ShiftPlanResource($result['data']),
             ], 201);
+        } catch (QueryException $e) {
+            return $this->databaseErrorResponse($e, 'create');
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -195,6 +235,8 @@ class ShiftPlanController extends Controller
                 'message' => $result['message'],
                 'data' => new ShiftPlanResource($result['data']),
             ], 200);
+        } catch (QueryException $e) {
+            return $this->databaseErrorResponse($e, 'update');
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,

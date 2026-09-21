@@ -6,6 +6,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
+use App\Models\ShiftPlan;
 
 class StoreShiftPlanRequest extends FormRequest
 {
@@ -37,11 +38,11 @@ class StoreShiftPlanRequest extends FormRequest
             ],
             'shift_id' => 'required|exists:shifts,id',
             'site_id' => 'required|exists:sites,id',
-            'target_bcm' => 'required|numeric|gt:0',
+            'target_bcm' => 'required|numeric|gt:0|max:' . ShiftPlan::MAX_BCM,
             'supervisor_id' => 'required|exists:employees,id',
             'site_incharge_id' => 'required|exists:employees,id',
             'status' => 'nullable|in:draft,published,in_progress,planned,active,closed',
-            'actual_bcm' => 'nullable|numeric|min:0',
+            'actual_bcm' => 'nullable|numeric|min:0|max:' . ShiftPlan::MAX_BCM,
         ];
     }
 
@@ -62,6 +63,9 @@ class StoreShiftPlanRequest extends FormRequest
             'site_id.exists' => 'Selected site is invalid.',
             'target_bcm.required' => 'Target BCM is required.',
             'target_bcm.numeric' => 'Target BCM must be a number.',
+            'target_bcm.gt' => 'Target BCM must be greater than 0.',
+            'target_bcm.max' => 'Target BCM may not be greater than 99,999,999.99.',
+            'actual_bcm.max' => 'Actual BCM may not be greater than 99,999,999.99.',
             'supervisor_id.required' => 'Supervisor is required.',
             'supervisor_id.exists' => 'Selected supervisor is invalid.',
             'site_incharge_id.required' => 'Site incharge is required.',

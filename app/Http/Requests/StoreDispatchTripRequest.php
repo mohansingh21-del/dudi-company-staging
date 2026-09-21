@@ -6,6 +6,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use App\Models\ShiftEquipmentAllocation;
+use App\Models\DispatchTrip;
 
 class StoreDispatchTripRequest extends FormRequest
 {
@@ -38,9 +39,26 @@ class StoreDispatchTripRequest extends FormRequest
             'trip_date_time' => 'nullable|date_format:Y-m-d H:i:s',
             'start_time' => 'required|date_format:H:i:s',
             'end_time' => 'required|date_format:H:i:s',
-            'quantity_bcm' => 'required|numeric|gt:0',
-            'distance_meters' => 'nullable|numeric|gt:0',
-            'total_cycles' => 'required|integer|gt:0',
+            'quantity_bcm' => 'required|numeric|gt:0|max:' . DispatchTrip::MAX_QUANTITY_BCM,
+            'distance_meters' => 'nullable|numeric|gt:0|max:' . DispatchTrip::MAX_DISTANCE_METERS,
+            'total_cycles' => 'required|integer|gt:0|max:' . DispatchTrip::MAX_TOTAL_CYCLES,
+        ];
+    }
+
+    /**
+     * Get custom messages for validator errors.
+     *
+     * @return array
+     */
+    public function messages()
+    {
+        return [
+            'quantity_bcm.max' => 'Quantity Moved (BCM) may not be greater than 99,999,999.99.',
+            'quantity_bcm.gt' => 'Quantity Moved (BCM) must be greater than 0.',
+            'quantity_bcm.numeric' => 'Quantity Moved (BCM) must be a number.',
+            'quantity_bcm.required' => 'Quantity Moved (BCM) is required.',
+            'distance_meters.max' => 'Distance may not be greater than 99,999,999.99 meters.',
+            'total_cycles.max' => 'Total cycles may not be greater than 2,147,483,647.',
         ];
     }
 

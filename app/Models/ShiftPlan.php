@@ -11,6 +11,11 @@ class ShiftPlan extends Model
 
     protected $table = 'shift_plans';
 
+    /**
+     * Largest value the decimal(10,2) BCM columns can hold.
+     */
+    const MAX_BCM = 99999999.99;
+
     protected $fillable = [
         'planning_date',
         'shift_id',

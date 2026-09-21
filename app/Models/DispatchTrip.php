@@ -12,6 +12,16 @@ class DispatchTrip extends Model
 
     protected $table = 'dispatch_trips';
 
+    /**
+     * Largest values the underlying columns can hold.
+     * quantity_bcm and distance_meters are decimal(10,2), cycle_time_minutes is
+     * decimal(8,2), and total_cycles is a signed int.
+     */
+    const MAX_QUANTITY_BCM = 99999999.99;
+    const MAX_DISTANCE_METERS = 99999999.99;
+    const MAX_CYCLE_TIME_MINUTES = 999999.99;
+    const MAX_TOTAL_CYCLES = 2147483647;
+
     protected $fillable = [
         'trip_reference_no',
         'shift_plan_id',
