@@ -22,6 +22,8 @@ class UpdateShiftRequest extends FormRequest
 
             'name' => [
                 'required',
+                'string',
+                'max:255',
                 Rule::unique('shifts', 'shift_name')->ignore($departmentId)
             ],
             'start_time' => 'required',
@@ -36,6 +38,7 @@ class UpdateShiftRequest extends FormRequest
         return [
             'name.unique' => 'Shift name already exists.',
             'name.required' => 'Shift name is required.',
+            'name.max' => 'Shift name cannot be longer than 255 characters.',
         ];
     }
 

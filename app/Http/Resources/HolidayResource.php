@@ -14,6 +14,7 @@ class HolidayResource extends JsonResource
             'holiday_name' => $this->holiday_name,
             'holiday_date' => $this->formatted_date,
             'holiday_type' => $this->holiday_type,
+            'site_id' => $this->site_id,
             'site' => optional($this->site)->site_name,
             'status' => $this->is_active,
         ];

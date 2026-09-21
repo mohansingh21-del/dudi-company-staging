@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Holiday;
+use App\Models\Site;
+use Illuminate\Support\Facades\DB;
 use App\Http\Requests\StoreHolidayRequest;
 use App\Http\Requests\UpdateHolidayRequest;
 use App\Http\Resources\HolidayResource;
@@ -61,19 +63,55 @@ class HolidayController extends Controller
     }
     public function store(StoreHolidayRequest $request)
     {
-        $dept = Holiday::create([
-            'holiday_name' => $request->holiday_name,
-            'holiday_date' => $request->holiday_date,
-            'holiday_type' => $request->holiday_type,
-            'site_id' => $request->site_id,
-            'status' => 1,
+        // site_id arrives as an array (site_id[]). One holiday row is stored per
+        // site, so every report that filters holidays by site keeps working.
+        $siteIds = $request->input('site_id');
 
-        ]);
+        $created = [];
+        $skipped = [];
+
+        DB::transaction(function () use ($request, $siteIds, &$created, &$skipped) {
+            foreach ($siteIds as $siteId) {
+                $exists = Holiday::where('site_id', $siteId)
+                    ->whereDate('holiday_date', $request->holiday_date)
+                    ->exists();
+
+                if ($exists) {
+                    $skipped[] = (int) $siteId;
+                    continue;
+                }
+
+                $created[] = Holiday::create([
+                    'holiday_name' => $request->holiday_name,
+                    'holiday_date' => $request->holiday_date,
+                    'holiday_type' => $request->holiday_type,
+                    'site_id' => $siteId,
+                    'is_active' => 1,
+                ]);
+            }
+        });
+
+        if (empty($created)) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Holiday already exists on this date for the selected site(s)',
+                'skipped_site_ids' => $skipped,
+            ], 422);
+        }
+
+        $message = 'Holiday created for ' . count($created) . ' site(s)';
+
+        if (!empty($skipped)) {
+            $skippedNames = Site::whereIn('id', $skipped)->pluck('site_name')->implode(', ');
+            $message .= '. Skipped (holiday already exists on this date): ' . $skippedNames;
+        }
 
         return response()->json([
             'status' => 200,
-            'message' => 'Holiday created'
-            // 'data' => new DepartmentResource($dept)
+            'message' => $message,
+            'created_count' => count($created),
+            'skipped_site_ids' => $skipped,
+            'data' => HolidayResource::collection(collect($created)),
         ]);
     }
 
@@ -105,18 +143,63 @@ class HolidayController extends Controller
             ]);
         }
 
-        $dept->fill(array_filter([
-            'holiday_name' => $request->holiday_name,
-            'holiday_date' => $request->holiday_date,
-            'holiday_type' => $request->holiday_type,
-            'site_id'      => $request->site_id,
-        ], fn ($value) => !is_null($value)));
+        // site_id arrives as an array. The record being edited keeps the first
+        // site; each extra site gets its own row, same as on create.
+        $siteIds = $request->input('site_id');
+        $primarySiteId = array_shift($siteIds);
 
-        $dept->save();
+        $holidayDate = $request->holiday_date ?: optional($dept->holiday_date)->format('Y-m-d');
+
+        $created = [];
+        $skipped = [];
+
+        DB::transaction(function () use ($request, $dept, $siteIds, $primarySiteId, $holidayDate, &$created, &$skipped) {
+            $dept->fill(array_filter([
+                'holiday_name' => $request->holiday_name,
+                'holiday_date' => $request->holiday_date,
+                'holiday_type' => $request->holiday_type,
+                'site_id'      => $primarySiteId,
+            ], fn ($value) => !is_null($value)));
+
+            $dept->save();
+
+            foreach ($siteIds as $siteId) {
+                $exists = Holiday::where('site_id', $siteId)
+                    ->whereDate('holiday_date', $holidayDate)
+                    ->where('id', '!=', $dept->id)
+                    ->exists();
+
+                if ($exists) {
+                    $skipped[] = (int) $siteId;
+                    continue;
+                }
+
+                $created[] = Holiday::create([
+                    'holiday_name' => $request->holiday_name ?: $dept->holiday_name,
+                    'holiday_date' => $holidayDate,
+                    'holiday_type' => $request->holiday_type ?: $dept->holiday_type,
+                    'site_id' => $siteId,
+                    'is_active' => 1,
+                ]);
+            }
+        });
+
+        $message = 'Holiday updated successfully';
+
+        if (!empty($created)) {
+            $message .= '. Added for ' . count($created) . ' more site(s)';
+        }
+
+        if (!empty($skipped)) {
+            $skippedNames = Site::whereIn('id', $skipped)->pluck('site_name')->implode(', ');
+            $message .= '. Skipped (holiday already exists on this date): ' . $skippedNames;
+        }
 
         return response()->json([
             'status' => 200,
-            'message' => 'Holiday updated successfully'
+            'message' => $message,
+            'created_count' => count($created),
+            'skipped_site_ids' => $skipped,
         ]);
     }
 

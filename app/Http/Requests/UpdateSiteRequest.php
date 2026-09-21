@@ -22,8 +22,11 @@ class UpdateSiteRequest extends FormRequest
 
             'name' => [
                 'required',
+                'string',
+                'max:255',
                 Rule::unique('sites', 'site_name')->ignore($departmentId)
-            ]
+            ],
+            'address' => 'nullable|string|max:5000'
         ];
     }
 
@@ -32,6 +35,8 @@ class UpdateSiteRequest extends FormRequest
         return [
             'name.unique' => 'Site name already exists.',
             'name.required' => 'Site name is required.',
+            'name.max' => 'Site name cannot be longer than 255 characters.',
+            'address.max' => 'Address cannot be longer than 5000 characters.',
         ];
     }
 

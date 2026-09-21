@@ -26,6 +26,8 @@ class UpdateLeaveTypeRequest extends FormRequest
             'name' => [
                 'sometimes',
                 'required',
+                'string',
+                'max:255',
                 Rule::unique('leave_types', 'name')->ignore($leaveTypeId)
             ],
 
@@ -40,6 +42,7 @@ class UpdateLeaveTypeRequest extends FormRequest
         return [
             'name.unique' => 'Leave type name already exists.',
             'name.required' => 'Leave type name is required.',
+            'name.max' => 'Leave type name cannot be longer than 255 characters.',
             'Annual_limit.integer' => 'Annual limit must be a whole number of days.',
         ];
     }

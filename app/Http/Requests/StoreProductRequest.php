@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
 
 class StoreProductRequest extends FormRequest
 {
@@ -17,15 +18,39 @@ class StoreProductRequest extends FormRequest
     {
         return [
             'sub_category_id' => 'required|exists:sub_categories,id',
-            'name' => 'required|string|max:255|unique:products,name',
+            'name' => [
+                'required',
+                'string',
+                'max:255',
+                Rule::unique('products', 'name')
+                    ->where(function ($query) {
+                        return $query->where('sub_category_id', $this->input('sub_category_id'));
+                    }),
+            ],
             'min_stock' => 'required|integer|min:0',
         ];
+    }
+
+    /**
+     * Prepare the data for validation.
+     *
+     * @return void
+     */
+    protected function prepareForValidation()
+    {
+        if ($this->has('name')) {
+            $this->merge([
+                'name' => is_string($this->input('name'))
+                    ? trim(preg_replace('/\s+/', ' ', $this->input('name')))
+                    : $this->input('name'),
+            ]);
+        }
     }
 
     public function messages(): array
     {
         return [
-            'name.unique' => 'Product name already exists.',
+            'name.unique' => 'This product name already exists in the selected subcategory.',
             'name.required' => 'Product name is required.',
             'sub_category_id.required' => 'Subcategory is required.',
             'sub_category_id.exists' => 'Selected subcategory is invalid.',

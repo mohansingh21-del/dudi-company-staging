@@ -108,7 +108,7 @@ class VehicleTypeController extends Controller
 
             $validator = Validator::make($request->all(), [
                 'name' => 'required|string|max:255|unique:vehicle_types,name' . ($id ? ',' . $id : ''),
-                'description' => 'nullable|string',
+                'description' => 'nullable|string|max:255',
             ]);
 
             if ($validator->fails()) {

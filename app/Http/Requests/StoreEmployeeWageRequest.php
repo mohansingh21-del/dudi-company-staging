@@ -19,6 +19,26 @@ class StoreEmployeeWageRequest extends FormRequest
     }
 
     /**
+     * The duplicate check compares effective_from against a date column, so
+     * normalise it first — otherwise a differently formatted date slips past
+     * and silently overwrites the revision already held for that day.
+     */
+    protected function prepareForValidation()
+    {
+        if (!$this->filled('effective_from')) {
+            return;
+        }
+
+        try {
+            $this->merge([
+                'effective_from' => \Carbon\Carbon::parse($this->effective_from)->toDateString(),
+            ]);
+        } catch (\Throwable $th) {
+            // Leave it alone; the date rule reports it.
+        }
+    }
+
+    /**
      * Get the validation rules that apply to the request.
      *
      * @return array

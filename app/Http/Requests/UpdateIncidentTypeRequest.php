@@ -27,6 +27,10 @@ class UpdateIncidentTypeRequest extends FormRequest
 
                 'required',
 
+                'string',
+
+                'max:255',
+
                 Rule::unique(
                     'incident_types',
                     'incident_type'
@@ -34,8 +38,18 @@ class UpdateIncidentTypeRequest extends FormRequest
 
             ],
 
-            'description' => 'nullable'
+            'description' => 'nullable|string|max:5000'
 
+        ];
+    }
+
+    public function messages()
+    {
+        return [
+            'incident_type.required' => 'Incident type is required.',
+            'incident_type.unique' => 'Incident type already exists.',
+            'incident_type.max' => 'Incident type cannot be longer than 255 characters.',
+            'description.max' => 'Description cannot be longer than 5000 characters.',
         ];
     }
 }

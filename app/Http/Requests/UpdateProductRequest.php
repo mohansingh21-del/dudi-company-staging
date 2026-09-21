@@ -24,16 +24,36 @@ class UpdateProductRequest extends FormRequest
                 'required',
                 'string',
                 'max:255',
-                Rule::unique('products', 'name')->ignore($productId)
+                Rule::unique('products', 'name')
+                    ->ignore($productId)
+                    ->where(function ($query) {
+                        return $query->where('sub_category_id', $this->input('sub_category_id'));
+                    }),
             ],
             'min_stock' => 'required|integer|min:0',
         ];
     }
 
+    /**
+     * Prepare the data for validation.
+     *
+     * @return void
+     */
+    protected function prepareForValidation()
+    {
+        if ($this->has('name')) {
+            $this->merge([
+                'name' => is_string($this->input('name'))
+                    ? trim(preg_replace('/\s+/', ' ', $this->input('name')))
+                    : $this->input('name'),
+            ]);
+        }
+    }
+
     public function messages(): array
     {
         return [
-            'name.unique' => 'Product name already exists.',
+            'name.unique' => 'This product name already exists in the selected subcategory.',
             'name.required' => 'Product name is required.',
             'sub_category_id.required' => 'Subcategory is required.',
             'sub_category_id.exists' => 'Selected subcategory is invalid.',

@@ -35,6 +35,10 @@ class UpdateEquipmentNameRequest extends FormRequest
 
                 'required',
 
+                'string',
+
+                'max:255',
+
                 Rule::unique(
                     'equipment_names',
                     'equipment_name'
@@ -57,7 +61,10 @@ class UpdateEquipmentNameRequest extends FormRequest
 
 
             'equipment_name.unique' =>
-            'Equipment name already exists.'
+            'Equipment name already exists.',
+
+            'equipment_name.max' =>
+            'Equipment name cannot be longer than 255 characters.'
 
         ];
     }

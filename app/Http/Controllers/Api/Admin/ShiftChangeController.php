@@ -182,6 +182,8 @@ class ShiftChangeController extends Controller
             }
 
             $resolvedEmployees = collect();
+            $alreadyOnTarget = collect();
+            $ineligible = collect();
             foreach ($identifiers as $identifier) {
                 $employee = Employee::with('relay')
                     ->where('id', $identifier)
@@ -195,11 +197,43 @@ class ShiftChangeController extends Controller
                     ], 422);
                 }
 
-                if (!$employee->relay_id || !$employee->relay || !$employee->relay->is_rotating) {
+                if (!$employee->relay_id || !$employee->relay) {
+                    $ineligible->push(['employee' => $employee, 'reason' => 'no relay assigned']);
+                    continue;
+                }
+
+                if (!$employee->relay->is_rotating) {
+                    $ineligible->push([
+                        'employee' => $employee,
+                        'reason' => "relay '{$employee->relay->name}' is not rotating",
+                    ]);
+                    continue;
+                }
+
+                // A selection that mixes movable employees with ones already on the
+                // target shift still goes through — only the ones with nothing to
+                // change are held back, so the rest are not blocked by them.
+                if ((int) $this->currentShiftIdFor($employee) === (int) $targetShiftId) {
+                    $alreadyOnTarget->push($employee);
                     continue;
                 }
 
                 $resolvedEmployees->push($employee);
+            }
+
+            // An employee who cannot be rotated is a setup mistake, not something to
+            // work around, so the whole submission is refused before anything is
+            // written. Dropping them and rotating the rest still answers 200, which
+            // leaves the operator believing the bypassed employees moved too.
+            if ($ineligible->isNotEmpty()) {
+                return $this->ineligibleEmployeesResponse($ineligible);
+            }
+
+            if ($resolvedEmployees->isEmpty() && $alreadyOnTarget->isNotEmpty()) {
+                return $this->sameShiftResponse(
+                    $targetShiftId,
+                    $alreadyOnTarget->count() === 1 ? $alreadyOnTarget->first() : null
+                );
             }
 
             if ($resolvedEmployees->isEmpty()) {
@@ -265,6 +299,12 @@ class ShiftChangeController extends Controller
                 $message = "Shift changed for {$count} {$empWord} to {$targetShiftName}";
             }
 
+            if ($alreadyOnTarget->isNotEmpty()) {
+                $skipped = $alreadyOnTarget->count();
+                $skippedWord = $skipped === 1 ? 'employee was' : 'employees were';
+                $message .= ". {$skipped} {$skippedWord} skipped — already on {$targetShiftName}";
+            }
+
             return response()->json([
                 'status' => 200,
                 'message' => $message
@@ -303,11 +343,15 @@ class ShiftChangeController extends Controller
                 ], 422);
             }
 
+            $targetShiftId = $request->shift_id;
+
+            if ((int) $this->currentShiftIdFor($employee) === (int) $targetShiftId) {
+                return $this->sameShiftResponse($targetShiftId, $employee);
+            }
+
             if ($blockedResponse = $this->openDeploymentResponse(collect([$employee]))) {
                 return $blockedResponse;
             }
-
-            $targetShiftId = $request->shift_id;
 
             $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
 
@@ -388,11 +432,15 @@ class ShiftChangeController extends Controller
                 ], 422);
             }
 
+            $targetShiftId = $request->shift_id;
+
+            if ((int) $this->currentShiftIdFor($employee) === (int) $targetShiftId) {
+                return $this->sameShiftResponse($targetShiftId, $employee);
+            }
+
             if ($blockedResponse = $this->openDeploymentResponse(collect([$employee]))) {
                 return $blockedResponse;
             }
-
-            $targetShiftId = $request->shift_id;
 
             $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
 
@@ -955,6 +1003,71 @@ class ShiftChangeController extends Controller
         return response()->json([
             'status' => 422,
             'message' => "No relay is mapped to shift '{$shiftName}'. Assign a relay to this shift in Relay Master first, then change the employee's shift.",
+        ], 422);
+    }
+
+    /**
+     * 422 naming the selected employees that cannot take part in a shift rotation.
+     *
+     * Rotation moves an employee through their relay's weekly mapping, so an
+     * employee with no relay — or one on a relay that does not rotate — has nothing
+     * to be rotated through and is skipped by the write loop. Reporting them is the
+     * point: a silent skip still answers 200 with a success message, so the operator
+     * walks away believing the whole selection moved when part of it never did.
+     */
+    private function ineligibleEmployeesResponse($ineligible)
+    {
+        $shown = 5;
+
+        $listed = $ineligible->take($shown)->map(function ($entry) {
+            $employee = $entry['employee'];
+            $label = $employee->name ?: ($employee->employee_code ?: "#{$employee->id}");
+
+            return "'{$label}' ({$entry['reason']})";
+        })->implode(', ');
+
+        $remaining = $ineligible->count() - min($shown, $ineligible->count());
+        if ($remaining > 0) {
+            $listed .= ", and {$remaining} more";
+        }
+
+        return response()->json([
+            'status' => 422,
+            'message' => "Shift rotation is not allowed for {$listed}. Assign a rotating relay to them in Employee Master, or remove them from the selection. No shifts were changed.",
+        ], 422);
+    }
+
+    /**
+     * The shift the employee is actually on today.
+     *
+     * Resolved through the roster (override > relay mapping > legacy assignment)
+     * rather than read off employee_shift_assignments, because a rotating employee
+     * gets today's shift from their relay's weekly mapping and the assignment row
+     * can lag behind it until roster:rotate syncs.
+     */
+    private function currentShiftIdFor(Employee $employee)
+    {
+        return $employee->getShiftIdForDate(now()->toDateString());
+    }
+
+    /**
+     * 422 for a change that would leave the employee exactly where they are.
+     *
+     * Re-applying the current shift is not a no-op in the data: it stamps a fresh
+     * open-ended override, which outranks the weekly relay mapping and so parks the
+     * employee off the rotation until roster:rotate expires it, and it pushes the
+     * assignment's from_date to today, which changes which shift already-processed
+     * days resolve to for OT and payroll.
+     */
+    private function sameShiftResponse($targetShiftId, ?Employee $employee = null)
+    {
+        $shift = \App\Models\Shift::find($targetShiftId);
+        $shiftName = $shift ? $shift->shift_name : "#{$targetShiftId}";
+        $subject = $employee ? "'{$employee->name}' is" : 'The selected employees are';
+
+        return response()->json([
+            'status' => 422,
+            'message' => "{$subject} already on shift '{$shiftName}'. No change applied.",
         ], 422);
     }
 }

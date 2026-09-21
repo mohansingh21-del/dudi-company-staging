@@ -253,8 +253,11 @@ class EmployeeWageController extends Controller
 
     /**
      * The whole Form B header in one submit: every skill category for a single
-     * revision date. Re-submitting the same date overwrites that revision
-     * rather than failing, so the grid can be loaded, edited and saved again.
+     * revision date.
+     *
+     * Re-submitting a date that already carries a revision is rejected, so a
+     * rate is never overwritten by accident. The load-edit-save-again flow
+     * passes overwrite=true to say the replacement is deliberate.
      */
     public function bulkStore(StoreBulkEmployeeWageRequest $request)
     {
@@ -263,6 +266,9 @@ class EmployeeWageController extends Controller
 
             $effectiveFrom = $data['effective_from'];
             $isActive = $data['is_active'] ?? true;
+
+            // Read before the write, so the response can name what it replaced.
+            $overwritten = $request->clashingCategories();
 
             $saved = DB::transaction(function () use ($data, $effectiveFrom, $isActive) {
                 $rows = [];
@@ -289,11 +295,15 @@ class EmployeeWageController extends Controller
 
             return response()->json([
                 'status' => 200,
-                'message' => 'Wage rates saved successfully',
+                'message' => $overwritten->isEmpty()
+                    ? 'Wage rates saved successfully'
+                    : 'Wage rates saved successfully, replacing the revision already held from '
+                        . Carbon::parse($effectiveFrom)->format('d M Y') . '.',
                 'data' => [
                     'effective_from' => $effectiveFrom,
                     'created' => $created->count(),
                     'updated' => count($saved) - $created->count(),
+                    'overwritten' => $overwritten->values(),
                     'rates' => EmployeeWageResource::collection(collect($saved)),
                 ]
             ]);

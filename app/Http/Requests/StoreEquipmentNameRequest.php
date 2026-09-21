@@ -24,7 +24,7 @@ class StoreEquipmentNameRequest extends FormRequest
             'required|exists:equipments,id',
 
             'equipment_name' =>
-            'required|unique:equipment_names,equipment_name'
+            'required|string|max:255|unique:equipment_names,equipment_name'
 
         ];
     }
@@ -45,7 +45,10 @@ class StoreEquipmentNameRequest extends FormRequest
             'Equipment name is required.',
 
             'equipment_name.unique' =>
-            'Equipment name already exists.'
+            'Equipment name already exists.',
+
+            'equipment_name.max' =>
+            'Equipment name cannot be longer than 255 characters.'
 
         ];
     }

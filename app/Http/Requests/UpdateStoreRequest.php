@@ -27,7 +27,7 @@ class UpdateStoreRequest extends FormRequest
                 'max:255',
                 Rule::unique('stores', 'name')->ignore($storeId),
             ],
-            'description' => 'nullable|string',
+            'description' => 'nullable|string|max:5000',
             'is_active'   => 'nullable|in:0,1',
         ];
     }

@@ -22,6 +22,8 @@ class UpdateTrainingTypeRequest extends FormRequest
 
             'name' => [
                 'required',
+                'string',
+                'max:255',
                 Rule::unique('training_types', 'name')->ignore($departmentId)
             ]
         ];
@@ -32,6 +34,7 @@ class UpdateTrainingTypeRequest extends FormRequest
         return [
             'name.unique' => 'Training Type already exists.',
             'name.required' => 'Training Type is required.',
+            'name.max' => 'Training Type cannot be longer than 255 characters.',
         ];
     }
 

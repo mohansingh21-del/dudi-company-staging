@@ -17,7 +17,7 @@ class StoreStoreRequest extends FormRequest
     {
         return [
             'name'        => 'required|string|max:255|unique:stores,name',
-            'description' => 'nullable|string',
+            'description' => 'nullable|string|max:5000',
             'is_active'   => 'nullable|in:0,1',
         ];
     }

@@ -20,11 +20,15 @@ class StoreIncidentTypeRequest extends FormRequest
 
             'incident_type' => [
                 'required',
+                'string',
+                'max:255',
                 'unique:incident_types,incident_type'
             ],
 
             'description' => [
-                'nullable'
+                'nullable',
+                'string',
+                'max:5000'
             ]
 
         ];
@@ -40,7 +44,15 @@ class StoreIncidentTypeRequest extends FormRequest
 
 
             'incident_type.unique'
-            => 'Incident type already exists.'
+            => 'Incident type already exists.',
+
+
+            'incident_type.max'
+            => 'Incident type cannot be longer than 255 characters.',
+
+
+            'description.max'
+            => 'Description cannot be longer than 5000 characters.'
 
         ];
     }
