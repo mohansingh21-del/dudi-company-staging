@@ -201,6 +201,15 @@ class ProductController extends Controller
                 ], 404);
             }
 
+            // A product still stocked at any store can't be switched off —
+            // its inventory rows would be left pointing at a hidden product.
+            if ($product->is_active && $product->inventories()->exists()) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'This product cannot be deactivated because it exists in inventory.'
+                ], 422);
+            }
+
             $product->is_active = $product->is_active ? 0 : 1;
             $product->save();
 
