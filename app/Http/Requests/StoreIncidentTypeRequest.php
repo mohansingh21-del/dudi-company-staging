@@ -21,7 +21,7 @@ class StoreIncidentTypeRequest extends FormRequest
             'incident_type' => [
                 'required',
                 'string',
-                'max:255',
+                'max:200',
                 'unique:incident_types,incident_type'
             ],
 
@@ -48,7 +48,7 @@ class StoreIncidentTypeRequest extends FormRequest
 
 
             'incident_type.max'
-            => 'Incident type cannot be longer than 255 characters.',
+            => 'Incident type cannot be longer than 200 characters.',
 
 
             'description.max'

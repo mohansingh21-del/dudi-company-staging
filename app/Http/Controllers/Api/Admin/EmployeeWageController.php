@@ -45,6 +45,22 @@ class EmployeeWageController extends Controller
                 $wages->whereDate('effective_from', '<=', $request->effective_on);
             }
 
+            // The list shows only revision dates, so match the date however the
+            // user is likely to type it, plus the skill category behind it.
+            if ($request->filled('search')) {
+                $search = trim($request->search);
+                $like = "%{$search}%";
+
+                $wages->where(function ($query) use ($search, $like) {
+                    $query->where('effective_from', 'LIKE', $like)
+                        ->orWhereRaw("DATE_FORMAT(effective_from, '%d-%m-%Y') LIKE ?", [$like])
+                        ->orWhereRaw("DATE_FORMAT(effective_from, '%d/%m/%Y') LIKE ?", [$like])
+                        ->orWhereRaw("DATE_FORMAT(effective_from, '%d %b %Y') LIKE ?", [$like])
+                        ->orWhereRaw("DATE_FORMAT(effective_from, '%d %M %Y') LIKE ?", [$like])
+                        ->orWhere('skill_category', 'LIKE', '%' . str_replace(['-', ' '], '_', $search) . '%');
+                });
+            }
+
             $wages = $wages
                 ->select('effective_from')
                 ->groupBy('effective_from')

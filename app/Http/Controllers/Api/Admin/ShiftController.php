@@ -66,23 +66,24 @@ class ShiftController extends Controller
         if ($conflict) {
             return response()->json([
                 'status' => 422,
-                'message' => 'Shift timings overlap with an existing shift.',
+                'message' => $this->overlapMessage($conflict),
                 'conflicting_shift' => [
                     'id' => $conflict->id,
                     'shift_name' => $conflict->shift_name,
                     'start_time' => $conflict->start_time,
                     'end_time' => $conflict->end_time,
+                    'is_active' => (int) $conflict->is_active,
                 ]
             ], 422);
         }
 
-        $dept = Shift::create([
+        // Optional fields are left out when not sent so the column defaults
+        // (8 hours / not night shift) apply instead of an explicit NULL.
+        $dept = Shift::create(array_merge([
             'shift_name' => $request->name,
             'start_time' => $request->start_time,
             'end_time' => $request->end_time,
-            'minimum_working_hours' => $request->minimum_working_hours,
-            'is_night_shift' => $request->is_night_shift,
-        ]);
+        ], array_filter($request->only(['minimum_working_hours', 'is_night_shift']), fn ($v) => $v !== null && $v !== '')));
 
         $dept->is_active = 1;
         $dept->save();
@@ -126,23 +127,23 @@ class ShiftController extends Controller
         if ($conflict) {
             return response()->json([
                 'status' => 422,
-                'message' => 'Shift timings overlap with an existing shift.',
+                'message' => $this->overlapMessage($conflict),
                 'conflicting_shift' => [
                     'id' => $conflict->id,
                     'shift_name' => $conflict->shift_name,
                     'start_time' => $conflict->start_time,
                     'end_time' => $conflict->end_time,
+                    'is_active' => (int) $conflict->is_active,
                 ]
             ], 422);
         }
 
-        $dept->update([
+        // Optional fields not sent keep their current value rather than being nulled.
+        $dept->update(array_merge([
             'shift_name' => $request->name,
             'start_time' => $request->start_time,
             'end_time' => $request->end_time,
-            'minimum_working_hours' => $request->minimum_working_hours,
-            'is_night_shift' => $request->is_night_shift
-        ]);
+        ], array_filter($request->only(['minimum_working_hours', 'is_night_shift']), fn ($v) => $v !== null && $v !== '')));
 
         return response()->json([
             'status' => 200,
@@ -221,7 +222,7 @@ class ShiftController extends Controller
         // re-validated here: while this shift was inactive another shift may
         // have been created over the same timings.
         if ($activate && !$dept->is_active) {
-            $conflict = $this->findOverlappingShift($dept->start_time, $dept->end_time, $dept->id);
+            $conflict = $this->findOverlappingShift($dept->start_time, $dept->end_time, $dept->id, true);
 
             if ($conflict) {
                 return response()->json([
@@ -753,11 +754,22 @@ class ShiftController extends Controller
         return $this->findOverlappingShift($startTime, $endTime, $excludeId) !== null;
     }
 
+    private function overlapMessage(Shift $conflict): string
+    {
+        if (!$conflict->is_active) {
+            return "Shift timings overlap with the deactivated shift '{$conflict->shift_name}' ({$conflict->start_time} - {$conflict->end_time}). Re-activate that shift instead of creating a duplicate.";
+        }
+
+        return 'Shift timings overlap with an existing shift.';
+    }
+
     /**
-     * Return the first active shift whose timings overlap the given window,
-     * or null when the window is free. Inactive shifts do not hold a slot.
+     * Return the first shift whose timings overlap the given window, or null
+     * when the window is free. Deactivated shifts still hold their slot, so a
+     * duplicate can't be created while the original sits inactive. Pass
+     * $activeOnly when re-activating, where only live shifts can clash.
      */
-    private function findOverlappingShift($startTime, $endTime, $excludeId = null)
+    private function findOverlappingShift($startTime, $endTime, $excludeId = null, bool $activeOnly = false)
     {
         $newStart = \Carbon\Carbon::parse($startTime)->format('H:i:s');
         $newEnd = \Carbon\Carbon::parse($endTime)->format('H:i:s');
@@ -779,7 +791,11 @@ class ShiftController extends Controller
 
         $newIntervals = $getIntervals($newStart, $newEnd);
 
-        $query = Shift::where('is_active', 1);
+        $query = Shift::query();
+
+        if ($activeOnly) {
+            $query->where('is_active', 1);
+        }
 
         if ($excludeId !== null) {
             $query->where('id', '!=', $excludeId);

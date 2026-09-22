@@ -22,6 +22,12 @@ use Maatwebsite\Excel\Concerns\WithHeadingRow;
  *
  * Leaving the column off falls back to the store chosen on the upload, which
  * applies to every row; sheets written before the column existed still import.
+ *
+ * Product names are only unique within a sub-category, so a name alone can
+ * point at several products. The sheet may narrow it with sub_category_name
+ * and category_name columns (the headings the export writes are accepted too),
+ * or name the product outright with product_id. A name that still matches more
+ * than one product is a row error — guessing would stock the wrong product.
  */
 class InventoryImport implements ToCollection, WithHeadingRow
 {
@@ -44,6 +50,15 @@ class InventoryImport implements ToCollection, WithHeadingRow
      * @var array<string, \App\Models\Store|null>
      */
     protected $storeCache = [];
+
+    /**
+     * Resolved product lookups, keyed by the cells that identified them. Each
+     * entry is the list of matching products, so an ambiguous name is only
+     * queried once however many rows repeat it.
+     *
+     * @var array<string, \Illuminate\Support\Collection>
+     */
+    protected $productCache = [];
 
     /**
      * Ids of the stores this file actually stocked, used as a set.
@@ -71,7 +86,11 @@ class InventoryImport implements ToCollection, WithHeadingRow
                 foreach ($keys as $k) {
                     // "store_name" matches on "name" but is not the product —
                     // skip anything store-ish before the loose match runs.
-                    if (stripos((string) $k, 'store') !== false) {
+                    // Likewise category_name / sub_category_name, and
+                    // product_id, which is read on its own below.
+                    if (stripos((string) $k, 'store') !== false
+                        || stripos((string) $k, 'category') !== false
+                        || $k === 'product_id') {
                         continue;
                     }
                     if (stripos((string) $k, 'name') !== false || stripos((string) $k, 'product') !== false) {
@@ -121,13 +140,17 @@ class InventoryImport implements ToCollection, WithHeadingRow
                 }
             }
 
+            $productId = isset($rowArray['product_id']) ? trim((string) $rowArray['product_id']) : '';
+            $subCategoryName = $this->firstFilled($rowArray, ['sub_category_name', 'sub_category', 'subcategory_name', 'subcategory']);
+            $categoryName = $this->firstFilled($rowArray, ['category_name', 'category']);
+
             $rowNum = $index + 2; // 1-indexed, +2 because of heading row
 
-            if ($productName === '' && $quantity === '') {
+            if ($productName === '' && $productId === '' && $quantity === '') {
                 continue; // Skip empty rows
             }
 
-            if ($productName === '') {
+            if ($productName === '' && $productId === '') {
                 $this->errors[] = [
                     'row' => $rowNum,
                     'column' => 'product_name',
@@ -182,18 +205,33 @@ class InventoryImport implements ToCollection, WithHeadingRow
                 $storeId = $this->storeId;
             }
 
-            // Find product by name
-            $product = Product::where('name', $productName)->first();
+            $matches = $this->resolveProducts($productId, $productName, $subCategoryName, $categoryName);
 
-            if (!$product) {
+            if ($matches->isEmpty()) {
                 $this->errors[] = [
                     'row' => $rowNum,
-                    'column' => 'product_name',
-                    'message' => "Product '{$productName}' not found.",
-                    'value' => $productName
+                    'column' => $productId !== '' ? 'product_id' : 'product_name',
+                    'message' => $this->notFoundMessage($productId, $productName, $subCategoryName, $categoryName),
+                    'value' => $productId !== '' ? $productId : $productName
                 ];
                 continue;
             }
+
+            if ($matches->count() > 1) {
+                $where = $matches->map(function ($p) {
+                    return optional(optional($p->subCategory)->category)->name . ' / ' . optional($p->subCategory)->name;
+                })->implode(', ');
+
+                $this->errors[] = [
+                    'row' => $rowNum,
+                    'column' => 'sub_category_name',
+                    'message' => "Product '{$productName}' exists in more than one sub-category ({$where}). Add sub_category_name (and category_name if needed) to choose one.",
+                    'value' => $subCategoryName
+                ];
+                continue;
+            }
+
+            $product = $matches->first();
 
             // A product already stocked at this store is replenished, same as
             // adding stock by hand; otherwise the (store, product) row is
@@ -240,6 +278,92 @@ class InventoryImport implements ToCollection, WithHeadingRow
             $this->importedStoreIds[$storeId] = true;
             $this->successCount++;
         }
+    }
+
+    /**
+     * Every product the row's cells can point at. product_id wins when given;
+     * the name, sub-category and category cells then only have to agree with
+     * it. Otherwise the name is narrowed by whichever of the other two are
+     * filled. The caller decides what none or several matches mean.
+     *
+     * @param  string  $productId
+     * @param  string  $productName
+     * @param  string  $subCategoryName
+     * @param  string  $categoryName
+     * @return \Illuminate\Support\Collection
+     */
+    protected function resolveProducts($productId, $productName, $subCategoryName, $categoryName)
+    {
+        $key = implode("\0", [$productId, $productName, $subCategoryName, $categoryName]);
+
+        if (!array_key_exists($key, $this->productCache)) {
+            $query = Product::with('subCategory.category');
+
+            if ($productId !== '') {
+                $query->where('id', is_numeric($productId) ? (int) $productId : 0);
+            }
+
+            if ($productName !== '') {
+                $query->where('name', $productName);
+            }
+
+            if ($subCategoryName !== '') {
+                $query->whereHas('subCategory', function ($q) use ($subCategoryName) {
+                    $q->where('name', $subCategoryName);
+                });
+            }
+
+            if ($categoryName !== '') {
+                $query->whereHas('subCategory.category', function ($q) use ($categoryName) {
+                    $q->where('name', $categoryName);
+                });
+            }
+
+            $this->productCache[$key] = $query->get();
+        }
+
+        return $this->productCache[$key];
+    }
+
+    /**
+     * @param  string  $productId
+     * @param  string  $productName
+     * @param  string  $subCategoryName
+     * @param  string  $categoryName
+     * @return string
+     */
+    protected function notFoundMessage($productId, $productName, $subCategoryName, $categoryName)
+    {
+        $label = $productId !== '' ? "Product id '{$productId}'" : "Product '{$productName}'";
+
+        $scope = array_filter([
+            $productId !== '' && $productName !== '' ? "name '{$productName}'" : '',
+            $categoryName !== '' ? "category '{$categoryName}'" : '',
+            $subCategoryName !== '' ? "sub-category '{$subCategoryName}'" : '',
+        ]);
+
+        return $scope
+            ? "{$label} not found with " . implode(', ', $scope) . '.'
+            : "{$label} not found.";
+    }
+
+    /**
+     * The first non-blank cell among the given headings, or ''.
+     *
+     * @param  array  $row
+     * @param  array  $keys
+     * @return string
+     */
+    protected function firstFilled(array $row, array $keys)
+    {
+        foreach ($keys as $k) {
+            $value = isset($row[$k]) ? trim((string) $row[$k]) : '';
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     /**

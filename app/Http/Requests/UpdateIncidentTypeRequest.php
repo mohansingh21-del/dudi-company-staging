@@ -18,7 +18,7 @@ class UpdateIncidentTypeRequest extends FormRequest
     public function rules()
     {
 
-        $id = $this->route('id');
+        $id = $this->route('incident_type') ?? $this->route('id');
 
 
         return [
@@ -29,7 +29,7 @@ class UpdateIncidentTypeRequest extends FormRequest
 
                 'string',
 
-                'max:255',
+                'max:200',
 
                 Rule::unique(
                     'incident_types',
@@ -48,7 +48,7 @@ class UpdateIncidentTypeRequest extends FormRequest
         return [
             'incident_type.required' => 'Incident type is required.',
             'incident_type.unique' => 'Incident type already exists.',
-            'incident_type.max' => 'Incident type cannot be longer than 255 characters.',
+            'incident_type.max' => 'Incident type cannot be longer than 200 characters.',
             'description.max' => 'Description cannot be longer than 5000 characters.',
         ];
     }

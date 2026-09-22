@@ -235,6 +235,15 @@ class HolidayController extends Controller
             'status' => 'required|in:0,1'
         ]);
 
+        // A holiday that has already passed is part of attendance/payroll history,
+        // so it cannot be deactivated.
+        if (!$request->status && $dept->holiday_date && $dept->holiday_date->lt(now()->startOfDay())) {
+            return response()->json([
+                'status' => 422,
+                'message' => 'Past date holiday cannot be deactivated'
+            ], 422);
+        }
+
         $dept->is_active = $request->status ? 1 : 0;
         $dept->save();
 
