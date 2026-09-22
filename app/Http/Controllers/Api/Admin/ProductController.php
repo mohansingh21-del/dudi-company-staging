@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Product;
+use App\Models\ServiceSparePart;
 use App\Http\Requests\StoreProductRequest;
 use App\Http\Requests\UpdateProductRequest;
 use App\Http\Resources\ProductResource;
@@ -201,13 +202,28 @@ class ProductController extends Controller
                 ], 404);
             }
 
-            // A product still stocked at any store can't be switched off —
-            // its inventory rows would be left pointing at a hidden product.
-            if ($product->is_active && $product->inventories()->exists()) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'This product cannot be deactivated because it exists in inventory.'
-                ], 422);
+            // A product can only be switched off once nothing depends on it:
+            // no stock left at any store, never issued to an employee and never
+            // used as a spare part on a service record.
+            if ($product->is_active) {
+                $blockedBy = null;
+
+                if ($product->inventories()->where('left_quantity', '>', 0)->exists()) {
+                    $blockedBy = 'it still has stock in inventory';
+                } elseif ($product->assignments()->exists()) {
+                    $blockedBy = 'it is assigned to an employee';
+                } elseif (ServiceSparePart::whereHas('inventory', function ($q) use ($product) {
+                    $q->where('product_id', $product->id);
+                })->exists()) {
+                    $blockedBy = 'it is used in a service record';
+                }
+
+                if ($blockedBy) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => "This product cannot be deactivated because {$blockedBy}."
+                    ], 422);
+                }
             }
 
             $product->is_active = $product->is_active ? 0 : 1;

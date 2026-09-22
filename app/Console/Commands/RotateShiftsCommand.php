@@ -81,7 +81,7 @@ class RotateShiftsCommand extends Command
         DB::transaction(function () use ($activeSequence, $weekStart, $weekEnd, $force, $today, $rotatingRelays) {
             // Step 0: Capture who is held back BEFORE Step 1 expires the overrides
             // that may be what currently puts them on their shift.
-            $heldShifts = $this->heldEmployeeShifts($rotatingRelays, $weekStart);
+            $heldShifts = $this->heldEmployeeShifts($rotatingRelays);
 
             // Step 1: Expire all open-ended overrides (from previous weeks)
             $yesterday = $today->copy()->subDay()->toDateString();
@@ -157,7 +157,7 @@ class RotateShiftsCommand extends Command
      * Shift Rotation module refuses to change them. They rejoin their relay's
      * rotation on the first run after the plan is closed.
      */
-    private function heldEmployeeShifts($rotatingRelays, string $weekStart)
+    private function heldEmployeeShifts($rotatingRelays)
     {
         $deployments = ShiftWorkforceDeployment::active()
             ->whereHas('shiftPlan', function ($q) {
@@ -168,14 +168,20 @@ class RotateShiftsCommand extends Command
             })
             ->with(['employee', 'shiftPlan'])
             ->get()
+            ->sortByDesc(function ($deployment) {
+                return $deployment->shiftPlan->planning_date;
+            })
             ->unique('employee_id');
 
-        // The shift they are on as of the last day of the outgoing week.
-        $lastDay = Carbon::parse($weekStart)->subDay()->toDateString();
         $held = [];
 
         foreach ($deployments as $deployment) {
-            $shiftId = $deployment->employee->getShiftIdForDate($lastDay);
+            // Hold them on the shift of the plan they are standing on. A borrowed
+            // employee works another relay's plan, so keep their own shift as it
+            // resolved on that date instead.
+            $shiftId = $deployment->is_borrowed
+                ? $deployment->employee->getShiftIdForDate($deployment->shiftPlan->planning_date->toDateString())
+                : $deployment->shiftPlan->shift_id;
             if (!$shiftId) {
                 continue;
             }

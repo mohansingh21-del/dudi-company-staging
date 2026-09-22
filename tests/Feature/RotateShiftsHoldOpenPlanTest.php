@@ -178,6 +178,34 @@ class RotateShiftsHoldOpenPlanTest extends TestCase
         $this->assertEquals($this->shiftMorning->id, $held->fresh()->getShiftIdForDate('2026-09-22'));
     }
 
+    public function test_mid_week_forced_run_holds_employee_on_the_open_plans_shift()
+    {
+        // The Sunday run already moved the relay Morning -> Night for this week.
+        RelayShiftMapping::create([
+            'week_start_date' => '2026-09-21',
+            'week_end_date' => '2026-09-27',
+            'relay_id' => $this->relay->id,
+            'shift_id' => $this->shiftNight->id,
+        ]);
+
+        $held = $this->makeEmployee('EMP001');
+        $plan = $this->deployOnPlan($held, 'in_progress', 'SP-OPEN');
+        $plan->update(['planning_date' => '2026-09-22', 'shift_id' => $this->shiftNight->id]);
+
+        // A hold left behind by an earlier run on the wrong shift is corrected.
+        EmployeeShiftOverride::create([
+            'employee_id' => $held->id,
+            'effective_from' => '2026-09-21',
+            'shift_id' => $this->shiftMorning->id,
+            'reason' => RotateShiftsCommand::HOLD_REASON,
+        ]);
+
+        $this->artisan('roster:rotate --force')->assertExitCode(0);
+
+        $this->assertEquals($this->shiftNight->id, $held->fresh()->getShiftIdForDate('2026-09-23'));
+        $this->assertEquals($this->shiftNight->id, $held->fresh()->shift_id);
+    }
+
     public function test_held_employee_rejoins_relay_after_plan_is_closed()
     {
         $held = $this->makeEmployee('EMP001');
