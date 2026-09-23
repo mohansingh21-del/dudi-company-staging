@@ -206,6 +206,29 @@ class RotateShiftsHoldOpenPlanTest extends TestCase
         $this->assertEquals($this->shiftNight->id, $held->fresh()->shift_id);
     }
 
+    public function test_hold_is_released_in_the_same_week_once_the_plan_is_closed()
+    {
+        $held = $this->makeEmployee('EMP001');
+        $plan = $this->deployOnPlan($held, 'in_progress', 'SP-OPEN');
+
+        $this->artisan('roster:rotate')->assertExitCode(0);
+        $this->assertEquals($this->shiftMorning->id, $held->fresh()->shift_id);
+
+        // Plan closed the next day, then the command is run again.
+        $plan->update(['status' => 'completed']);
+        Carbon::setTestNow('2026-09-24 10:00:00');
+        $this->artisan('roster:rotate --force')->assertExitCode(0);
+
+        // Relay went Morning -> Night -> Evening across the two runs; the employee
+        // follows it again from today, and the days already worked keep their shift.
+        $this->assertEquals($this->shiftEvening->id, $held->fresh()->shift_id);
+        $this->assertEquals($this->shiftMorning->id, $held->fresh()->getShiftIdForDate('2026-09-23'));
+        $this->assertDatabaseHas('employee_shift_assignments', [
+            'employee_id' => $held->id,
+            'shift_id' => $this->shiftEvening->id,
+        ]);
+    }
+
     public function test_held_employee_rejoins_relay_after_plan_is_closed()
     {
         $held = $this->makeEmployee('EMP001');
@@ -218,7 +241,9 @@ class RotateShiftsHoldOpenPlanTest extends TestCase
 
         $this->artisan('roster:rotate')->assertExitCode(0);
 
-        // Relay moved Night -> Evening; the employee follows it again.
-        $this->assertEquals($this->shiftEvening->id, $held->fresh()->getShiftIdForDate('2026-09-29'));
+        // Relay moved Night -> Evening; the employee follows it again from today.
+        // The hold ran until yesterday, so 09-29 still resolves to the held shift.
+        $this->assertEquals($this->shiftEvening->id, $held->fresh()->getShiftIdForDate('2026-09-30'));
+        $this->assertEquals($this->shiftMorning->id, $held->fresh()->getShiftIdForDate('2026-09-29'));
     }
 }

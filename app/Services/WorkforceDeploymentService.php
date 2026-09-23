@@ -732,9 +732,11 @@ class WorkforceDeploymentService
             $processedEmployeeIds[] = $emp->id;
         }
 
-        // 2. Add borrowed employees (both active and removed)
+        // 2. Add borrowed employees — active ones only. A borrowed employee who has
+        // been removed no longer belongs to this shift, so they drop off the list
+        // entirely (unlike home employees, who stay on with status 'Removed').
         foreach ($allDeployments as $dep) {
-            if ($dep->is_borrowed && !in_array($dep->employee_id, $processedEmployeeIds)) {
+            if ($dep->is_borrowed && $dep->status === 'active' && !in_array($dep->employee_id, $processedEmployeeIds)) {
                 if ($dep->employee) {
                     $unifiedEmployees->push($dep->employee);
                     $processedEmployeeIds[] = $dep->employee_id;

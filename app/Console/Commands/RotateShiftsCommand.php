@@ -138,7 +138,7 @@ class RotateShiftsCommand extends Command
             }
 
             // Step 3: Keep held employees on their current shift for the new week
-            $this->holdEmployees($heldShifts, $weekStart);
+            $this->holdEmployees($heldShifts, $weekStart, $today);
 
             // Step 4: Sync employee_shift_assignments for backward compatibility
             $this->syncEmployeeAssignments($weekStart, array_keys($heldShifts));
@@ -201,8 +201,10 @@ class RotateShiftsCommand extends Command
      * employee. It outranks the relay mapping, and Step 1 of the next run expires
      * it so they are re-evaluated every week.
      */
-    private function holdEmployees(array $heldShifts, string $weekStart)
+    private function holdEmployees(array $heldShifts, string $weekStart, Carbon $today)
     {
+        $this->releaseHolds($heldShifts, $weekStart, $today);
+
         foreach ($heldShifts as $employeeId => $shiftId) {
             // A deliberate override already planned for the new week wins.
             $planned = EmployeeShiftOverride::where('employee_id', $employeeId)
@@ -226,6 +228,37 @@ class RotateShiftsCommand extends Command
                     'shift_id' => $shiftId,
                 ]
             );
+        }
+    }
+
+    /**
+     * Drop this week's holds for employees who are no longer standing on an open
+     * plan — their plan was closed after the hold was written.
+     *
+     * Step 1 only expires overrides from earlier weeks, so a hold written this week
+     * would otherwise keep outranking the relay mapping and park the employee off
+     * the rotation. Days already worked under the hold keep resolving to the held
+     * shift; from today they follow their relay again.
+     */
+    private function releaseHolds(array $heldShifts, string $weekStart, Carbon $today)
+    {
+        $stale = EmployeeShiftOverride::where('reason', self::HOLD_REASON)
+            ->where('effective_from', '>=', $weekStart)
+            ->whereNull('effective_until')
+            ->whereNotIn('employee_id', array_keys($heldShifts))
+            ->get();
+
+        foreach ($stale as $override) {
+            $endsOn = $today->copy()->subDay()->toDateString();
+
+            // Held only for days that have not started yet — nothing to preserve.
+            if ($endsOn < $weekStart) {
+                $override->delete();
+            } else {
+                $override->update(['effective_until' => $endsOn]);
+            }
+
+            $this->line("Employee #{$override->employee_id}: shift plan closed, hold released.");
         }
     }
 
