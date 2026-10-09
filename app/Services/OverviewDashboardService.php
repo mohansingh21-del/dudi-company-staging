@@ -98,9 +98,9 @@ class OverviewDashboardService
             })
             ->whereBetween('date', [$from, $to])
             ->selectRaw('
-                COUNT(*) as count,
+                COALESCE(SUM(CASE WHEN severity IN (?, ?) THEN 1 ELSE 0 END), 0) as count,
                 COALESCE(SUM(downtime_minutes), 0) as total_downtime_minutes
-            ')
+            ', ['HIGH', 'CRITICAL'])
             ->first();
 
         $breakdownsCount = (int) $breakdowns->count;
@@ -380,7 +380,7 @@ class OverviewDashboardService
                 dispatch_trips.shift_id,
                 COALESCE(shifts.minimum_working_hours, 8) as shift_hours,
                 SUM(dispatch_trips.quantity_bcm) as total_bcm,
-                COUNT(dispatch_trips.id) as total_trips
+                COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips
             ')
             ->get();
 

@@ -18,12 +18,26 @@ class StoreBulkEmployeeWageRequest extends FormRequest
     }
 
     /**
-     * The duplicate check compares effective_from against a date column, so
-     * normalise it first — otherwise a differently formatted date slips past
-     * and silently overwrites the revision already held for that day.
+     * The existing revision is matched on effective_from against a date
+     * column, so normalise it first — otherwise a differently formatted date
+     * misses the revision already held for that day.
      */
     protected function prepareForValidation()
     {
+        // Form-data and query strings send "true"/"false", which the boolean
+        // rule rejects.
+        foreach (['overwrite', 'is_active'] as $flag) {
+            if (!$this->filled($flag)) {
+                continue;
+            }
+
+            $value = filter_var($this->input($flag), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+            if ($value !== null) {
+                $this->merge([$flag => $value]);
+            }
+        }
+
         if (!$this->filled('effective_from')) {
             return;
         }
@@ -43,9 +57,8 @@ class StoreBulkEmployeeWageRequest extends FormRequest
             'effective_from' => 'required|date',
             'is_active' => 'nullable|boolean',
 
-            // Saving over a revision that already exists is a deliberate edit,
-            // not something a create should do by accident, so the caller has
-            // to say so. Without it a clash is rejected below.
+            // Accepted for older clients only: a submit for a date that already
+            // carries a revision always updates it, flag or no flag.
             'overwrite' => 'nullable|boolean',
 
             'rates' => 'required|array|min:1|max:' . count(EmployeeWage::SKILL_CATEGORIES),
@@ -62,33 +75,6 @@ class StoreBulkEmployeeWageRequest extends FormRequest
             'rates.*.dearness_allowance' => 'required|numeric|min:0',
             'rates.*.overtime_rate' => 'nullable|numeric|min:0',
         ];
-    }
-
-    /**
-     * A revision already stored under the submitted date would be overwritten
-     * silently, so reject it unless the caller asked for that.
-     */
-    public function withValidator($validator)
-    {
-        $validator->after(function ($validator) {
-            if ($validator->errors()->isNotEmpty() || $this->boolean('overwrite')) {
-                return;
-            }
-
-            $clashing = $this->clashingCategories();
-
-            if ($clashing->isEmpty()) {
-                return;
-            }
-
-            $validator->errors()->add(
-                'effective_from',
-                'A wage revision already exists from ' . $this->effectiveFromLabel() . ' for '
-                    . $clashing->map(fn ($category) => ucwords(str_replace('_', '-', $category), '-'))
-                        ->join(', ', ' and ')
-                    . '. Edit that revision, or pick a different effective date.'
-            );
-        });
     }
 
     /**
@@ -110,15 +96,6 @@ class StoreBulkEmployeeWageRequest extends FormRequest
             ->whereIn('skill_category', $categories->all())
             ->whereDate('effective_from', $this->effective_from)
             ->pluck('skill_category');
-    }
-
-    private function effectiveFromLabel(): string
-    {
-        try {
-            return \Carbon\Carbon::parse($this->effective_from)->format('d M Y');
-        } catch (\Throwable $th) {
-            return (string) $this->effective_from;
-        }
     }
 
     public function messages(): array

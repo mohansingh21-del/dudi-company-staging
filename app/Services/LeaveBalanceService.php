@@ -429,6 +429,33 @@ class LeaveBalanceService
     }
 
     /**
+     * Guard against leave dated before the employee was on the rolls.
+     *
+     * Nothing compared the leave dates with joining_date, so a leave could be
+     * filed (and approved into attendance) for days the employee had not yet
+     * joined. An employee with no joining date on record is not refused.
+     *
+     * Returns null when the leave may be filed, or the refusal message.
+     */
+    public static function beforeJoiningMessage(int $employeeId, string $fromDate): ?string
+    {
+        $employee = Employee::select('id', 'joining_date')->find($employeeId);
+
+        if (! $employee || ! $employee->joining_date) {
+            return null;
+        }
+
+        $joining = Carbon::parse($employee->joining_date)->startOfDay();
+
+        if (Carbon::parse($fromDate)->startOfDay()->gte($joining)) {
+            return null;
+        }
+
+        return 'Leave cannot be applied for a date before the employee\'s date of joining ('
+            . $joining->format('d/m/Y') . ').';
+    }
+
+    /**
      * Paid and unpaid leave days per employee for a payroll month.
      *
      * Counted as **distinct calendar dates**, not as a sum of leave lengths.

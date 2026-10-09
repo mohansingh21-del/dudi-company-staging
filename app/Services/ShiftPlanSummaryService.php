@@ -175,7 +175,7 @@ class ShiftPlanSummaryService
         // Calculate top performing equipment
         $dumperSummaryData = DispatchTrip::where('shift_plan_id', $shift->id)
             ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
-            ->selectRaw('COUNT(dispatch_trips.id) as total_trips')
+            ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
@@ -296,9 +296,9 @@ class ShiftPlanSummaryService
         })->values();
 
         foreach ($dumperAllocations as $allocation) {
-            $tripsCount = DispatchTrip::where('shift_plan_id', $shift->id)
+            $tripsCount = (int) DispatchTrip::where('shift_plan_id', $shift->id)
                 ->where('dumper_equipment_id', $allocation->equipment_name_id)
-                ->count();
+                ->sum('total_cycles');
 
             $avgCycleTime = round((float) DispatchTrip::where('shift_plan_id', $shift->id)
                 ->where('dumper_equipment_id', $allocation->equipment_name_id)
@@ -465,7 +465,11 @@ class ShiftPlanSummaryService
 
         $avgCycleTime = round((float) DispatchTrip::where('shift_plan_id', $shift->id)->avg('cycle_time_minutes'), 1);
 
-        $avgPayloadBcm = round((float) DispatchTrip::where('shift_plan_id', $shift->id)->avg('quantity_bcm'), 2);
+        $payloadTotals = DispatchTrip::where('shift_plan_id', $shift->id)
+            ->selectRaw('COALESCE(SUM(quantity_bcm), 0) as total_bcm, COALESCE(SUM(total_cycles), 0) as total_trips')
+            ->first();
+        $payloadTrips = (int) $payloadTotals->total_trips;
+        $avgPayloadBcm = $payloadTrips > 0 ? round((float) $payloadTotals->total_bcm / $payloadTrips, 2) : 0.00;
 
         return [
             'active_dumpers_count' => $activeDumpersCount,

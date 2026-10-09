@@ -187,6 +187,24 @@ class LeaveController extends Controller
             ]);
         }
 
+        // Backstop for the joining-date rule: leaves filed before it existed can
+        // still be sitting pending, and approving one would write attendance for
+        // days the employee was not yet on the rolls.
+        if ($request->status === 'approved') {
+
+            $joiningMessage = \App\Services\LeaveBalanceService::beforeJoiningMessage(
+                $leave->employee_id,
+                Carbon::parse($leave->from_date)->format('Y-m-d')
+            );
+
+            if ($joiningMessage) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $joiningMessage
+                ], 422);
+            }
+        }
+
         // Backstop for the monthly Compensatory Rest cap. Applying already
         // enforces it, but leaves that predate the rule or came in through the
         // bulk sheet can still be sitting pending, and approving them should not

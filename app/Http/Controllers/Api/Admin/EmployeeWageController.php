@@ -271,9 +271,9 @@ class EmployeeWageController extends Controller
      * The whole Form B header in one submit: every skill category for a single
      * revision date.
      *
-     * Re-submitting a date that already carries a revision is rejected, so a
-     * rate is never overwritten by accident. The load-edit-save-again flow
-     * passes overwrite=true to say the replacement is deliberate.
+     * Re-submitting a date that already carries a revision updates it in
+     * place, which is how the load-edit-save-again flow works; the response
+     * names the categories it replaced.
      */
     public function bulkStore(StoreBulkEmployeeWageRequest $request)
     {

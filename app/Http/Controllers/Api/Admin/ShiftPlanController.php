@@ -293,7 +293,7 @@ class ShiftPlanController extends Controller
             if ($result['status'] !== 200) {
                 return response()->json([
                     'status' => $result['status'],
-                    'message' => $result['message'],
+                    'message' => $result['message'],                                                
                     'data' => [],
                 ], $result['status']);
             }

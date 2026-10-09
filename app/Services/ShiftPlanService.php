@@ -119,22 +119,7 @@ class ShiftPlanService
             ? round(($totalActualBcm / $totalTargetBcm) * 100)
             : 0;
 
-        $shiftIds = $statsQuery->pluck('shift_id')->unique()->toArray();
-        $activePersonnel = 0;
-        if (!empty($shiftIds)) {
-            $activePersonnel = \App\Models\EmployeeShiftAssignment::whereIn('shift_id', $shiftIds)
-                ->where(function ($q) use ($startDate, $endDate) {
-                    $startStr = $startDate->format('Y-m-d');
-                    $endStr = $endDate->format('Y-m-d');
-                    $q->where('from_date', '<=', $endStr)
-                        ->where(function ($sub) use ($startStr) {
-                            $sub->whereNull('to_date')
-                                ->orWhere('to_date', '>=', $startStr);
-                        });
-                })
-                ->distinct('employee_id')
-                ->count('employee_id');
-        }
+        $activePersonnel = $this->countActivePersonnel($statsQuery);
 
         $paginated = $query->latest('planning_date')->paginate($limit);
 
@@ -520,23 +505,7 @@ class ShiftPlanService
             ? round(($totalActualBcm / $totalTargetBcm) * 100)
             : 0;
 
-        // Get unique shifts in this query to calculate active personnel
-        $shiftIds = $query->pluck('shift_id')->unique()->toArray();
-        $activePersonnel = 0;
-        if (!empty($shiftIds)) {
-            $activePersonnel = \App\Models\EmployeeShiftAssignment::whereIn('shift_id', $shiftIds)
-                ->where(function ($q) use ($startDate, $endDate) {
-                    $startStr = $startDate->format('Y-m-d');
-                    $endStr = $endDate->format('Y-m-d');
-                    $q->where('from_date', '<=', $endStr)
-                        ->where(function ($sub) use ($startStr) {
-                            $sub->whereNull('to_date')
-                                ->orWhere('to_date', '>=', $startStr);
-                        });
-                })
-                ->distinct('employee_id')
-                ->count('employee_id');
-        }
+        $activePersonnel = $this->countActivePersonnel($query);
 
         $limit = $filters['limit'] ?? 10;
         $shiftPlans = $query->with(['shift', 'site', 'supervisor', 'siteIncharge', 'creator'])
@@ -553,6 +522,26 @@ class ShiftPlanService
             ],
             'shift_plans' => $shiftPlans,
         ];
+    }
+
+    /**
+     * Count distinct employees actively deployed (regular + borrowed) on the given shift plans.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return int
+     */
+    protected function countActivePersonnel($query)
+    {
+        $planIds = (clone $query)->pluck('id');
+
+        if ($planIds->isEmpty()) {
+            return 0;
+        }
+
+        return \App\Models\ShiftWorkforceDeployment::whereIn('shift_plan_id', $planIds)
+            ->active()
+            ->distinct()
+            ->count('employee_id');
     }
 
     /**
@@ -714,6 +703,22 @@ class ShiftPlanService
             $q->whereRaw('LOWER(name) = ?', ['excavator']);
         })->exists();
 
+        $hasDumper = $shiftPlan->equipmentAllocations()->whereHas('equipmentName.equipment', function ($q) {
+            $q->whereRaw('LOWER(name) = ?', ['dumper']);
+        })->exists();
+
+        $equipmentAllocated = $hasExcavator && $hasDumper;
+
+        if ($equipmentAllocated) {
+            $equipmentMessage = 'At least one Excavator and one Dumper allocated.';
+        } elseif (!$hasExcavator && !$hasDumper) {
+            $equipmentMessage = 'At Least One Excavator And One Dumper Must Be Allocated.';
+        } elseif (!$hasExcavator) {
+            $equipmentMessage = 'At Least One Excavator Must Be Allocated.';
+        } else {
+            $equipmentMessage = 'At Least One Dumper Must Be Allocated.';
+        }
+
         $hasWorkforce = $shiftPlan->workforceDeployments()->active()->exists();
         $supervisorAssigned = !is_null($shiftPlan->supervisor_id);
         $siteInchargeAssigned = !is_null($shiftPlan->site_incharge_id);
@@ -721,7 +726,7 @@ class ShiftPlanService
         $planningDateReached = $shiftPlan->planning_date->lte(\Carbon\Carbon::today());
 
         $canPublish = $preconditionPassed
-            && $hasExcavator
+            && $equipmentAllocated
             && $hasWorkforce
             && $supervisorAssigned
             && $siteInchargeAssigned
@@ -741,8 +746,8 @@ class ShiftPlanService
                         'message' => $preconditionPassed ? 'Shift is in Draft status.' : 'Shift plan must be in Draft status to be published.'
                     ],
                     'equipment_allocated' => [
-                        'status' => $hasExcavator,
-                        'message' => $hasExcavator ? 'At least one Excavator allocated.' : 'At Least One Excavator Must Be Allocated.'
+                        'status' => $equipmentAllocated,
+                        'message' => $equipmentMessage
                     ],
                     'workforce_deployed' => [
                         'status' => $hasWorkforce,

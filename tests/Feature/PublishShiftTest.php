@@ -275,6 +275,79 @@ class PublishShiftTest extends TestCase
         ]);
     }
 
+    private function allocateDumper(ShiftPlan $shiftPlan)
+    {
+        $dumperCategory = Equipment::create(['name' => 'Dumper', 'is_active' => 1]);
+        $dumperMachine = EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DP-01',
+            'is_active' => 1,
+        ]);
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $dumperMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+    }
+
+    public function test_publish_fails_if_only_excavator_allocated()
+    {
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => \Carbon\Carbon::now()->format('Y-m-d'),
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'draft',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TEST-001'
+        ]);
+
+        // Allocate Excavator only, no Dumper
+        $excavatorCategory = Equipment::create(['name' => 'Excavator', 'is_active' => 1]);
+        $excavatorMachine = EquipmentName::create([
+            'equipment_id' => $excavatorCategory->id,
+            'equipment_name' => 'EX-01',
+            'is_active' => 1,
+        ]);
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $excavatorMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        ShiftWorkforceDeployment::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'employee_id' => $this->supervisorEmployee->id,
+            'relay_shift' => 'relay_1',
+            'designation' => 'Supervisor',
+            'is_borrowed' => false,
+            'deployed_by' => $this->adminUser->id,
+            'status' => 'active',
+        ]);
+
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/publish");
+
+        $response->assertStatus(422);
+        $response->assertJson([
+            'data' => [
+                'can_publish' => false,
+                'validations' => [
+                    'equipment_allocated' => [
+                        'status' => false,
+                        'message' => 'At Least One Dumper Must Be Allocated.',
+                    ]
+                ]
+            ]
+        ]);
+        $this->assertEquals('draft', $shiftPlan->fresh()->status);
+    }
+
     public function test_publish_succeeds_when_all_conditions_met()
     {
         $planningDate = \Carbon\Carbon::now()->format('Y-m-d');
@@ -305,6 +378,8 @@ class PublishShiftTest extends TestCase
             'allocated_by' => $this->adminUser->id,
             'allocation_time' => now(),
         ]);
+
+        $this->allocateDumper($shiftPlan);
 
         // Deploy workforce
         ShiftWorkforceDeployment::create([
@@ -372,6 +447,8 @@ class PublishShiftTest extends TestCase
             'allocated_by' => $this->adminUser->id,
             'allocation_time' => now(),
         ]);
+
+        $this->allocateDumper($shiftPlan);
 
         // Deploy workforce
         ShiftWorkforceDeployment::create([

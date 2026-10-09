@@ -84,6 +84,20 @@ public function withValidator($validator)
             return;
         }
 
+        // A leave cannot start before the employee joined. Rejecting a leave that
+        // predates the rule stays possible, so a bad entry can still be closed out.
+        $joiningMessage = $this->status === 'rejected' ? null : \App\Services\LeaveBalanceService::beforeJoiningMessage(
+            (int) $this->employee_id,
+            $this->from_date
+        );
+
+        if ($joiningMessage) {
+
+            $validator->errors()->add('from_date', $joiningMessage);
+
+            return;
+        }
+
         $leaveId = $this->route('leave')?->id
             ?? $this->route('leave');
 

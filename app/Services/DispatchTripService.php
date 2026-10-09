@@ -115,7 +115,7 @@ class DispatchTripService
 
         // 1. KPI cards
         $kpiQuery = clone $query;
-        $totalTrips = $kpiQuery->count();
+        $totalTrips = $kpiQuery->sum('total_cycles');
         $totalQuantityBcm = $kpiQuery->sum('quantity_bcm');
         $averageCycleTimeMinutes = $kpiQuery->avg('cycle_time_minutes');
         $activeDumpers = $kpiQuery->distinct()->count('dumper_equipment_id');
@@ -231,7 +231,7 @@ class DispatchTripService
 
         // Calculate KPI summary against the SAME filtered query
         $summaryQuery = clone $query;
-        $totalTrips = $summaryQuery->count();
+        $totalTrips = $summaryQuery->sum('total_cycles');
         $totalQuantityBcm = $summaryQuery->sum('quantity_bcm');
         $averageCycleTimeMinutes = $summaryQuery->avg('cycle_time_minutes');
         $activeDumpers = $summaryQuery->distinct()->count('dumper_equipment_id');
@@ -239,7 +239,7 @@ class DispatchTripService
         // Fetch aggregation group by dumper for top performer KPIs
         $dumperSummaryData = (clone $summaryQuery)
             ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
-            ->selectRaw('COUNT(dispatch_trips.id) as total_trips')
+            ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(dispatch_trips.total_cycles) as sum_total_cycles')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
@@ -527,7 +527,7 @@ class DispatchTripService
         // Fetch aggregation group by dumper
         $dumperSummaryData = (clone $query)
             ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
-            ->selectRaw('COUNT(dispatch_trips.id) as total_trips')
+            ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(dispatch_trips.total_cycles) as sum_total_cycles')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
@@ -621,7 +621,7 @@ class DispatchTripService
         // Fetch dumper list and core statistics
         $dumperSummaryData = (clone $query)
             ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
-            ->selectRaw('COUNT(dispatch_trips.id) as total_trips')
+            ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->selectRaw('SUM(distance_meters) as distance_covered_meters')

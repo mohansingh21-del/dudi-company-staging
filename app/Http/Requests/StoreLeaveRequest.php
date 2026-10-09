@@ -70,6 +70,19 @@ public function withValidator($validator)
             return;
         }
 
+        // A leave cannot start before the employee joined.
+        $joiningMessage = \App\Services\LeaveBalanceService::beforeJoiningMessage(
+            (int) $this->employee_id,
+            $this->from_date
+        );
+
+        if ($joiningMessage) {
+
+            $validator->errors()->add('from_date', $joiningMessage);
+
+            return;
+        }
+
         // Overlap, not just an exact date match. Matching only on identical
         // from/to let an employee be booked on two different blocks for the same
         // days, which double-counts on the register.
