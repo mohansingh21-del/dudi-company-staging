@@ -19,6 +19,34 @@ class Employee extends Model
         'is_active' => 'boolean',
     ];
 
+    protected static function booted()
+    {
+        // Assignments and overrides are only ever created while the employee is
+        // on a rotating relay, so the open ones belong to the relay being left.
+        // End them the day before the move: earlier dates keep resolving to the
+        // old shift, and the new relay starts from its own mapping (or no shift).
+        static::updated(function ($employee) {
+            if (!$employee->wasChanged('relay_id')) {
+                return;
+            }
+
+            $today = now()->toDateString();
+            $yesterday = now()->subDay()->toDateString();
+
+            EmployeeShiftAssignment::where('employee_id', $employee->id)
+                ->where(function ($q) use ($today) {
+                    $q->whereNull('to_date')->orWhere('to_date', '>=', $today);
+                })
+                ->update(['to_date' => $yesterday]);
+
+            EmployeeShiftOverride::where('employee_id', $employee->id)
+                ->where(function ($q) use ($today) {
+                    $q->whereNull('effective_until')->orWhere('effective_until', '>=', $today);
+                })
+                ->update(['effective_until' => $yesterday]);
+        });
+    }
+
     public function relay()
     {
         return $this->belongsTo(Relay::class, 'relay_id');
@@ -90,6 +118,13 @@ class Employee extends Model
 
         if ($assignment) {
             return $assignment->shift_id;
+        }
+
+        // An ended assignment (relay change) says nothing about later dates, so
+        // the open-ended fallbacks below must not carry its shift forward.
+        $latestAssignment = $assignments->sortByDesc('id')->first();
+        if ($latestAssignment && $latestAssignment->to_date && $dateStr > $latestAssignment->to_date) {
+            return null;
         }
 
         $nextChange = EmployeeShiftHistory::where('employee_id', $this->id)
@@ -167,10 +202,11 @@ class Employee extends Model
             }
         }
 
-        // 3. Fallback to legacy current shift assignment
-        $assignmentShiftId = optional($this->currentShiftAssignment)->shift_id;
-        if ($assignmentShiftId) {
-            return $assignmentShiftId;
+        // 3. Fallback to legacy current shift assignment, unless it has ended
+        $assignment = $this->currentShiftAssignment;
+        if ($assignment && $assignment->shift_id
+            && (is_null($assignment->to_date) || $assignment->to_date >= now()->toDateString())) {
+            return $assignment->shift_id;
         }
 
         return null;

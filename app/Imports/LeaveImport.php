@@ -113,6 +113,21 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
+            // Same present-and-deployed gate as the apply form.
+            $deployedMessage = \App\Services\AttendanceLeaveSync::deployedPresentMessage(
+                $employee->id,
+                $fromDate->toDateString(),
+                $toDate->toDateString()
+            );
+
+            if ($deployedMessage) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Employee {$employee->employee_code}: {$deployedMessage}"
+                ];
+                continue;
+            }
+
             // Same monthly Compensatory Rest cap as the apply form. Rows are
             // created as the sheet is walked, so an earlier row in this same
             // upload is already counted by the time a later one is checked.

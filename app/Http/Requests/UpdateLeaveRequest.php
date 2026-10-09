@@ -98,6 +98,21 @@ public function withValidator($validator)
             return;
         }
 
+        // A day the employee was present on and deployed in a shift's workforce
+        // cannot be taken as leave. Rejecting stays possible.
+        $deployedMessage = $this->status === 'rejected' ? null : \App\Services\AttendanceLeaveSync::deployedPresentMessage(
+            (int) $this->employee_id,
+            $this->from_date,
+            $this->to_date
+        );
+
+        if ($deployedMessage) {
+
+            $validator->errors()->add('from_date', $deployedMessage);
+
+            return;
+        }
+
         $leaveId = $this->route('leave')?->id
             ?? $this->route('leave');
 

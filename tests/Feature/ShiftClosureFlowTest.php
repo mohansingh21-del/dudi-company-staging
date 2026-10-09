@@ -263,16 +263,7 @@ class ShiftClosureFlowTest extends TestCase
         ]);
         $response->assertStatus(201);
 
-        // 7. Attendance
-        AttendanceProcessed::create([
-            'shift_id' => $this->shift->id,
-            'date' => '2026-07-02',
-            'employee_id' => $this->supervisorEmp->id,
-            'status' => 'present',
-        ]);
-
-        // 8. Close Shift with verified checklist
-        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlanId}/close", [
+        $closePayload = [
             'supervisor_remarks' => 'This is a long supervisor remark that meets the minimum length requirement.',
             'handover_notes' => 'Some handover notes',
             'closure_confirmed' => true,
@@ -282,7 +273,41 @@ class ShiftClosureFlowTest extends TestCase
             'breakdown_logs_updated' => true,
             'production_data_available' => true,
             'safety_data_reviewed' => true,
+        ];
+
+        $deployedEmployeeIds = ShiftWorkforceDeployment::where('shift_plan_id', $shiftPlanId)
+            ->active()
+            ->pluck('employee_id')
+            ->all();
+        $this->assertGreaterThan(1, count($deployedEmployeeIds));
+
+        // 7. Attendance for all but one deployed employee — closure must stay blocked
+        $pendingEmployeeId = array_pop($deployedEmployeeIds);
+        foreach ($deployedEmployeeIds as $employeeId) {
+            AttendanceProcessed::create([
+                'shift_id' => $this->shift->id,
+                'date' => '2026-07-02',
+                'employee_id' => $employeeId,
+                'attendance_status' => 'present',
+            ]);
+        }
+
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlanId}/close", $closePayload);
+        $response->assertStatus(422);
+        $this->assertStringContainsString('Attendance Records Pending For 1 Deployed Employee(s)', $response->json('message'));
+        $this->assertStringContainsString(Employee::find($pendingEmployeeId)->name, $response->json('message'));
+        $this->assertDatabaseHas('shift_plans', ['id' => $shiftPlanId, 'status' => 'in_progress']);
+
+        // 7b. Attendance for the last one — an absent row still counts as marked
+        AttendanceProcessed::create([
+            'shift_id' => $this->shift->id,
+            'date' => '2026-07-02',
+            'employee_id' => $pendingEmployeeId,
+            'attendance_status' => 'absent',
         ]);
+
+        // 8. Close Shift with verified checklist
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlanId}/close", $closePayload);
 
         $response->assertStatus(200)
             ->assertJsonPath('status', 200)

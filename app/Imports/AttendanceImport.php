@@ -392,6 +392,9 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                     $attendanceStatus,
                     $item['leave_type_id']
                 );
+            } else {
+                // A worked day cancels any leave that covered it.
+                AttendanceLeaveSync::dayLeftLeave($employee->id, $date->format('Y-m-d'), $attendanceStatus);
             }
         }
     }

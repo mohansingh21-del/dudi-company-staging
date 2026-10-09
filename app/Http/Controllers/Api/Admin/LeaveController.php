@@ -133,6 +133,12 @@ class LeaveController extends Controller
             'approved_by' => $request->approved_by,
         ]);
 
+        // A leave filed already approved never passes through approveReject,
+        // so its attendance rows are written here.
+        if ($leave->status === 'approved') {
+            $this->syncAttendanceForLeave($leave);
+        }
+
         return response()->json([
             'status' => 200,
             'message' => 'Leave created successfully',
@@ -205,6 +211,24 @@ class LeaveController extends Controller
             }
         }
 
+        // The employee may have been marked present and deployed on a shift
+        // after the leave was filed; approving would wipe that worked day.
+        if ($request->status === 'approved') {
+
+            $deployedMessage = \App\Services\AttendanceLeaveSync::deployedPresentMessage(
+                $leave->employee_id,
+                Carbon::parse($leave->from_date)->format('Y-m-d'),
+                Carbon::parse($leave->to_date)->format('Y-m-d')
+            );
+
+            if ($deployedMessage) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $deployedMessage
+                ], 422);
+            }
+        }
+
         // Backstop for the monthly Compensatory Rest cap. Applying already
         // enforces it, but leaves that predate the rule or came in through the
         // bulk sheet can still be sitting pending, and approving them should not
@@ -248,8 +272,10 @@ class LeaveController extends Controller
      * Give an approved leave a same-day row in attendance_processeds so the
      * attendance views and payroll read one source instead of two.
      * Compensatory Rest leave lands as 'rest_day', every other leave type as
-     * 'leave'. A day already backed by a real present/half_day record is left
-     * alone — attendance from actual work is not overwritten by a leave.
+     * 'leave'. The leave wins over whatever the day held before, including
+     * present/half_day, and the punches recorded for the day are cleared.
+     * (The reverse — marking the day present afterwards — cancels the leave
+     * for that day, see AttendanceLeaveSync::releaseDay.)
      */
     private function syncAttendanceForLeave(Leave $leave): void
     {
@@ -268,17 +294,12 @@ class LeaveController extends Controller
                 'date' => $day->format('Y-m-d'),
             ]);
 
-            if ($record->exists && in_array($record->attendance_status, ['present', 'half_day'])) {
-                continue;
-            }
-
             $record->fill([
                 'shift_id' => $record->shift_id ?: optional($leave->employee)->shift_id,
                 'attendance_status' => $status,
-                'working_hours' => $record->working_hours ?? 0.00,
-                'late_minutes' => $record->late_minutes ?? 0,
-                'early_exit_minutes' => $record->early_exit_minutes ?? 0,
-            ]);
+                // A day on leave was not worked: drop the punches and
+                // everything derived from them.
+            ] + \App\Services\AttendanceLeaveSync::CLEARED_PUNCHES);
             $record->save();
         }
     }

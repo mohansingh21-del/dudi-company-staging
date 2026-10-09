@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Models\AttendanceProcessed;
 use App\Models\Leave;
 use App\Models\LeaveType;
+use App\Models\ShiftPlan;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 
@@ -27,6 +29,18 @@ class AttendanceLeaveSync
 {
     /** Attendance statuses that must be backed by a Leave row. */
     public const LEAVE_STATUSES = ['leave', 'rest_day'];
+
+    /** What an attendance row's punch columns are reset to when the day becomes leave. */
+    public const CLEARED_PUNCHES = [
+        'check_in' => null,
+        'check_out' => null,
+        'working_hours' => 0.00,
+        'late_minutes' => 0,
+        'early_exit_minutes' => 0,
+    ];
+
+    /** Attendance statuses that mean the employee actually worked the day. */
+    public const WORKED_STATUSES = ['present', 'half_day'];
 
     /**
      * Fold a (status, leaveTypeId) pair to its canonical form before anything
@@ -96,7 +110,7 @@ class AttendanceLeaveSync
     /**
      * Why this day cannot be recorded as leave/rest_day for this employee, or
      * null when it is allowed. Same gates the Leave apply form uses: a configured
-     * quota, no clashing leave on another block, the Compensatory Rest monthly
+     * quota, not present-and-deployed on a shift, no clashing leave on another block, the Compensatory Rest monthly
      * cap and the annual entitlement.
      *
      * A leave that already covers the day on the same block is excluded from the
@@ -108,6 +122,12 @@ class AttendanceLeaveSync
 
         if (! $type->canApply()) {
             return $type->quotaMissingMessage();
+        }
+
+        $deployedMessage = static::deployedPresentMessage($employeeId, $day, $day);
+
+        if ($deployedMessage) {
+            return $deployedMessage;
         }
 
         $sameBlock = static::leaveOnBlock($employeeId, $day, $type->id);
@@ -140,6 +160,53 @@ class AttendanceLeaveSync
         }
 
         return null;
+    }
+
+    /**
+     * Why a leave over [$from, $to] must be refused because the employee worked:
+     * a day in the range is marked present/half_day AND the employee is deployed
+     * in a shift plan's workforce for that day. Null when no such day exists.
+     *
+     * Present alone is not enough — an undeployed present day is simply turned
+     * into leave. Once the employee is on a shift's workforce the day feeds that
+     * shift's manpower and closure figures, so it has to be undone there first
+     * (remove the deployment) before a leave can cover it.
+     */
+    public static function deployedPresentMessage(int $employeeId, string $from, string $to): ?string
+    {
+        $from = Carbon::parse($from)->format('Y-m-d');
+        $to = Carbon::parse($to)->format('Y-m-d');
+
+        $presentDays = AttendanceProcessed::where('employee_id', $employeeId)
+            ->whereIn('attendance_status', static::WORKED_STATUSES)
+            ->whereDate('date', '>=', $from)
+            ->whereDate('date', '<=', $to)
+            ->pluck('date')
+            ->map(fn ($d) => Carbon::parse($d)->format('Y-m-d'))
+            ->all();
+
+        if (empty($presentDays)) {
+            return null;
+        }
+
+        $plan = ShiftPlan::with('shift:id,shift_name')
+            ->whereIn('planning_date', $presentDays)
+            ->whereHas('workforceDeployments', function ($q) use ($employeeId) {
+                $q->where('employee_id', $employeeId)->where('status', 'active');
+            })
+            ->orderBy('planning_date')
+            ->first();
+
+        if (! $plan) {
+            return null;
+        }
+
+        $day = Carbon::parse($plan->planning_date)->format('d-m-Y');
+        $shift = optional($plan->shift)->shift_name;
+
+        return "Leave cannot be applied for {$day}: the employee is marked present and is deployed in "
+            . ($shift ? "the {$shift} shift" : 'a shift') . ' workforce for that day. '
+            . 'Remove them from the shift workforce first.';
     }
 
     /**
@@ -198,8 +265,78 @@ class AttendanceLeaveSync
     }
 
     /**
+     * Take this day out of every leave that covers it, whatever its source.
+     * Used when the day is marked present/half_day: the employee worked, so the
+     * leave for that day is cancelled and stops drawing on the balance.
+     *
+     * A single-day leave is cancelled outright (an attendance-sourced one is
+     * deleted, a hand-filed one is kept as 'rejected' with a note so Leave
+     * Management still shows what happened). A multi-day leave only loses the
+     * one day: it is shortened, or split in two when the day falls mid-range.
+     */
+    public static function releaseDay(int $employeeId, string $date): void
+    {
+        $day = Carbon::parse($date)->format('Y-m-d');
+        $prev = Carbon::parse($day)->subDay()->format('Y-m-d');
+        $next = Carbon::parse($day)->addDay()->format('Y-m-d');
+
+        $leaves = Leave::where('employee_id', $employeeId)
+            ->where('status', '!=', 'rejected')
+            ->whereDate('from_date', '<=', $day)
+            ->whereDate('to_date', '>=', $day)
+            ->get();
+
+        foreach ($leaves as $leave) {
+            $from = Carbon::parse($leave->from_date)->format('Y-m-d');
+            $to = Carbon::parse($leave->to_date)->format('Y-m-d');
+
+            if ($from === $day && $to === $day) {
+                if ($leave->source === 'attendance') {
+                    $leave->delete();
+                } else {
+                    $leave->update([
+                        'status' => 'rejected',
+                        'reason' => trim(($leave->reason ?? '') . " [Cancelled: attendance marked present on {$day}]"),
+                    ]);
+                }
+
+                continue;
+            }
+
+            if ($from === $day) {
+                $leave->update(['from_date' => $next]);
+            } elseif ($to === $day) {
+                $leave->update(['to_date' => $prev]);
+            } else {
+                $tail = $leave->replicate();
+                $tail->from_date = $next;
+                $tail->save();
+
+                $leave->update(['to_date' => $prev]);
+            }
+        }
+    }
+
+    /**
+     * Bring Leave Management in step with a day that is no longer leave/rest_day.
+     * A worked day cancels whatever leave covered it; any other status only
+     * removes the rows attendance itself created.
+     */
+    public static function dayLeftLeave(int $employeeId, string $date, string $attendanceStatus): void
+    {
+        if (in_array($attendanceStatus, static::WORKED_STATUSES, true)) {
+            static::releaseDay($employeeId, $date);
+
+            return;
+        }
+
+        static::clear($employeeId, $date);
+    }
+
+    /**
      * A manual (hand-filed) leave covering this day, if any. The attendance
-     * screens refuse to overwrite one of these with a worked/absent status.
+     * screens refuse to overwrite one of these with 'absent'; a worked status
+     * cancels it instead (see releaseDay).
      */
     public static function manualLeaveOn(int $employeeId, string $date): ?Leave
     {

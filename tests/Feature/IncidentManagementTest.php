@@ -395,5 +395,142 @@ class IncidentManagementTest extends TestCase
             'shift_plan_id' => $shiftPlan->id,
         ]);
     }
-}
 
+    public function test_api_store_incident_succeeds_without_machine_for_worker_incident()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $response = $this->postJson('/api/v1/admin/incidents', [
+            'incident_date' => '16/07/2026 10:00:00',
+            'shift_id' => $this->shift->id,
+            'incident_type_id' => $this->incidentType->id,
+            'severity' => 'MEDIUM',
+            'location_id' => $this->site->id,
+            'person_involved_id' => $this->employee->id,
+            'incident_description' => 'Worker slipped near haul road',
+            'action_taken' => 'First aid given'
+        ]);
+
+        $response->assertStatus(200);
+        $this->assertDatabaseHas('incidents', [
+            'incident_description' => 'Worker slipped near haul road',
+            'person_involved_id' => $this->employee->id,
+            'equipment_id' => null,
+            'equipment_name_id' => null,
+        ]);
+    }
+
+    public function test_api_store_incident_requires_machine_category_when_machine_name_given()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $response = $this->postJson('/api/v1/admin/incidents', [
+            'incident_date' => '16/07/2026 10:00:00',
+            'shift_id' => $this->shift->id,
+            'incident_type_id' => $this->incidentType->id,
+            'severity' => 'MEDIUM',
+            'location_id' => $this->site->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'incident_description' => 'Test description',
+            'action_taken' => 'Test action'
+        ]);
+
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['equipment_id']);
+    }
+
+    public function test_api_update_incident_succeeds_without_machine()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $incident = Incident::create([
+            'incident_no' => 'INC-2026-00001',
+            'incident_date' => '2026-07-16 10:00:00',
+            'shift_id' => $this->shift->id,
+            'incident_type_id' => $this->incidentType->id,
+            'severity' => 'MEDIUM',
+            'location_id' => $this->site->id,
+            'equipment_id' => $this->equipment->id,
+            'equipment_name_id' => $this->equipmentName->id,
+            'incident_description' => 'Original description',
+            'action_taken' => 'Original action',
+            'status' => 'Under Review',
+        ]);
+
+        $response = $this->putJson('/api/v1/admin/incidents/' . $incident->id, [
+            'incident_date' => '16/07/2026 10:00:00',
+            'shift_id' => $this->shift->id,
+            'incident_type_id' => $this->incidentType->id,
+            'severity' => 'MEDIUM',
+            'location_id' => $this->site->id,
+            'person_involved_id' => $this->employee->id,
+            'incident_description' => 'Updated to worker incident',
+            'action_taken' => 'Updated action'
+        ]);
+
+        $response->assertStatus(200);
+        $this->assertDatabaseHas('incidents', [
+            'id' => $incident->id,
+            'incident_description' => 'Updated to worker incident',
+            'equipment_id' => null,
+            'equipment_name_id' => null,
+        ]);
+    }
+
+    public function test_incident_import_succeeds_without_machine_for_worker_incident()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $rows = collect([
+            [
+                'incident_date'        => '16/07/2026',
+                'shift_name'           => 'Day Shift',
+                'incident_type'        => 'Unsafe Act',
+                'severity'             => 'MEDIUM',
+                'site_name'            => 'Pit A',
+                'machine_category'     => '',
+                'machine_name'         => '',
+                'employee_code'        => 'EMP-001',
+                'incident_description' => 'Worker slipped near haul road',
+                'action_taken'         => 'First aid given',
+            ]
+        ]);
+
+        $import = new \App\Imports\IncidentImport();
+        $import->collection($rows);
+
+        $this->assertEquals([], $import->getErrors());
+        $this->assertEquals(1, $import->getSuccessCount());
+        $this->assertDatabaseHas('incidents', [
+            'incident_description' => 'Worker slipped near haul road',
+            'person_involved_id' => $this->employee->id,
+            'equipment_id' => null,
+            'equipment_name_id' => null,
+        ]);
+    }
+
+    public function test_incident_import_requires_machine_category_when_machine_name_given()
+    {
+        Sanctum::actingAs($this->adminUser);
+
+        $rows = collect([
+            [
+                'incident_date'        => '16/07/2026',
+                'shift_name'           => 'Day Shift',
+                'incident_type'        => 'Unsafe Act',
+                'severity'             => 'MEDIUM',
+                'site_name'            => 'Pit A',
+                'machine_category'     => '',
+                'machine_name'         => 'EXC-01',
+                'incident_description' => 'Test description',
+                'action_taken'         => 'Test action',
+            ]
+        ]);
+
+        $import = new \App\Imports\IncidentImport();
+        $import->collection($rows);
+
+        $this->assertEquals(0, $import->getSuccessCount());
+        $this->assertTrue(collect($import->getErrors())->contains(fn($e) => str_contains($e, 'Machine Category is required when Machine Name is provided.')));
+    }
+}

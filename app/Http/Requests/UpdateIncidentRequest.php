@@ -132,12 +132,13 @@ class UpdateIncidentRequest extends FormRequest
             ],
 
             'equipment_id' => [
-                'required',
+                'nullable',
+                'required_with:equipment_name_id',
                 'exists:equipments,id'
             ],
 
             'equipment_name_id' => [
-                'required',
+                'nullable',
                 Rule::exists('equipment_names', 'id')
                     ->where(function ($query) {
                         $query->where(

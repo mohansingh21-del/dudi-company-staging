@@ -868,4 +868,50 @@ class DispatchTripService
 
         return $planningDate . ' ' . $time;
     }
+
+    /**
+     * Check whether a time-of-day (H:i:s) falls inside the shift window of the shift plan.
+     * Handles shifts that cross midnight. Boundaries are inclusive.
+     *
+     * @param string $time
+     * @param ShiftPlan $shiftPlan
+     * @return bool
+     */
+    public static function isTimeWithinShift($time, ShiftPlan $shiftPlan)
+    {
+        $shift = $shiftPlan->shift;
+
+        if (!$shift || !$shift->start_time || !$shift->end_time) {
+            return true;
+        }
+
+        $shiftStart = substr((string) $shift->start_time, 0, 8);
+        $shiftEnd = substr((string) $shift->end_time, 0, 8);
+
+        if ($shiftEnd <= $shiftStart) {
+            // Shift crosses midnight
+            return $time >= $shiftStart || $time <= $shiftEnd;
+        }
+
+        return $time >= $shiftStart && $time <= $shiftEnd;
+    }
+
+    /**
+     * Build the validation message for a time that is outside the shift window.
+     *
+     * @param string $label
+     * @param ShiftPlan $shiftPlan
+     * @return string
+     */
+    public static function outsideShiftMessage($label, ShiftPlan $shiftPlan)
+    {
+        $shift = $shiftPlan->shift;
+
+        return sprintf(
+            'The %s must be within the shift time (%s - %s).',
+            $label,
+            substr((string) $shift->start_time, 0, 8),
+            substr((string) $shift->end_time, 0, 8)
+        );
+    }
 }

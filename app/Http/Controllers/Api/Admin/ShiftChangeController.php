@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\EmployeeShiftHistoryResource;
+use App\Models\AttendanceProcessed;
 use App\Models\EmployeeShiftAssignment;
 use App\Models\EmployeeShiftHistory;
 use App\Models\EmployeeShiftOverride;
@@ -249,6 +250,10 @@ class ShiftChangeController extends Controller
                 return $blockedResponse;
             }
 
+            if ($blockedResponse = $this->attendanceMarkedResponse($resolvedEmployees)) {
+                return $blockedResponse;
+            }
+
             $resolvedEmployeeIds = $resolvedEmployees->pluck('id')->all();
 
             $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
@@ -357,6 +362,10 @@ class ShiftChangeController extends Controller
                 return $blockedResponse;
             }
 
+            if ($blockedResponse = $this->attendanceMarkedResponse(collect([$employee]))) {
+                return $blockedResponse;
+            }
+
             $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
 
             if (!$newRelayId) {
@@ -448,6 +457,10 @@ class ShiftChangeController extends Controller
                 return $blockedResponse;
             }
 
+            if ($blockedResponse = $this->attendanceMarkedResponse(collect([$employee]))) {
+                return $blockedResponse;
+            }
+
             $newRelayId = $this->resolveRelayIdForShift($targetShiftId);
 
             if (!$newRelayId) {
@@ -518,6 +531,10 @@ class ShiftChangeController extends Controller
             }
 
             if ($blockedResponse = $this->openDeploymentResponse(collect([$employee1, $employee2]))) {
+                return $blockedResponse;
+            }
+
+            if ($blockedResponse = $this->attendanceMarkedResponse(collect([$employee1, $employee2]))) {
                 return $blockedResponse;
             }
 
@@ -978,6 +995,58 @@ class ShiftChangeController extends Controller
             'message' => count($blocked) === 1
                 ? 'Shift cannot be changed. Employee ' . $blocked[0]
                 : 'Shift cannot be changed for ' . count($blocked) . ' of the selected employees.',
+            'data' => ['blocked' => $blocked],
+        ], 422);
+    }
+
+    /**
+     * 422 listing every selected employee whose attendance is already marked for
+     * today, or null when none of them are.
+     *
+     * A shift change takes effect from today, so it would re-point a day that
+     * attendance has already processed against the old shift — late/early minutes,
+     * OT and payroll for that row were all worked out from it. The change has to
+     * wait until tomorrow, when there is no processed day to contradict.
+     *
+     * Only a worked day blocks (present / half day). On an absent, leave or rest
+     * day the employee never worked the old shift, so there is nothing to
+     * contradict — and the bulk attendance update creates absent rows on its own.
+     *
+     * @param  \Illuminate\Support\Collection  $employees
+     */
+    private function attendanceMarkedResponse($employees)
+    {
+        $marked = AttendanceProcessed::whereIn('employee_id', $employees->pluck('id')->all())
+            ->whereDate('date', now()->toDateString())
+            ->whereIn('attendance_status', ['present', 'half_day'])
+            ->with('shift')
+            ->get()
+            ->keyBy('employee_id');
+
+        if ($marked->isEmpty()) {
+            return null;
+        }
+
+        $blocked = [];
+        foreach ($employees as $employee) {
+            $attendance = $marked->get($employee->id);
+            if (!$attendance) {
+                continue;
+            }
+
+            $reason = "'{$employee->name}' already has attendance marked for today";
+            if ($attendance->shift) {
+                $reason .= " in {$attendance->shift->shift_name}";
+            }
+
+            $blocked[] = $reason . '. Their shift can be changed from tomorrow.';
+        }
+
+        return response()->json([
+            'status' => 422,
+            'message' => count($blocked) === 1
+                ? 'Shift cannot be changed. Employee ' . $blocked[0]
+                : 'Shift cannot be changed for ' . count($blocked) . ' of the selected employees — attendance is already marked for today.',
             'data' => ['blocked' => $blocked],
         ], 422);
     }

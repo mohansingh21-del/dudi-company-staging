@@ -64,11 +64,8 @@ class IncidentImport implements ToCollection, WithHeadingRow
             if ($siteName === '') {
                 $rowErrors[] = "Site Name is required.";
             }
-            if ($categoryName === '') {
-                $rowErrors[] = "Machine Category is required.";
-            }
-            if ($eqNameStr === '') {
-                $rowErrors[] = "Machine Name is required.";
+            if ($categoryName === '' && $eqNameStr !== '') {
+                $rowErrors[] = "Machine Category is required when Machine Name is provided.";
             }
             if ($description === '') {
                 $rowErrors[] = "Incident Description is required.";
@@ -239,8 +236,8 @@ class IncidentImport implements ToCollection, WithHeadingRow
                         'incident_type_id'     => $incidentType->id,
                         'severity'             => $severity,
                         'location_id'          => $location->id,
-                        'equipment_id'         => $equipment->id,
-                        'equipment_name_id'    => $equipmentName->id,
+                        'equipment_id'         => $equipment ? $equipment->id : null,
+                        'equipment_name_id'    => $equipmentName ? $equipmentName->id : null,
                         'person_involved_id'   => $employee ? $employee->id : null,
                         'incident_description' => $description,
                         'action_taken'         => $actionTaken,

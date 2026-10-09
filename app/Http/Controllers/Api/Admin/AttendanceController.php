@@ -267,8 +267,9 @@ class AttendanceController extends Controller
             }
 
             // A day marked leave/rest_day must be backed by a Leave row so the
-            // register and payroll read one source; a day marked worked/absent
-            // must not silently bury a leave someone filed by hand.
+            // register and payroll read one source. A day marked worked cancels
+            // the leave covering it; 'absent' must not silently bury a leave
+            // someone filed by hand.
             // 'leave' + a Compensatory Rest type folds to a rest day first.
             $leaveTypeId = $request->filled('leave_type_id') ? (int) $request->input('leave_type_id') : null;
             [$dbStatus, $leaveTypeId] = \App\Services\AttendanceLeaveSync::normalize($dbStatus, $leaveTypeId);
@@ -307,7 +308,7 @@ class AttendanceController extends Controller
                 if ($blockMessage) {
                     return response()->json(['status' => 422, 'message' => $blockMessage], 422);
                 }
-            } else {
+            } elseif (! in_array($dbStatus, \App\Services\AttendanceLeaveSync::WORKED_STATUSES, true)) {
                 $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($employee->id, $attendanceDate);
 
                 if ($manualLeave) {
@@ -405,7 +406,7 @@ class AttendanceController extends Controller
                         $leaveTypeId
                     );
                 } else {
-                    \App\Services\AttendanceLeaveSync::clear($employee->id, $attendanceDate);
+                    \App\Services\AttendanceLeaveSync::dayLeftLeave($employee->id, $attendanceDate, $dbStatus);
                 }
             });
 
@@ -1326,7 +1327,8 @@ class AttendanceController extends Controller
 
         // Keep attendance and Leave Management in step: a leave/rest_day needs a
         // backing Leave row (on the block the caller named, or Compensatory Rest
-        // for a rest day); any other status must not overwrite a hand-filed leave.
+        // for a rest day); a worked status cancels the leave covering the day,
+        // and 'absent' must not overwrite a hand-filed leave.
         if (in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
             try {
                 $syncLeaveType = \App\Services\AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
@@ -1343,7 +1345,7 @@ class AttendanceController extends Controller
             if ($blockMessage) {
                 return response()->json(['status' => 422, 'message' => $blockMessage], 422);
             }
-        } else {
+        } elseif (! in_array($status, \App\Services\AttendanceLeaveSync::WORKED_STATUSES, true)) {
             $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($attendance->employee_id, $attendanceDate);
 
             if ($manualLeave) {
@@ -1356,15 +1358,22 @@ class AttendanceController extends Controller
         }
 
         DB::transaction(function () use ($attendance, $request, $status, $attendanceDate, $leaveTypeId) {
-            $attendance->update([
+            $payload = [
                 'attendance_status' => $status,
                 'remarks' => $request->remarks
-            ]);
+            ];
+
+            // A day on leave was not worked: drop the punches too.
+            if (in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                $payload += \App\Services\AttendanceLeaveSync::CLEARED_PUNCHES;
+            }
+
+            $attendance->update($payload);
 
             if (in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
                 \App\Services\AttendanceLeaveSync::sync($attendance->employee_id, $attendanceDate, $status, $leaveTypeId);
             } else {
-                \App\Services\AttendanceLeaveSync::clear($attendance->employee_id, $attendanceDate);
+                \App\Services\AttendanceLeaveSync::dayLeftLeave($attendance->employee_id, $attendanceDate, $status);
             }
         });
 
@@ -1507,9 +1516,10 @@ class AttendanceController extends Controller
                         if ($blockMessage) {
                             throw new \Exception($code ? "{$code}: {$blockMessage}" : $blockMessage);
                         }
-                    } else {
-                        // A worked/absent status must not silently bury a leave
-                        // someone filed by hand in Leave Management.
+                    } elseif (! in_array($status, \App\Services\AttendanceLeaveSync::WORKED_STATUSES, true)) {
+                        // 'absent' must not silently bury a leave someone filed
+                        // by hand in Leave Management. A worked status cancels
+                        // the leave for that day instead (see below).
                         $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($record->employee_id, $recordDate);
 
                         if ($manualLeave) {
@@ -1521,11 +1531,12 @@ class AttendanceController extends Controller
                     }
                 }
 
+                // A day on leave was not worked: drop the punches too.
                 AttendanceProcessed::whereIn('id', $resolvedAttendanceIds)->update([
                     'attendance_status' => $status,
                     'remarks' => $request->remarks,
                     'updated_at' => now()
-                ]);
+                ] + ($isLeaveStatus ? \App\Services\AttendanceLeaveSync::CLEARED_PUNCHES : []));
 
                 // Keep each day's backing Leave row in step with the new status.
                 foreach ($records as $record) {
@@ -1534,7 +1545,7 @@ class AttendanceController extends Controller
                     if ($isLeaveStatus) {
                         \App\Services\AttendanceLeaveSync::sync($record->employee_id, $recordDate, $status, $leaveTypeId);
                     } else {
-                        \App\Services\AttendanceLeaveSync::clear($record->employee_id, $recordDate);
+                        \App\Services\AttendanceLeaveSync::dayLeftLeave($record->employee_id, $recordDate, $status);
                     }
                 }
             });

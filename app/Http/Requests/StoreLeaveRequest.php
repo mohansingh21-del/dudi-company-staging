@@ -83,6 +83,21 @@ public function withValidator($validator)
             return;
         }
 
+        // A day the employee was present on and deployed in a shift's workforce
+        // cannot be taken as leave.
+        $deployedMessage = \App\Services\AttendanceLeaveSync::deployedPresentMessage(
+            (int) $this->employee_id,
+            $this->from_date,
+            $this->to_date
+        );
+
+        if ($deployedMessage) {
+
+            $validator->errors()->add('from_date', $deployedMessage);
+
+            return;
+        }
+
         // Overlap, not just an exact date match. Matching only on identical
         // from/to let an employee be booked on two different blocks for the same
         // days, which double-counts on the register.

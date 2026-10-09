@@ -269,6 +269,20 @@ class UpdateDispatchTripRequest extends FormRequest
                         $validator->errors()->add('end_time', 'The end time must be after the start time.');
                     }
                 }
+
+                // Validate supplied start_time / end_time fall inside the shift window
+                if ($currentShiftPlan) {
+                    $timeFormat = '/^\d{2}:\d{2}:\d{2}$/';
+
+                    if ($startTimeInput && preg_match($timeFormat, $startTimeInput)
+                        && !\App\Services\DispatchTripService::isTimeWithinShift($startTimeInput, $currentShiftPlan)) {
+                        $validator->errors()->add('start_time', \App\Services\DispatchTripService::outsideShiftMessage('start time', $currentShiftPlan));
+                    }
+                    if ($endTimeInput && preg_match($timeFormat, $endTimeInput)
+                        && !\App\Services\DispatchTripService::isTimeWithinShift($endTimeInput, $currentShiftPlan)) {
+                        $validator->errors()->add('end_time', \App\Services\DispatchTripService::outsideShiftMessage('end time', $currentShiftPlan));
+                    }
+                }
             } else {
                 $validator->errors()->add('id', 'Trip Record Not Found');
             }

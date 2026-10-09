@@ -422,6 +422,82 @@ class DispatchTripManagementTest extends TestCase
             ->assertJsonPath('data.0.trip_reference_no', 'TRP-2026-000099');
     }
 
+    public function test_logging_trip_fails_when_times_are_outside_shift_time()
+    {
+        Sanctum::actingAs($this->supervisorUser);
+
+        $payload = [
+            'shift_plan_id' => $this->publishedShiftPlan->id,
+            'site_id' => $this->site->id,
+            'dumper_equipment_id' => $this->dumperName->id,
+            'driver_id' => $this->supervisorEmployee->id,
+            'excavator_equipment_id' => $this->excavatorName->id,
+            'loading_point_id' => $this->loadingPoint->id,
+            'dumping_point_id' => $this->dumpingPoint->id,
+            'start_time' => '07:30:00', // before shift start (08:00:00)
+            'end_time' => '16:30:00', // after shift end (16:00:00)
+            'quantity_bcm' => 15.5,
+            'total_cycles' => 1,
+        ];
+
+        $this->postJson('/api/v1/dispatch/trips', $payload)
+            ->assertStatus(422)
+            ->assertJsonPath('errors.start_time.0', 'The start time must be within the shift time (08:00:00 - 16:00:00).')
+            ->assertJsonPath('errors.end_time.0', 'The end time must be within the shift time (08:00:00 - 16:00:00).');
+
+        $this->assertDatabaseCount('dispatch_trips', 0);
+
+        // Shift boundaries are inclusive
+        $payload['start_time'] = '08:00:00';
+        $payload['end_time'] = '16:00:00';
+
+        $this->postJson('/api/v1/dispatch/trips', $payload)->assertStatus(201);
+    }
+
+    public function test_updating_trip_fails_when_times_are_outside_shift_time()
+    {
+        Sanctum::actingAs($this->supervisorUser);
+
+        $trip = DispatchTrip::create([
+            'trip_reference_no' => 'TRP-2026-000031',
+            'shift_plan_id' => $this->publishedShiftPlan->id,
+            'shift_id' => $this->shift->id,
+            'trip_date_time' => '2026-07-02 09:00:00',
+            'site_id' => $this->site->id,
+            'dumper_equipment_id' => $this->dumperName->id,
+            'driver_id' => $this->supervisorEmployee->id,
+            'excavator_equipment_id' => $this->excavatorName->id,
+            'loading_point_id' => $this->loadingPoint->id,
+            'dumping_point_id' => $this->dumpingPoint->id,
+            'start_time' => '2026-07-02 09:00:00',
+            'end_time' => '2026-07-02 09:10:00',
+            'cycle_time_minutes' => 10,
+            'quantity_bcm' => 20,
+            'created_by' => $this->adminUser->id,
+        ]);
+
+        $this->putJson("/api/v1/dispatch/trips/{$trip->id}", ['end_time' => '17:00:00'])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.end_time.0', 'The end time must be within the shift time (08:00:00 - 16:00:00).');
+
+        $this->assertDatabaseHas('dispatch_trips', [
+            'id' => $trip->id,
+            'end_time' => '2026-07-02 09:10:00',
+        ]);
+    }
+
+    public function test_shift_window_check_handles_night_shift_crossing_midnight()
+    {
+        $plan = new ShiftPlan();
+        $plan->setRelation('shift', new Shift(['start_time' => '20:00:00', 'end_time' => '04:00:00']));
+
+        $this->assertTrue(\App\Services\DispatchTripService::isTimeWithinShift('23:50:00', $plan));
+        $this->assertTrue(\App\Services\DispatchTripService::isTimeWithinShift('00:15:00', $plan));
+        $this->assertTrue(\App\Services\DispatchTripService::isTimeWithinShift('04:00:00', $plan));
+        $this->assertFalse(\App\Services\DispatchTripService::isTimeWithinShift('04:00:01', $plan));
+        $this->assertFalse(\App\Services\DispatchTripService::isTimeWithinShift('19:59:59', $plan));
+    }
+
     public function test_updating_trip_recalculates_cycle_time_and_records_audit_trail()
     {
         Sanctum::actingAs($this->supervisorUser);

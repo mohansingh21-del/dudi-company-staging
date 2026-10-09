@@ -113,7 +113,7 @@ class ShiftClosureService
 
             // ── 2e. Attendance submitted (EF-04) ──────────────────
             if (!$this->hasAttendanceSubmitted($shift)) {
-                $msg = 'Attendance Records Pending.';
+                $msg = $this->attendancePendingMessage($shift);
                 $this->logAudit($shift->id, $user->id, 'failure', $msg);
                 throw new ShiftClosureValidationException($msg);
             }
@@ -440,14 +440,82 @@ class ShiftClosureService
     {
         $planningDate = $shift->planning_date ? $shift->planning_date->format('Y-m-d') : null;
 
-        if (!$planningDate) {
+        if (!$planningDate || !$this->hasWorkforceDeployment($shift)) {
             return false;
         }
 
-        // At least one processed attendance record for this shift on the planning date
-        return AttendanceProcessed::where('shift_id', $shift->shift_id)
+        return $this->employeesPendingAttendance($shift)->isEmpty();
+    }
+
+    /**
+     * Actively deployed employees with no processed attendance on the planning date.
+     *
+     * Every deployed employee has to be accounted for before the shift closes —
+     * one row for the shift is not enough, since the rest would be left with no
+     * attendance on a day the plan says they worked. The row is matched on
+     * employee and date only: a borrowed employee's attendance may be processed
+     * against their home shift. Any status counts (an absent row is still marked
+     * attendance), and an approved leave covers the day on its own.
+     *
+     * @param  ShiftPlan  $shift
+     * @return \Illuminate\Support\Collection  of Employee
+     */
+    private function employeesPendingAttendance(ShiftPlan $shift)
+    {
+        $planningDate = $shift->planning_date->format('Y-m-d');
+
+        $deployments = ShiftWorkforceDeployment::where('shift_plan_id', $shift->id)
+            ->active()
+            ->with('employee')
+            ->get();
+
+        $employeeIds = $deployments->pluck('employee_id')->unique()->all();
+
+        $markedIds = AttendanceProcessed::whereIn('employee_id', $employeeIds)
             ->whereDate('date', $planningDate)
-            ->exists();
+            ->pluck('employee_id')
+            ->all();
+
+        $onLeaveIds = Leave::where('status', 'approved')
+            ->whereIn('employee_id', $employeeIds)
+            ->whereDate('from_date', '<=', $planningDate)
+            ->whereDate('to_date', '>=', $planningDate)
+            ->pluck('employee_id')
+            ->all();
+
+        $accountedIds = array_merge($markedIds, $onLeaveIds);
+
+        return $deployments
+            ->filter(function ($dep) use ($accountedIds) {
+                return $dep->employee && !in_array($dep->employee_id, $accountedIds);
+            })
+            ->map(function ($dep) {
+                return $dep->employee;
+            })
+            ->unique('id')
+            ->values();
+    }
+
+    /**
+     * Closure error naming the deployed employees whose attendance is missing.
+     *
+     * @param  ShiftPlan  $shift
+     * @return string
+     */
+    private function attendancePendingMessage(ShiftPlan $shift)
+    {
+        $pending = $shift->planning_date ? $this->employeesPendingAttendance($shift) : collect();
+
+        if ($pending->isEmpty()) {
+            return 'Attendance Records Pending.';
+        }
+
+        $names = $pending->take(5)->pluck('name')->implode(', ');
+        if ($pending->count() > 5) {
+            $names .= ' and ' . ($pending->count() - 5) . ' more';
+        }
+
+        return 'Attendance Records Pending For ' . $pending->count() . ' Deployed Employee(s): ' . $names . '.';
     }
 
     /**

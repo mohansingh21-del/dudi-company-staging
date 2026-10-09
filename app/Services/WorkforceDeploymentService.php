@@ -242,8 +242,9 @@ class WorkforceDeploymentService
             }
         }
 
-        // Find all shift_plan IDs for the same date
+        // Find all shift_plan IDs for the same date (completed/closed plans release their employees)
         $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
+            ->whereNotIn('status', ['completed', 'closed'])
             ->pluck('id')
             ->toArray();
 
@@ -370,8 +371,10 @@ class WorkforceDeploymentService
 
         $planningDate = $shiftPlan->planning_date->format('Y-m-d');
 
-        // Pre-fetch all shift_plan IDs for the same date (single query)
+        // Pre-fetch all shift_plan IDs for the same date (single query).
+        // Completed/closed plans release their employees for borrowing.
         $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
+            ->whereNotIn('status', ['completed', 'closed'])
             ->pluck('id')
             ->toArray();
 
@@ -751,28 +754,35 @@ class WorkforceDeploymentService
             $removedDep = isset($removedDeployments[$empId]) ? $removedDeployments[$empId] : null;
             $dep = $activeDep ?: $removedDep; // use either active or removed deployment details
 
-            // Determine status
+            // Attendance label for the day, if attendance has been processed
+            $attendanceLabel = null;
+            if (isset($attendanceRecords[$empId])) {
+                $attStatus = $attendanceRecords[$empId]->attendance_status;
+                if ($attStatus === 'present') {
+                    $attendanceLabel = 'Present';
+                } elseif ($attStatus === 'absent') {
+                    $attendanceLabel = 'Absent';
+                } elseif ($attStatus === 'rest_day') {
+                    $attendanceLabel = 'Rest Day';
+                } elseif ($attStatus === 'leave') {
+                    $attendanceLabel = 'On Leave';
+                } else {
+                    $attendanceLabel = ucfirst(str_replace('_', ' ', $attStatus));
+                }
+            }
+
+            // Determine status. An active deployment on this plan (home or borrowed)
+            // reads 'Deployed' — being marked present must not override it. Only
+            // attendance that takes the employee off the shift (absent / leave /
+            // rest day) still wins, matching the summary which drops them too.
             $status = 'Not Deployed';
 
             if (isset($leaves[$empId])) {
                 $status = 'On Leave';
-            } elseif (isset($attendanceRecords[$empId])) {
-                $attStatus = $attendanceRecords[$empId]->attendance_status;
-                if ($attStatus === 'present') {
-                    $status = 'Present';
-                } elseif ($attStatus === 'absent') {
-                    $status = 'Absent';
-                } elseif ($attStatus === 'rest_day') {
-                    $status = 'Rest Day';
-                } elseif ($attStatus === 'leave') {
-                    $status = 'On Leave';
-                } else {
-                    $status = ucfirst(str_replace('_', ' ', $attStatus));
-                }
-            } elseif ($activeDep && $activeDep->is_borrowed) {
-                $status = 'Borrowed';
-            } elseif ($activeDep && !$activeDep->is_borrowed) {
+            } elseif ($activeDep && !in_array($attendanceLabel, ['Absent', 'On Leave', 'Rest Day'], true)) {
                 $status = 'Deployed';
+            } elseif ($attendanceLabel !== null) {
+                $status = $attendanceLabel;
             } elseif (isset($otherDeployments[$empId])) {
                 $otherDep = $otherDeployments[$empId]->first();
                 $otherShiftName = ($otherDep->shiftPlan && $otherDep->shiftPlan->shift)
@@ -787,6 +797,10 @@ class WorkforceDeploymentService
             } elseif ($removedDep) {
                 $status = 'Removed';
             }
+
+            // Summary counts stay attendance-driven: a deployed employee is counted
+            // as present/absent once attendance is processed, whatever the row shows.
+            $statsStatus = ($status === 'Deployed' && $attendanceLabel !== null) ? $attendanceLabel : $status;
 
             // Formatting fields
             $designationName = $emp->designation ? $emp->designation->name : null;
@@ -813,11 +827,18 @@ class WorkforceDeploymentService
                 'home_relay_shift' => $dep && $dep->homeRelay ? $dep->homeRelay->name : optional($emp->relay)->name,
                 'borrowing_reason' => $dep ? $dep->borrowing_reason : null,
                 'status' => $status,
+                'stats_status' => $statsStatus,
             ];
         });
 
         // Compute stats from formatted items
         $stats = $this->calculateStats($shiftPlan, $formattedItems);
+
+        // stats_status is internal to the counts — keep it out of the response
+        $formattedItems = $formattedItems->map(function ($item) {
+            unset($item['stats_status']);
+            return $item;
+        });
 
         // Sort items:
         // Weight 1: Deployed (non-borrowed)
@@ -1004,6 +1025,9 @@ class WorkforceDeploymentService
         $borrowedInOtherShiftCount = 0;
 
         foreach ($formattedItems as $item) {
+            $rowStatus = $item['status'];
+            $item['status'] = $item['stats_status'];
+
             // Stats categorization
             if ($item['is_borrowed']) {
                 $borrowedCount++;
@@ -1027,7 +1051,7 @@ class WorkforceDeploymentService
                 }
             }
 
-            if ($item['status'] === 'Removed') {
+            if ($rowStatus === 'Removed') {
                 $removedCount++;
             }
 

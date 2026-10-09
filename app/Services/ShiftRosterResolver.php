@@ -203,6 +203,13 @@ class ShiftRosterResolver
             return $assignment->shift_id;
         }
 
+        // An ended assignment (relay change) says nothing about later dates.
+        $latestAssignment = $assignments->sortByDesc('id')->first();
+        $endedOn = $latestAssignment ? $asDate($latestAssignment->to_date) : null;
+        if ($endedOn && $dateStr > $endedOn) {
+            return null;
+        }
+
         $history = ($ctx['histories'][$employee->id] ?? collect())
             ->sortBy(function ($h) use ($asDate) {
                 return $asDate($h->change_date) . '|' . str_pad((string) $h->id, 12, '0', STR_PAD_LEFT);

@@ -164,6 +164,13 @@ class StoreDispatchTripRequest extends FormRequest
                             if (\Carbon\Carbon::parse($resolvedEnd)->lte(\Carbon\Carbon::parse($resolvedStart))) {
                                 $validator->errors()->add('end_time', 'The end time must be after the start time.');
                             }
+
+                            if (!\App\Services\DispatchTripService::isTimeWithinShift($startTimeInput, $shiftPlan)) {
+                                $validator->errors()->add('start_time', \App\Services\DispatchTripService::outsideShiftMessage('start time', $shiftPlan));
+                            }
+                            if (!\App\Services\DispatchTripService::isTimeWithinShift($endTimeInput, $shiftPlan)) {
+                                $validator->errors()->add('end_time', \App\Services\DispatchTripService::outsideShiftMessage('end time', $shiftPlan));
+                            }
                         }
                     }
                 }
