@@ -26,7 +26,7 @@ class RotateShiftsCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Rotate relay shift mappings according to a hardcoded sequence every Sunday';
+    protected $description = 'Rotate relay shift mappings according to a hardcoded sequence every Monday at midnight';
 
     /**
      * The sequence defines the rotation order by shift ID.

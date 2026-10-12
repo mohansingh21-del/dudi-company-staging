@@ -31,7 +31,9 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule)
     {
         // $schedule->command('inspire')->hourly();
-        $schedule->command('roster:rotate')->sundays()->at('00:00');
+        // Midnight as the new week's first day (Monday) begins, on site time
+        // whatever the server clock is set to.
+        $schedule->command('roster:rotate')->mondays()->at('00:00')->timezone('Asia/Kolkata');
         $schedule->command('borrowed:cleanup')->everyMinute();
 
         // Carries an in-progress fleet refresh to its next feed.

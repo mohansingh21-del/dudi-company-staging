@@ -324,7 +324,9 @@ class AttendanceController extends Controller
             $shift = $attendance ? $attendance->shift : null;
             $shiftId = $attendance ? $attendance->shift_id : null;
             if (!$shift) {
-                $shiftId = $employee->shift_id;
+                // shift_id on the model resolves against today; the day being
+                // marked may sit on the other side of a rotation.
+                $shiftId = $employee->getShiftIdForDate(Carbon::parse($attendanceDate)->format('Y-m-d'));
                 $shift = $shiftId ? \App\Models\Shift::find($shiftId) : null;
             }
 
@@ -1443,7 +1445,7 @@ class AttendanceController extends Controller
                                 'employee_id' => $employee->id,
                                 'date' => $dateStr
                             ], [
-                                'shift_id' => $employee->shift_id,
+                                'shift_id' => $employee->getShiftIdForDate($dateStr),
                                 'place_of_work' => $employee->place_of_employment,
                                 'attendance_status' => 'absent',
                                 'working_hours' => 0.00,

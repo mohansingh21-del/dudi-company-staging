@@ -151,6 +151,11 @@ class ShiftClosureService
                 'shift_summary_snapshot' => json_encode($snapshot),
             ]);
 
+            // ── 4a. Free holds for a week that has not started yet ─
+            app(RotationHoldService::class)->releaseUnstartedHolds(
+                ShiftWorkforceDeployment::where('shift_plan_id', $shift->id)->active()->pluck('employee_id')->all()
+            );
+
             // ── 5. Log audit SUCCESS ──────────────────────────────
             $this->logAudit($shift->id, $user->id, 'success');
 

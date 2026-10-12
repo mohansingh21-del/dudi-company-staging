@@ -166,6 +166,8 @@ class WorkforceDeploymentService
                     'status' => 'active',
                 ]);
 
+                app(RotationHoldService::class)->holdDeployment($deployment);
+
                 $newDeployments[] = $deployment;
             }
         });
@@ -511,6 +513,8 @@ class WorkforceDeploymentService
                     'status' => 'active',
                 ]);
 
+                app(RotationHoldService::class)->holdDeployment($deployment);
+
                 $deployments[] = $deployment;
 
                 // Track this ID so subsequent duplicates in the same batch are caught
@@ -590,6 +594,8 @@ class WorkforceDeploymentService
             'status' => 'removed',
             'removed_reason' => $reason,
         ]);
+
+        app(RotationHoldService::class)->releaseUnstartedHolds([$deployment->employee_id]);
 
         $listResult = $this->getWorkforceList($shiftPlan->id, $limit);
 
