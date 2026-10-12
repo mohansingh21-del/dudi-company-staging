@@ -49,13 +49,16 @@ class ShiftChangeController extends Controller
 
             if ($request->filled('shift_id')) {
                 $requestedShiftId = $request->shift_id;
-                $matchingRelayIds = $relayCurrentShiftIds->filter(fn ($shiftId) => $shiftId == $requestedShiftId)->keys()->toArray();
-                $query->where(function ($q) use ($requestedShiftId, $matchingRelayIds) {
-                    $q->whereHas('currentShiftAssignment', function ($sub) use ($requestedShiftId) {
-                        $sub->where('shift_id', $requestedShiftId);
-                    })
-                    ->orWhereIn('relay_id', $matchingRelayIds);
-                });
+
+                // Match on the shift the row itself displays. The assignment and
+                // relay mapping alone miss an override, so an employee held on
+                // their shift would be listed under the one they were kept off.
+                $matchingEmployeeIds = (clone $query)->get()
+                    ->filter(fn ($employee) => $employee->shift_id == $requestedShiftId)
+                    ->pluck('id')
+                    ->toArray();
+
+                $query->whereIn('id', $matchingEmployeeIds);
             }
 
             if ($request->filled('from_date')) {

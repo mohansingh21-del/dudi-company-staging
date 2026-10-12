@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Console\Commands\RemoveExpiredBorrowedEmployeesCommand;
 use App\Models\ShiftPlan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -266,8 +267,17 @@ class ShiftPlanService
             'creator.employee',
             'publisher.employee',
             'equipmentAllocations.equipmentName.equipment',
+            // A borrowed employee is released once the shift's time is up, but
+            // they still worked it, so they stay on the plan's record.
             'workforceDeployments' => function ($q) {
-                $q->where('status', 'active');
+                $q->where(function ($shown) {
+                    $shown->where('status', 'active')
+                        ->orWhere(function ($released) {
+                            $released->where('is_borrowed', true)
+                                ->where('status', 'removed')
+                                ->where('removed_reason', RemoveExpiredBorrowedEmployeesCommand::AUTO_REMOVED_REASON);
+                        });
+                });
             },
             'workforceDeployments.employee.designation',
             'workforceDeployments.employee.shiftAssignments.shift',
@@ -365,10 +375,18 @@ class ShiftPlanService
 
         $excludeEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
 
+        // One row per employee: an active deployment wins, else the latest release
+        // (someone borrowed again after a release has several rows).
         $deployments = $shiftPlan->workforceDeployments
             ->filter(function ($dep) use ($excludeEmployeeIds) {
                 return !in_array($dep->employee_id, $excludeEmployeeIds);
             })
+            ->sortByDesc('id')
+            ->sortByDesc(function ($dep) {
+                return $dep->status === 'active';
+            })
+            ->unique('employee_id')
+            ->sortBy('id')
             ->values();
 
         $workforce = $deployments->map(function ($dep) use ($planningDate, $shiftName) {
@@ -407,12 +425,18 @@ class ShiftPlanService
                 'home_relay_shift' => $dep->homeRelay ? $dep->homeRelay->name : null,
                 'borrowing_reason' => $dep->borrowing_reason,
                 'status' => $dep->status,
+                'is_released' => $dep->status !== 'active',
             ];
         })->values()->toArray();
 
         // Keep summary counts aligned with the workforce load/list APIs.
         $workforceListResult = app(WorkforceDeploymentService::class)->getWorkforceList($shiftPlan->id);
         $summary = $workforceListResult['stats'];
+        // The list counts released borrowed employees as removed; here they are
+        // still on the record, so count what the workforce above shows.
+        $summary['borrowed'] = count(array_filter($workforce, function ($row) {
+            return $row['is_borrowed'];
+        }));
 
         return [
             'status' => 200,

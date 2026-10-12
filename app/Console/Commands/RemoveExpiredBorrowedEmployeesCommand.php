@@ -28,6 +28,12 @@ class RemoveExpiredBorrowedEmployeesCommand extends Command
     protected $description = 'Auto-remove borrowed employees whose borrowed shift AND home shift times have both completed';
 
     /**
+     * Marks a borrowed deployment released by this command, as opposed to one
+     * a user took off the plan. The employee still worked the shift.
+     */
+    const AUTO_REMOVED_REASON = 'Shift time completed (auto-removed)';
+
+    /**
      * Execute the console command.
      *
      * @return int
@@ -111,7 +117,7 @@ class RemoveExpiredBorrowedEmployeesCommand extends Command
                     } else {
                         $deployment->update([
                             'status'         => 'removed',
-                            'removed_reason' => 'Shift time completed (auto-removed)',
+                            'removed_reason' => self::AUTO_REMOVED_REASON,
                         ]);
 
                         $this->line("Removed: {$employeeName} (Deployment #{$deployment->id}) from Shift Plan #{$shiftPlan->id} ({$shift->shift_name})");

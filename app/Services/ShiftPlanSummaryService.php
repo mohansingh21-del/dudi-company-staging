@@ -411,11 +411,10 @@ class ShiftPlanSummaryService
      */
     private function buildBreakdownSummary(ShiftPlan $shift): array
     {
-        $allocationIds = ShiftEquipmentAllocation::where('shift_plan_id', $shift->id)
-            ->pluck('id')
-            ->toArray();
+        $allocations = ShiftEquipmentAllocation::where('shift_plan_id', $shift->id)
+            ->get(['id', 'equipment_name_id']);
 
-        if (empty($allocationIds)) {
+        if ($allocations->isEmpty()) {
             return [
                 'breakdown_count' => 0,
                 'total_downtime_minutes' => 0,
@@ -423,9 +422,24 @@ class ShiftPlanSummaryService
             ];
         }
 
-        $breakdownCount = BreakdownTicket::whereIn('equipment_allocation_id', $allocationIds)->count();
-        $totalDowntimeMinutes = (int) BreakdownTicket::whereIn('equipment_allocation_id', $allocationIds)
-            ->sum('downtime_minutes');
+        $allocationIds = $allocations->pluck('id')->toArray();
+        $equipmentNameIds = $allocations->pluck('equipment_name_id')->filter()->unique()->toArray();
+        $planningDate = \Carbon\Carbon::parse($shift->planning_date)->toDateString();
+
+        // Tickets raised without an equipment_allocation_id are matched to the
+        // plan by shift + date + machine instead.
+        $query = BreakdownTicket::where(function ($q) use ($allocationIds, $equipmentNameIds, $shift, $planningDate) {
+            $q->whereIn('equipment_allocation_id', $allocationIds)
+                ->orWhere(function ($q) use ($equipmentNameIds, $shift, $planningDate) {
+                    $q->whereNull('equipment_allocation_id')
+                        ->where('shift_id', $shift->shift_id)
+                        ->whereDate('date', $planningDate)
+                        ->whereIn('equipment_name_id', $equipmentNameIds);
+                });
+        });
+
+        $breakdownCount = (clone $query)->count();
+        $totalDowntimeMinutes = (int) (clone $query)->sum('downtime_minutes');
 
         return [
             'breakdown_count' => $breakdownCount,
