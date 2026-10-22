@@ -475,7 +475,7 @@ class ShiftController extends Controller
                         'designation' => $designationName,
                     ];
 
-                    if ($deployment->designation === 'Driver' || $deployment->designation === 'driver' || $slug === 'driver') {
+                    if (\App\Enums\RoleSlug::isDriver($slug) || \App\Enums\RoleSlug::isDriver(\Illuminate\Support\Str::slug((string) $deployment->designation))) {
                         $drivers[] = $item;
                     } else {
                         $workforce[] = $item;
@@ -597,7 +597,7 @@ class ShiftController extends Controller
                             'designation' => $designationName,
                         ];
 
-                        if ($deployment->designation === 'Driver' || $deployment->designation === 'driver' || $slug === 'driver') {
+                        if (\App\Enums\RoleSlug::isDriver($slug) || \App\Enums\RoleSlug::isDriver(\Illuminate\Support\Str::slug((string) $deployment->designation))) {
                             $drivers[] = $item;
                         } else {
                             $workforce[] = $item;

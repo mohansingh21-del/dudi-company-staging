@@ -2,6 +2,7 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use App\Enums\RoleSlug;
 
 /*
 |--------------------------------------------------------------------------
@@ -242,7 +243,7 @@ Route::prefix('v1')->group(function () {
         Route::get('dispatch/dumper-summary', [DispatchTripController::class, 'dumperSummary']);
         Route::get('dispatch/fleet-performance', [DispatchTripController::class, 'fleetPerformance']);
 
-        Route::middleware(['role:super-admin,supervisor,site-incharge'])->group(function () {
+        Route::middleware([RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS, RoleSlug::SITE_INCHARGES)])->group(function () {
             Route::post('dispatch/trips/import', [DispatchTripController::class, 'import']);
             Route::post('dispatch/trips', [DispatchTripController::class, 'store']);
             Route::put('dispatch/trips/{id}', [DispatchTripController::class, 'update']);
@@ -407,7 +408,7 @@ Route::prefix('v1')->group(function () {
 
     });
 
-    Route::middleware(['auth:sanctum', 'role:super-admin,supervisor'])->prefix('admin')
+    Route::middleware(['auth:sanctum', RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS)])->prefix('admin')
         ->group(function () {
 
 
@@ -770,7 +771,7 @@ Route::prefix('v1')->group(function () {
     | Delay Analysis Management
     |--------------------------------------------------------------------------
     */
-    Route::middleware(['auth:sanctum', 'role:super-admin,supervisor,site_incharge'])->prefix('admin/delays')->group(function () {
+    Route::middleware(['auth:sanctum', RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS, RoleSlug::SITE_INCHARGES)])->prefix('admin/delays')->group(function () {
         Route::get('/', [DelayController::class, 'index']);
         Route::post('import', [DelayController::class, 'import']);
         Route::get('{id}', [DelayController::class, 'show']);

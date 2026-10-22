@@ -602,26 +602,31 @@ class EmployeeController extends Controller
     {
         if ($request->has('role')) {
             $request->validate([
-                'role' => 'required|string|in:Supervisor,Site Incharge,supervisor,site-incharge,site_incharge,Driver,driver'
+                'role' => 'required|string|max:100'
             ]);
 
             try {
                 $roleName = $request->input('role');
-                $targetSlug = \Illuminate\Support\Str::slug($roleName);
 
-                $role = \App\Models\Role::where('slug', $targetSlug)
+                // supervisor / site-incharge / driver name a group of
+                // designations (Supervisor also covers Shift Incharge, Diesel
+                // Supervisor, ...); anything else must name one role.
+                $slugs = \App\Enums\RoleSlug::pickerGroup($roleName)
+                    ?: [\Illuminate\Support\Str::slug($roleName)];
+
+                $roleIds = \App\Models\Role::whereIn('slug', $slugs)
                     ->orWhere('slug', $roleName)
                     ->orWhere('name', $roleName)
-                    ->first();
+                    ->pluck('id');
 
-                if (!$role) {
+                if ($roleIds->isEmpty()) {
                     return response()->json([
                         'status' => 404,
                         'message' => 'Role not found'
                     ], 404);
                 }
 
-                $query = Employee::where('designation_id', $role->id)
+                $query = Employee::whereIn('designation_id', $roleIds)
                     ->where('is_active', 1)
                     ->with(['department', 'designation', 'site', 'supervisor']);
 
@@ -769,8 +774,15 @@ class EmployeeController extends Controller
                     ->filter()
                     ->values();
 
+                // A group name (driver, supervisor, site-incharge) expands to
+                // every designation in it.
+                $slugs = $wanted->flatMap(function ($value) {
+                    return \App\Enums\RoleSlug::pickerGroup($value)
+                        ?: [\Illuminate\Support\Str::slug($value)];
+                })->unique()->all();
+
                 $roleIds = \App\Models\Role::query()
-                    ->whereIn('slug', $wanted->map(fn($value) => \Illuminate\Support\Str::slug($value))->all())
+                    ->whereIn('slug', $slugs)
                     ->orWhereIn('name', $wanted->all())
                     ->orWhereIn('id', $wanted->filter(fn($value) => ctype_digit($value))->all())
                     ->pluck('id');
