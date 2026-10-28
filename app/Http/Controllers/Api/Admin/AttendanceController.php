@@ -148,8 +148,11 @@ class AttendanceController extends Controller
             $date = $request->input('date');
 
             if ($employeeId && $date) {
+                // employee_id + date is the only unambiguous key: a row the list
+                // returns with id null has no attendance record yet, and its
+                // employee id must not be read as an attendance id.
                 $attendance = AttendanceProcessed::where('employee_id', $employeeId)
-                    ->where('date', $date)
+                    ->whereDate('date', $date)
                     ->first();
             } else if ($id) {
                 $recordByAttendanceId = null;
@@ -161,17 +164,17 @@ class AttendanceController extends Controller
                     $recordByAttendanceId = AttendanceProcessed::find($id);
                 }
 
-                $employee = \App\Models\Employee::find($id);
+                // An employee_id sent without a date still pins whose row this is.
+                if ($recordByAttendanceId && $employeeId && $recordByAttendanceId->employee_id != $employeeId) {
+                    $recordByAttendanceId = null;
+                }
+
+                $employee = \App\Models\Employee::find($employeeId ?: $id);
 
                 if ($recordByAttendanceId && $employee) {
-                    // Collision check
-                    if ($recordByAttendanceId->employee_id != $employee->id) {
-                        // Collision! Prioritize specific date context record
-                        $attendance = $recordByAttendanceId;
-                    } else {
-                        // No collision
-                        $attendance = $recordByAttendanceId;
-                    }
+                    // {id} is read as an attendance id first. A row with no
+                    // attendance yet must send employee_id + date instead.
+                    $attendance = $recordByAttendanceId;
                 } else {
                     // No collision
                     if ($recordByAttendanceId) {
@@ -1387,9 +1390,18 @@ class AttendanceController extends Controller
     }
     public function bulkUpdateStatus(Request $request)
     {
+        // Rows are addressed by employee_id + date only. Attendance ids and
+        // employee ids share the same small range (ids restart on a fresh
+        // table), so guessing which one was sent marked the wrong employee.
+        // The deployed frontend still posts the key as attendance_ids[], but
+        // its values are employee ids, so it is read as an alias.
+        if (! $request->has('employee_ids') && $request->has('attendance_ids')) {
+            $request->merge(['employee_ids' => $request->input('attendance_ids')]);
+        }
+
         $request->validate([
-            'attendance_ids' => 'required|array|min:1',
-            'attendance_ids.*' => 'integer',
+            'employee_ids' => 'required|array|min:1',
+            'employee_ids.*' => 'integer|exists:employees,id',
             'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
             'leave_type_id' => 'required_if:attendance_status,leave|nullable|integer|exists:leave_types,id',
             'remarks' => 'nullable|string',
@@ -1417,49 +1429,21 @@ class AttendanceController extends Controller
             $resolvedAttendanceIds = [];
 
             DB::transaction(function () use ($request, $dateStr, $status, $leaveTypeId, $isLeaveStatus, &$resolvedAttendanceIds) {
-                foreach ($request->attendance_ids as $id) {
-                    $recordByAttendanceId = AttendanceProcessed::where('id', $id)
-                        ->whereDate('date', $dateStr)
-                        ->first();
+                // Update the employee's row for the day, or create it if missing.
+                foreach ($request->input('employee_ids') as $employeeId) {
+                    $employee = \App\Models\Employee::findOrFail($employeeId);
 
-                    $employee = \App\Models\Employee::find($id);
-
-                    $record = null;
-
-                    if ($recordByAttendanceId && $employee) {
-                        // Collision check
-                        if ($recordByAttendanceId->employee_id != $employee->id) {
-                            // Collision! Prioritize finding records by specific date context
-                            $record = $recordByAttendanceId;
-                        } else {
-                            // No collision
-                            $record = $recordByAttendanceId;
-                        }
-                    } else {
-                        // No collision
-                        if ($recordByAttendanceId) {
-                            $record = $recordByAttendanceId;
-                        } else if ($employee) {
-                            // Fall back to Employee ID lookup
-                            $record = AttendanceProcessed::firstOrCreate([
-                                'employee_id' => $employee->id,
-                                'date' => $dateStr
-                            ], [
-                                'shift_id' => $employee->getShiftIdForDate($dateStr),
-                                'place_of_work' => $employee->place_of_employment,
-                                'attendance_status' => 'absent',
-                                'working_hours' => 0.00,
-                                'late_minutes' => 0,
-                                'early_exit_minutes' => 0,
-                            ]);
-                        }
-                    }
-
-                    if ($record) {
-                        $resolvedAttendanceIds[] = $record->id;
-                    } else {
-                        throw new \Exception("The selected ID {$id} is invalid.");
-                    }
+                    $resolvedAttendanceIds[] = AttendanceProcessed::firstOrCreate([
+                        'employee_id' => $employee->id,
+                        'date' => $dateStr
+                    ], [
+                        'shift_id' => $employee->getShiftIdForDate($dateStr),
+                        'place_of_work' => $employee->place_of_employment,
+                        'attendance_status' => 'absent',
+                        'working_hours' => 0.00,
+                        'late_minutes' => 0,
+                        'early_exit_minutes' => 0,
+                    ])->id;
                 }
 
                 // Same monthly rest-day cap as the single update, checked per
