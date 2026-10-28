@@ -118,12 +118,8 @@ class ShiftClosureService
                 throw new ShiftClosureValidationException($msg);
             }
 
-            // ── 2f. Fuel logs complete (EF-05) ────────────────────
-            if (!$this->hasFuelLogsCompleted($shift)) {
-                $msg = 'Fuel Logs Missing For Assigned Equipment.';
-                $this->logAudit($shift->id, $user->id, 'failure', $msg);
-                throw new ShiftClosureValidationException($msg);
-            }
+            // ── 2f. Fuel logs (EF-05) are optional — missing entries only
+            //        raise a warning in the closure summary.
 
             // ── 2g. Delay records reviewed (EF-06) ────────────────
             if (!$this->hasDelayRecordsReviewed($shift)) {
@@ -402,6 +398,7 @@ class ShiftClosureService
         return [
             'active_breakdown' => $this->hasActiveBreakdown($shift),
             'zero_production' => ((float) $productionSummary['actual_bcm']) == 0,
+            'fuel_logs_missing' => !$this->hasFuelLogsCompleted($shift),
         ];
     }
 

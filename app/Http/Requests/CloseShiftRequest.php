@@ -38,6 +38,16 @@ class CloseShiftRequest extends FormRequest
         $this->merge([
             'has_active_breakdown' => $hasActiveBreakdown ? 'true' : 'false',
         ]);
+
+        // Form-data sends "true"/"false"/"yes"/"on"; the boolean rule only takes 1/0.
+        if ($this->has('fuel_logs_available')) {
+            $value = $this->input('fuel_logs_available');
+            $bool = is_bool($value) ? $value : filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+
+            $this->merge([
+                'fuel_logs_available' => is_null($bool) ? $value : $bool,
+            ]);
+        }
     }
 
     /**
@@ -53,7 +63,8 @@ class CloseShiftRequest extends FormRequest
             'closure_confirmed' => ['required', 'accepted'],
             'breakdown_justification' => ['nullable', 'string'],
             'attendance_submitted' => ['required', 'accepted'],
-            'fuel_logs_available' => ['required', 'accepted'],
+            // Fuel issue entry is optional at closure.
+            'fuel_logs_available' => ['nullable', 'boolean'],
             'delay_logs_updated' => ['required', 'accepted'],
             'breakdown_logs_updated' => ['required', 'accepted'],
             'production_data_available' => ['required', 'accepted'],
@@ -75,8 +86,7 @@ class CloseShiftRequest extends FormRequest
             'closure_confirmed.accepted' => 'Please Confirm Operational Review.',
             'attendance_submitted.required' => 'Please Verify Attendance Submitted.',
             'attendance_submitted.accepted' => 'Please Verify Attendance Submitted.',
-            'fuel_logs_available.required' => 'Please Verify Fuel Logs Available.',
-            'fuel_logs_available.accepted' => 'Please Verify Fuel Logs Available.',
+            'fuel_logs_available.boolean' => 'Fuel logs available must be true or false.',
             'delay_logs_updated.required' => 'Please Verify Delay Logs Updated.',
             'delay_logs_updated.accepted' => 'Please Verify Delay Logs Updated.',
             'breakdown_logs_updated.required' => 'Please Verify Breakdown Logs Updated.',

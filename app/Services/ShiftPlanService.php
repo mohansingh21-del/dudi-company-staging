@@ -309,7 +309,6 @@ class ShiftPlanService
 
         // ── Shift Plan Details ────────────────────────────────────
         $supervisors = $shiftPlan->supervisorList();
-        $primarySupervisor = $supervisors[0] ?? null;
         $siteInchargeEmployee = optional($shiftPlan->siteIncharge)->employee;
         $creatorEmployee = optional($shiftPlan->creator)->employee;
         $publisherEmployee = optional($shiftPlan->publisher)->employee;
@@ -324,9 +323,6 @@ class ShiftPlanService
             'site_name' => optional($shiftPlan->site)->site_name,
             'target_bcm' => !is_null($shiftPlan->target_bcm) ? (string) round((float) $shiftPlan->target_bcm, 2) : null,
             'actual_bcm' => !is_null($shiftPlan->actual_bcm) ? (string) round((float) $shiftPlan->actual_bcm, 2) : null,
-            'supervisor_id' => $primarySupervisor ? $primarySupervisor['id'] : null,
-            'supervisor_name' => $primarySupervisor ? $primarySupervisor['name'] : null,
-            'supervisor_code' => $primarySupervisor ? $primarySupervisor['code'] : null,
             'supervisors' => $supervisors,
             'site_incharge_id' => $siteInchargeEmployee ? $siteInchargeEmployee->id : $shiftPlan->site_incharge_id,
             'site_incharge_name' => $siteInchargeEmployee ? $siteInchargeEmployee->name : optional($shiftPlan->siteIncharge)->email,
