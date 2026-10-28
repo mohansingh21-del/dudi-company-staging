@@ -369,6 +369,8 @@ class OverviewDashboardService
             ->groupBy(
                 'dispatch_trips.excavator_equipment_id',
                 'excavators.equipment_name',
+                'excavators.equipment_code',
+                'excavators.chassis_number',
                 'dispatch_trips.shift_plan_id',
                 'dispatch_trips.shift_id',
                 'shifts.minimum_working_hours'
@@ -376,6 +378,8 @@ class OverviewDashboardService
             ->selectRaw('
                 dispatch_trips.excavator_equipment_id,
                 excavators.equipment_name as asset_id,
+                excavators.equipment_code as equipment_code,
+                excavators.chassis_number as chassis_number,
                 dispatch_trips.shift_plan_id,
                 dispatch_trips.shift_id,
                 COALESCE(shifts.minimum_working_hours, 8) as shift_hours,
@@ -398,6 +402,8 @@ class OverviewDashboardService
             if (!isset($excavatorAggregates[$aggKey])) {
                 $excavatorAggregates[$aggKey] = [
                     'asset_id' => $row->asset_id,
+                    'equipment_code' => $row->equipment_code,
+                    'chassis_number' => $row->chassis_number,
                     'op_name' => $operatorName,
                     'total_bcm' => 0.00,
                     'total_hours' => 0.00,
@@ -413,6 +419,8 @@ class OverviewDashboardService
             $avgBcmH = $agg['total_hours'] > 0 ? round($agg['total_bcm'] / $agg['total_hours'], 2) : 0.00;
             $resultExcavators[] = [
                 'asset_id' => $agg['asset_id'],
+                'equipment_code' => $agg['equipment_code'],
+                'chassis_number' => $agg['chassis_number'],
                 'op_name' => $agg['op_name'],
                 'avg_bcm_h' => $avgBcmH,
             ];
@@ -455,11 +463,15 @@ class OverviewDashboardService
             ->groupBy(
                 'dispatch_trips.dumper_equipment_id',
                 'dumpers.equipment_name',
+                'dumpers.equipment_code',
+                'dumpers.chassis_number',
                 'dispatch_trips.shift_plan_id'
             )
             ->selectRaw('
                 dispatch_trips.dumper_equipment_id,
                 dumpers.equipment_name as asset_id,
+                dumpers.equipment_code as equipment_code,
+                dumpers.chassis_number as chassis_number,
                 dispatch_trips.shift_plan_id,
                 SUM(COALESCE(dispatch_trips.total_cycles, 1)) as total_trips
             ')
@@ -479,6 +491,8 @@ class OverviewDashboardService
             if (!isset($dumperAggregates[$aggKey])) {
                 $dumperAggregates[$aggKey] = [
                     'asset_id' => $row->asset_id,
+                    'equipment_code' => $row->equipment_code,
+                    'chassis_number' => $row->chassis_number,
                     'op_name' => $operatorName,
                     'total_trips' => 0,
                     'shift_plans' => [],
@@ -496,6 +510,8 @@ class OverviewDashboardService
 
             $resultDumpers[] = [
                 'asset_id' => $agg['asset_id'],
+                'equipment_code' => $agg['equipment_code'],
+                'chassis_number' => $agg['chassis_number'],
                 'op_name' => $agg['op_name'],
                 'trips_shift' => $tripsPerShift,
             ];

@@ -21,6 +21,62 @@ class StoreShiftPlanRequest extends FormRequest
     }
 
     /**
+     * Accept the old single supervisor_id (or a comma-separated string) as
+     * supervisor_ids so existing clients keep working.
+     *
+     * @return void
+     */
+    protected function prepareForValidation()
+    {
+        $ids = $this->input('supervisor_ids');
+
+        if (is_null($ids) && $this->filled('supervisor_id')) {
+            $ids = $this->input('supervisor_id');
+        }
+
+        if (!is_null($ids)) {
+            $this->merge(['supervisor_ids' => $this->normalizeSupervisorIds($ids)]);
+        }
+    }
+
+    /**
+     * Turn [3, "4"], "3,4", "[3,4]", '["3","4"]' or [{"id":3}] into [3, 4].
+     * Anything that isn't a whole number is left as is so validation flags it.
+     *
+     * @param  mixed  $ids
+     * @return array
+     */
+    protected function normalizeSupervisorIds($ids)
+    {
+        if (is_string($ids)) {
+            $decoded = json_decode($ids, true);
+            $ids = is_array($decoded)
+                ? $decoded
+                : explode(',', trim($ids, " []"));
+        }
+
+        if (!is_array($ids)) {
+            $ids = [$ids];
+        }
+
+        $normalized = [];
+        foreach ($ids as $id) {
+            if (is_array($id)) {
+                $id = $id['id'] ?? $id['employee_id'] ?? $id['value'] ?? null;
+            }
+            if (is_string($id)) {
+                $id = trim($id, " \"'");
+            }
+            if (is_null($id) || $id === '') {
+                continue;
+            }
+            $normalized[] = ctype_digit((string) $id) ? (int) $id : $id;
+        }
+
+        return $normalized;
+    }
+
+    /**
      * Get the validation rules that apply to the request.
      *
      * @return array
@@ -39,7 +95,8 @@ class StoreShiftPlanRequest extends FormRequest
             'shift_id' => ['required', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             'site_id' => 'required|exists:sites,id',
             'target_bcm' => 'required|numeric|gt:0|max:' . ShiftPlan::MAX_BCM,
-            'supervisor_id' => 'required|exists:employees,id',
+            'supervisor_ids' => 'required|array|min:1|max:' . ShiftPlan::MAX_SUPERVISORS,
+            'supervisor_ids.*' => 'required|integer|distinct|exists:employees,id',
             'site_incharge_id' => 'required|exists:employees,id',
             'status' => 'nullable|in:draft,published,in_progress,planned,active,closed',
             'actual_bcm' => 'nullable|numeric|min:0|max:' . ShiftPlan::MAX_BCM,
@@ -66,8 +123,12 @@ class StoreShiftPlanRequest extends FormRequest
             'target_bcm.gt' => 'Target BCM must be greater than 0.',
             'target_bcm.max' => 'Target BCM may not be greater than 99,999,999.99.',
             'actual_bcm.max' => 'Actual BCM may not be greater than 99,999,999.99.',
-            'supervisor_id.required' => 'Supervisor is required.',
-            'supervisor_id.exists' => 'Selected supervisor is invalid.',
+            'supervisor_ids.required' => 'At least one supervisor is required.',
+            'supervisor_ids.array' => 'Supervisors must be a list.',
+            'supervisor_ids.min' => 'At least one supervisor is required.',
+            'supervisor_ids.max' => 'A shift plan can have at most ' . ShiftPlan::MAX_SUPERVISORS . ' supervisors.',
+            'supervisor_ids.*.distinct' => 'The same supervisor is selected more than once.',
+            'supervisor_ids.*.exists' => 'Selected supervisor is invalid.',
             'site_incharge_id.required' => 'Site incharge is required.',
             'site_incharge_id.exists' => 'Selected site incharge is invalid.',
         ];

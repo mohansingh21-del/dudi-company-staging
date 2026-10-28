@@ -36,7 +36,7 @@ class ShiftClosureService
      */
     public function getClosureSummary(ShiftPlan $shift)
     {
-        $shift->load(['shift', 'site', 'supervisor.employee', 'siteIncharge.employee', 'equipmentAllocations']);
+        $shift->load(['shift', 'site', 'siteIncharge.employee', 'equipmentAllocations']);
 
         $shiftDetails = $this->buildShiftDetails($shift);
         $productionSummary = $this->buildProductionSummary($shift);
@@ -133,7 +133,7 @@ class ShiftClosureService
             }
 
             // ── 3. Build & freeze snapshot (BR-SHFT-030) ──────────
-            $shift->load(['shift', 'site', 'supervisor.employee', 'siteIncharge.employee', 'equipmentAllocations']);
+            $shift->load(['shift', 'site', 'siteIncharge.employee', 'equipmentAllocations']);
             $snapshot = $this->getClosureSummary($shift);
 
             // ── 4. Update shift row ───────────────────────────────
@@ -200,13 +200,6 @@ class ShiftClosureService
      */
     private function buildShiftDetails(ShiftPlan $shift)
     {
-        $supervisorName = null;
-        $supervisor = $shift->supervisor;
-        if ($supervisor) {
-            $emp = $supervisor->employee;
-            $supervisorName = $emp ? $emp->name : $supervisor->email;
-        }
-
         $siteInchargeName = null;
         $siteIncharge = $shift->siteIncharge;
         if ($siteIncharge) {
@@ -219,7 +212,8 @@ class ShiftClosureService
             'shift_date' => $shift->planning_date ? $shift->planning_date->format('Y-m-d') : null,
             'shift' => optional($shift->shift)->shift_name,
             'location' => optional($shift->site)->site_name,
-            'supervisor' => $supervisorName,
+            'supervisor' => $shift->supervisorNames(),
+            'supervisors' => $shift->supervisorList(),
             'site_incharge' => $siteInchargeName,
         ];
     }

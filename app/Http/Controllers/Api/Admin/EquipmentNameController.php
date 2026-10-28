@@ -47,6 +47,10 @@ class EquipmentNameController extends Controller
                         "%{$search}%"
                     )
 
+                        ->orWhere('equipment_code', 'LIKE', "%{$search}%")
+
+                        ->orWhere('chassis_number', 'LIKE', "%{$search}%")
+
 
                         ->orWhereHas('equipment', function ($q) use ($search) {
 
@@ -141,6 +145,12 @@ class EquipmentNameController extends Controller
             'equipment_name' => $request->equipment_name,
 
 
+            'equipment_code' => $request->equipment_code,
+
+
+            'chassis_number' => $request->chassis_number,
+
+
             'is_active' => 1
 
 
@@ -230,7 +240,7 @@ class EquipmentNameController extends Controller
 
 
 
-        $equipmentName->update([
+        $data = [
 
 
             'equipment_id' => $request->equipment_id,
@@ -239,7 +249,24 @@ class EquipmentNameController extends Controller
             'equipment_name' => $request->equipment_name
 
 
-        ]);
+        ];
+
+
+
+        // Only touch these when the client sends them: a form that predates
+        // the fields must not wipe a chassis the telematics sync matches on.
+
+        foreach (['equipment_code', 'chassis_number'] as $field) {
+
+            if ($request->has($field)) {
+
+                $data[$field] = $request->input($field);
+            }
+        }
+
+
+
+        $equipmentName->update($data);
 
 
 
@@ -366,7 +393,9 @@ class EquipmentNameController extends Controller
             if ($request->filled('search')) {
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
-                    $q->where('equipment_name', 'LIKE', "%{$search}%");
+                    $q->where('equipment_name', 'LIKE', "%{$search}%")
+                        ->orWhere('equipment_code', 'LIKE', "%{$search}%")
+                        ->orWhere('chassis_number', 'LIKE', "%{$search}%");
                 });
             }
 
@@ -423,6 +452,7 @@ class EquipmentNameController extends Controller
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
                     $q->where('equipment_name', 'LIKE', "%{$search}%")
+                        ->orWhere('equipment_code', 'LIKE', "%{$search}%")
                         ->orWhere('chassis_number', 'LIKE', "%{$search}%");
                 });
             }
@@ -442,6 +472,7 @@ class EquipmentNameController extends Controller
                 return [
                     'id' => $machine->id,
                     'equipment_name' => $machine->equipment_name,
+                    'equipment_code' => $machine->equipment_code,
 
                     // Null on machines no telematics feed covers. Also what the
                     // fleet dashboard falls back to when equipment_name is

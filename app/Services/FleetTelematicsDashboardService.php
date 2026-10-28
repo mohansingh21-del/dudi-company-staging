@@ -451,6 +451,7 @@ class FleetTelematicsDashboardService
                     // identifies the machine by is never blank.
                     'dumper_no'   => optional($alert->machine)->equipment_name ?: $alert->chassis_number,
                     'chassis_number' => $alert->chassis_number,
+                    'equipment_code' => optional($alert->machine)->equipment_code,
 
                     'value'       => $alert->alert_value === null ? null : (float) $alert->alert_value,
                     'unit'        => $alert->alert_unit,
@@ -596,6 +597,7 @@ class FleetTelematicsDashboardService
                     'machine_id'     => $row['machine_id'],
                     'chassis_number' => $row['chassis_number'],
                     'dumper_no'      => $row['dumper_no'] ?: $row['chassis_number'],
+                    'equipment_code' => $row['equipment_code'] ?? null,
                     'count'          => 0,
                     'critical'       => 0,
                     'warning'        => 0,
@@ -622,6 +624,7 @@ class FleetTelematicsDashboardService
                     'machine_id'     => $first->equipment_name_id,
                     'chassis_number' => $chassis,
                     'dumper_no'      => optional($first->machine)->equipment_name ?: $chassis,
+                    'equipment_code' => optional($first->machine)->equipment_code,
                     'count'          => $group->count(),
                     'critical'       => $group->where('severity', 'critical')->count(),
                     'warning'        => $group->where('severity', 'warning')->count(),
@@ -664,12 +667,14 @@ class FleetTelematicsDashboardService
             ->groupBy(
                 'truck_connect_readings.vin',
                 'equipment_names.id',
-                'equipment_names.equipment_name'
+                'equipment_names.equipment_name',
+                'equipment_names.equipment_code'
             )
             ->select([
                 'truck_connect_readings.vin',
                 'equipment_names.id as machine_id',
                 'equipment_names.equipment_name as dumper_no',
+                'equipment_names.equipment_code',
                 DB::raw('SUM(truck_connect_readings.harsh_braking) as harsh_braking'),
                 DB::raw('SUM(truck_connect_readings.harsh_acceleration) as harsh_acceleration'),
                 DB::raw('SUM(truck_connect_readings.harsh_cornering) as harsh_cornering'),
@@ -682,6 +687,7 @@ class FleetTelematicsDashboardService
                     // Falls back to the VIN so the column an operator
                     // identifies the machine by is never blank.
                     'dumper_no'      => $row->dumper_no ?: $row->vin,
+                    'equipment_code' => $row->equipment_code,
                     'count'          => (int) $row->harsh_braking
                                       + (int) $row->harsh_acceleration
                                       + (int) $row->harsh_cornering,
@@ -1076,7 +1082,8 @@ class FleetTelematicsDashboardService
             ->select(
                 'equipment_fuel_readings.*',
                 'equipment_names.id as machine_id',
-                'equipment_names.equipment_name'
+                'equipment_names.equipment_name',
+                'equipment_names.equipment_code'
             )
             ->get()
             ->map(function ($reading) use ($asOf) {
@@ -1099,7 +1106,8 @@ class FleetTelematicsDashboardService
             ->select(
                 'truck_connect_readings.*',
                 'equipment_names.id as machine_id',
-                'equipment_names.equipment_name'
+                'equipment_names.equipment_name',
+                'equipment_names.equipment_code'
             )
             ->get()
             ->map(function ($reading) use ($asOf) {
@@ -1136,6 +1144,7 @@ class FleetTelematicsDashboardService
             'chassis_number' => $reading->chassis_number,
             'machine_id'     => $reading->machine_id,
             'machine_name'   => $reading->equipment_name,
+            'machine_code'   => $reading->equipment_code,
 
             'is_stale'       => $isStale,
             'age_minutes'    => $age,
@@ -1188,6 +1197,7 @@ class FleetTelematicsDashboardService
             'chassis_number' => $reading->vin,
             'machine_id'     => $reading->machine_id,
             'machine_name'   => $reading->equipment_name,
+            'machine_code'   => $reading->equipment_code,
 
             'is_stale'       => $isStale,
             'age_minutes'    => $age,
@@ -1331,6 +1341,7 @@ class FleetTelematicsDashboardService
             // chassis on equipment_names to replace it with the machine name.
             'dumper_no'      => $data['machine_name'],
             'display_name'   => $data['machine_name'] ?: $data['chassis_number'],
+            'equipment_code' => $data['machine_code'] ?? null,
 
             'connectivity'   => $isStale ? 'offline' : 'online',
             'is_stale'       => $isStale,

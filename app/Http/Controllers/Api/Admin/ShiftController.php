@@ -438,6 +438,8 @@ class ShiftController extends Controller
                         $machines[] = [
                             'machine_id' => $machine->id,
                             'machine_name' => $machine->equipment_name,
+                            'equipment_code' => $machine->equipment_code,
+                            'chassis_number' => $machine->chassis_number,
                             'category_id' => $category ? $category->id : null,
                             'category_name' => $category ? $category->name : null,
                             'parent_machine_id' => $allocation->parent_equipment_id,
@@ -560,6 +562,8 @@ class ShiftController extends Controller
                             $machines[] = [
                                 'machine_id' => $machine->id,
                                 'machine_name' => $machine->equipment_name,
+                                'equipment_code' => $machine->equipment_code,
+                                'chassis_number' => $machine->chassis_number,
                                 'category_id' => $category ? $category->id : null,
                                 'category_name' => $category ? $category->name : null,
                                 'parent_machine_id' => $allocation->parent_equipment_id,

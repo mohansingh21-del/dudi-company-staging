@@ -250,10 +250,12 @@ class FuelDashboardService
             ->whereBetween('fuel_entries.date', [$from, $to])
             ->where('fuel_entries.status', 'active')
             ->join('equipment_names', 'equipment_names.id', '=', 'fuel_entries.equipment_name_id')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
             ->selectRaw('
                 equipment_names.id as equipment_name_id,
                 equipment_names.equipment_name as asset_id,
+                equipment_names.equipment_code as equipment_code,
+                equipment_names.chassis_number as chassis_number,
                 COALESCE(SUM(fuel_entries.fuel_consumption), 0) as fuel_consumed,
                 COALESCE(MAX(fuel_entries.hours_meter_reading) - MIN(fuel_entries.hours_meter_reading), 0) as hours_run,
                 COALESCE(SUM(fuel_entries.work_done_bcm), 0) as total_bcm
@@ -271,6 +273,8 @@ class FuelDashboardService
             return [
                 'rank'             => ($currentPage - 1) * $perPage + $index + 1,
                 'asset_id'         => $item->asset_id,
+                'equipment_code'   => $item->equipment_code,
+                'chassis_number'   => $item->chassis_number,
                 'fuel_consumed'    => $fuelConsumed,
                 'hours_run'        => round((float) $item->hours_run, 2),
                 'efficiency_ratio' => $eff,
@@ -326,9 +330,11 @@ class FuelDashboardService
             ->whereBetween('fuel_entries.date', [$from, $to])
             ->where('fuel_entries.status', 'active')
             ->join('equipment_names', 'equipment_names.id', '=', 'fuel_entries.equipment_name_id')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
             ->selectRaw('
                 equipment_names.equipment_name as asset_id,
+                equipment_names.equipment_code as equipment_code,
+                equipment_names.chassis_number as chassis_number,
                 COALESCE(SUM(fuel_entries.fuel_consumption), 0) as fuel_consumed,
                 COALESCE(SUM(fuel_entries.work_done_bcm), 0) as total_bcm,
                 COALESCE(SUM(fuel_entries.fuel_consumption) / NULLIF(SUM(fuel_entries.work_done_bcm), 0), 0) as efficiency
@@ -344,6 +350,8 @@ class FuelDashboardService
 
             return [
                 'asset_id'           => $item->asset_id,
+                'equipment_code'   => $item->equipment_code,
+                'chassis_number'   => $item->chassis_number,
                 'efficiency'         => $eff,
                 'baseline_efficiency'=> round($avgSiteEff, 2),
                 'variance_percent'   => $variance,
@@ -394,6 +402,8 @@ class FuelDashboardService
             ->selectRaw('
                 fuel_entries.fuel_log_date as time,
                 equipment_names.equipment_name as vehicle,
+                equipment_names.equipment_code as equipment_code,
+                equipment_names.chassis_number as chassis_number,
                 fuel_entries.fuel_issued as quantity,
                 employees.name as driver,
                 fuel_entries.fuel_source as source
@@ -406,6 +416,8 @@ class FuelDashboardService
             return [
                 'time'     => $item->time ? Carbon::parse($item->time)->toIso8601String() : null,
                 'vehicle'  => $item->vehicle,
+                'equipment_code' => $item->equipment_code,
+                'chassis_number' => $item->chassis_number,
                 'quantity' => (float) $item->quantity,
                 'driver'   => $item->driver ?: 'N/A',
                 'source'   => $item->source ?: 'N/A',

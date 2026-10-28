@@ -35,6 +35,8 @@ class DelayResource extends JsonResource
             'equipment_category' => optional($this->equipment)->name,
             'equipment_name_id' => $this->equipment_name_id,
             'equipment_name' => optional($this->equipmentName)->equipment_name,
+            'equipment_code' => optional($this->equipmentName)->equipment_code,
+            'chassis_number' => optional($this->equipmentName)->chassis_number,
             'average_production_rate_per_hour' => $this->average_production_rate_per_hour,
             'estimated_production_loss_bcm' => $this->estimated_production_loss_bcm,
             'description' => $this->description,

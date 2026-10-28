@@ -22,7 +22,6 @@ class ShiftPlanService
         $query = ShiftPlan::with([
             'shift',
             'site',
-            'supervisor.employee',
             'siteIncharge.employee',
             'creator.employee'
         ]);
@@ -87,7 +86,7 @@ class ShiftPlanService
         // Filter by Supervisor ID
         if (!empty($filters['supervisor_id'])) {
             $supervisorUserId = $this->resolveEmployeeToUserId($filters['supervisor_id'], 'supervisor');
-            $query->where('supervisor_id', $supervisorUserId);
+            $query->supervisedBy($supervisorUserId);
         }
 
         // Search Query
@@ -101,9 +100,8 @@ class ShiftPlanService
                     ->orWhereHas('site', function ($si) use ($search) {
                         $si->where('site_name', 'LIKE', "%{$search}%");
                     })
-                    ->orWhereHas('supervisor.employee', function ($emp) use ($search) {
-                        $emp->where('name', 'LIKE', "%{$search}%")
-                            ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                    ->orWhere(function ($sup) use ($search) {
+                        $this->whereSupervisorMatches($sup, $search);
                     })
                     ->orWhereHas('siteIncharge.employee', function ($emp) use ($search) {
                         $emp->where('name', 'LIKE', "%{$search}%")
@@ -123,6 +121,7 @@ class ShiftPlanService
         $activePersonnel = $this->countActivePersonnel($statsQuery);
 
         $paginated = $query->latest('planning_date')->paginate($limit);
+        ShiftPlan::loadSupervisors($paginated->items());
 
         return [
             'status' => 200,
@@ -163,9 +162,27 @@ class ShiftPlanService
         $planningDate = $data['planning_date'] ?? ($shiftPlan ? $shiftPlan->planning_date->format('Y-m-d') : null);
         $shiftId = $data['shift_id'] ?? ($shiftPlan ? $shiftPlan->shift_id : null);
 
-        // Map employee IDs to user IDs
-        if (isset($data['supervisor_id'])) {
-            $data['supervisor_id'] = $this->resolveEmployeeToUserId($data['supervisor_id'], 'supervisor');
+        // Map employee IDs to user IDs, stored comma-separated in supervisor_id
+        // (primary first).
+        if (array_key_exists('supervisor_ids', $data)) {
+            $supervisorUserIds = [];
+            foreach ($data['supervisor_ids'] as $employeeId) {
+                $userId = $this->resolveEmployeeToUserId($employeeId, 'supervisor');
+                if ($userId && !in_array($userId, $supervisorUserIds)) {
+                    $supervisorUserIds[] = $userId;
+                }
+            }
+            unset($data['supervisor_ids']);
+
+            if (empty($supervisorUserIds)) {
+                return [
+                    'status' => 422,
+                    'message' => 'Selected supervisors are invalid.',
+                    'data' => null,
+                ];
+            }
+
+            $data['supervisor_id'] = implode(',', $supervisorUserIds);
         }
         if (isset($data['site_incharge_id'])) {
             $data['site_incharge_id'] = $this->resolveEmployeeToUserId($data['site_incharge_id'], 'site-incharge');
@@ -229,7 +246,6 @@ class ShiftPlanService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'supervisor.employee',
             'siteIncharge.employee',
             'creator.employee',
             'equipmentAllocations.equipmentName.equipment'
@@ -262,7 +278,6 @@ class ShiftPlanService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'supervisor.employee',
             'siteIncharge.employee',
             'creator.employee',
             'publisher.employee',
@@ -293,7 +308,8 @@ class ShiftPlanService
         }
 
         // ── Shift Plan Details ────────────────────────────────────
-        $supervisorEmployee = optional($shiftPlan->supervisor)->employee;
+        $supervisors = $shiftPlan->supervisorList();
+        $primarySupervisor = $supervisors[0] ?? null;
         $siteInchargeEmployee = optional($shiftPlan->siteIncharge)->employee;
         $creatorEmployee = optional($shiftPlan->creator)->employee;
         $publisherEmployee = optional($shiftPlan->publisher)->employee;
@@ -308,9 +324,10 @@ class ShiftPlanService
             'site_name' => optional($shiftPlan->site)->site_name,
             'target_bcm' => !is_null($shiftPlan->target_bcm) ? (string) round((float) $shiftPlan->target_bcm, 2) : null,
             'actual_bcm' => !is_null($shiftPlan->actual_bcm) ? (string) round((float) $shiftPlan->actual_bcm, 2) : null,
-            'supervisor_id' => $supervisorEmployee ? $supervisorEmployee->id : $shiftPlan->supervisor_id,
-            'supervisor_name' => $supervisorEmployee ? $supervisorEmployee->name : optional($shiftPlan->supervisor)->email,
-            'supervisor_code' => $supervisorEmployee ? $supervisorEmployee->employee_code : null,
+            'supervisor_id' => $primarySupervisor ? $primarySupervisor['id'] : null,
+            'supervisor_name' => $primarySupervisor ? $primarySupervisor['name'] : null,
+            'supervisor_code' => $primarySupervisor ? $primarySupervisor['code'] : null,
+            'supervisors' => $supervisors,
             'site_incharge_id' => $siteInchargeEmployee ? $siteInchargeEmployee->id : $shiftPlan->site_incharge_id,
             'site_incharge_name' => $siteInchargeEmployee ? $siteInchargeEmployee->name : optional($shiftPlan->siteIncharge)->email,
             'site_incharge_code' => $siteInchargeEmployee ? $siteInchargeEmployee->employee_code : null,
@@ -344,6 +361,8 @@ class ShiftPlanService
                     'allocation_id' => $child->id,
                     'machine_id' => $childMachine ? $childMachine->id : null,
                     'machine_number' => $childMachine ? $childMachine->equipment_name : null,
+                    'equipment_code' => $childMachine ? $childMachine->equipment_code : null,
+                    'chassis_number' => $childMachine ? $childMachine->chassis_number : null,
                 ];
             });
 
@@ -351,6 +370,8 @@ class ShiftPlanService
                 'allocation_id' => $allocation->id,
                 'machine_id' => $machine ? $machine->id : null,
                 'machine_number' => $machine ? $machine->equipment_name : null,
+                'equipment_code' => $machine ? $machine->equipment_code : null,
+                'chassis_number' => $machine ? $machine->chassis_number : null,
                 'category_id' => $category ? $category->id : null,
                 'category_name' => $category ? $category->name : null,
                 'dumpers' => $dumpers->toArray(),
@@ -399,8 +420,14 @@ class ShiftPlanService
             }
 
             $machineName = null;
+
+            $machineCode = null;
+
+            $machineChassis = null;
             if ($machine && $machine->equipmentName) {
-                $machineName = $machine->equipmentName->name;
+                $machineName = $machine->equipmentName->equipment_name;
+                $machineCode = $machine->equipmentName->equipment_code;
+                $machineChassis = $machine->equipmentName->chassis_number;
             }
 
             $homeShiftName = null;
@@ -420,6 +447,8 @@ class ShiftPlanService
                 'shift_name' => $shiftName,
                 'home_shift_name' => $homeShiftName,
                 'assigned_machine' => $machineName,
+                'assigned_machine_code' => $machineCode,
+                'assigned_machine_chassis_number' => $machineChassis,
                 'is_borrowed' => (bool) $dep->is_borrowed,
                 'home_relay_id' => $dep->home_relay_id,
                 'home_relay_shift' => $dep->homeRelay ? $dep->homeRelay->name : null,
@@ -505,7 +534,7 @@ class ShiftPlanService
 
         if (!empty($filters['supervisor_id'])) {
             $supervisorUserId = $this->resolveEmployeeToUserId($filters['supervisor_id'], 'supervisor');
-            $query->where('supervisor_id', $supervisorUserId);
+            $query->supervisedBy($supervisorUserId);
         }
 
         if (!empty($filters['search'])) {
@@ -532,9 +561,10 @@ class ShiftPlanService
         $activePersonnel = $this->countActivePersonnel($query);
 
         $limit = $filters['limit'] ?? 10;
-        $shiftPlans = $query->with(['shift', 'site', 'supervisor', 'siteIncharge', 'creator'])
+        $shiftPlans = $query->with(['shift', 'site', 'siteIncharge', 'creator'])
             ->latest('planning_date')
             ->paginate($limit);
+        ShiftPlan::loadSupervisors($shiftPlans->items());
 
         return [
             'stats' => [
@@ -566,6 +596,30 @@ class ShiftPlanService
             ->active()
             ->distinct()
             ->count('employee_id');
+    }
+
+    /**
+     * Match plans having any supervisor whose employee name/code contains $search.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @param  string  $search
+     * @return void
+     */
+    protected function whereSupervisorMatches($query, $search)
+    {
+        $userIds = \App\Models\User::whereHas('employee', function ($emp) use ($search) {
+            $emp->where('name', 'LIKE', "%{$search}%")
+                ->orWhere('employee_code', 'LIKE', "%{$search}%");
+        })->pluck('id');
+
+        if ($userIds->isEmpty()) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        foreach ($userIds as $userId) {
+            $query->orWhereRaw('FIND_IN_SET(?, shift_plans.supervisor_id)', [$userId]);
+        }
     }
 
     /**
@@ -744,7 +798,7 @@ class ShiftPlanService
         }
 
         $hasWorkforce = $shiftPlan->workforceDeployments()->active()->exists();
-        $supervisorAssigned = !is_null($shiftPlan->supervisor_id);
+        $supervisorAssigned = !empty($shiftPlan->supervisorIds());
         $siteInchargeAssigned = !is_null($shiftPlan->site_incharge_id);
         $targetBcmAvailable = !is_null($shiftPlan->target_bcm) && $shiftPlan->target_bcm > 0;
         $planningDateReached = $shiftPlan->planning_date->lte(\Carbon\Carbon::today());

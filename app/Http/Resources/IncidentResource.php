@@ -34,6 +34,8 @@ class IncidentResource extends JsonResource
 
           'equipment_name_id' => $this->equipmentName ? $this->equipmentName->id : null,
           'equipment__name' => $this->equipmentName ? $this->equipmentName->equipment_name : null,
+          'equipment_code' => $this->equipmentName ? $this->equipmentName->equipment_code : null,
+          'chassis_number' => $this->equipmentName ? $this->equipmentName->chassis_number : null,
 
             'person_involved_id' => $this->person->id,
             'person_involved_name' => $this->person->name,

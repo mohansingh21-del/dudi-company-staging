@@ -810,9 +810,12 @@ class WorkforceDeploymentService
 
             // Formatting fields
             $designationName = $emp->designation ? $emp->designation->name : null;
-            $machineName = ($activeDep && $activeDep->assignedMachine && $activeDep->assignedMachine->equipmentName)
-                ? $activeDep->assignedMachine->equipmentName->name
+            $assignedMachine = ($activeDep && $activeDep->assignedMachine)
+                ? $activeDep->assignedMachine->equipmentName
                 : null;
+            $machineName = $assignedMachine ? $assignedMachine->equipment_name : null;
+            $machineCode = $assignedMachine ? $assignedMachine->equipment_code : null;
+            $machineChassis = $assignedMachine ? $assignedMachine->chassis_number : null;
 
             $homeShift = $emp->getShiftForDate($planningDate);
             $homeShiftName = $homeShift ? $homeShift->shift_name : null;
@@ -828,6 +831,8 @@ class WorkforceDeploymentService
                 'shift_name' => $shiftPlan->shift ? $shiftPlan->shift->shift_name : null,
                 'home_shift_name' => $homeShiftName,
                 'assigned_machine' => $machineName,
+                'assigned_machine_code' => $machineCode,
+                'assigned_machine_chassis_number' => $machineChassis,
                 'is_borrowed' => $dep ? (bool) $dep->is_borrowed : false,
                 'home_relay_id' => $dep ? $dep->home_relay_id : $emp->relay_id,
                 'home_relay_shift' => $dep && $dep->homeRelay ? $dep->homeRelay->name : optional($emp->relay)->name,
@@ -983,8 +988,14 @@ class WorkforceDeploymentService
             }
 
             $machineName = null;
+
+            $machineCode = null;
+
+            $machineChassis = null;
             if ($machine && $machine->equipmentName) {
-                $machineName = $machine->equipmentName->name;
+                $machineName = $machine->equipmentName->equipment_name;
+                $machineCode = $machine->equipmentName->equipment_code;
+                $machineChassis = $machine->equipmentName->chassis_number;
             }
 
             $homeShiftName = null;
@@ -1004,6 +1015,8 @@ class WorkforceDeploymentService
                 'shift_name' => $shiftName, // The shift of the current shift plan
                 'home_shift_name' => $homeShiftName, // The home shift of the employee on this date
                 'assigned_machine' => $machineName,
+                'assigned_machine_code' => $machineCode,
+                'assigned_machine_chassis_number' => $machineChassis,
                 'is_borrowed' => (bool) $dep->is_borrowed,
                 'home_relay_id' => $dep->home_relay_id,
                 'home_relay_shift' => $dep->homeRelay ? $dep->homeRelay->name : null,

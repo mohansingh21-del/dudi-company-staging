@@ -23,6 +23,8 @@ class ServiceRecordListResource extends JsonResource
             'store_name'           => optional($this->store)->name,
             'machine_id'           => $this->machine_id,
             'machine_name'         => optional($this->machine)->equipment_name,
+            'equipment_code'       => optional($this->machine)->equipment_code,
+            'chassis_number'       => optional($this->machine)->chassis_number,
             'site_id'              => $this->site_id,
             'site_name'            => optional($this->site)->site_name,
             'is_breakdown_service' => (bool) $this->is_breakdown_service,

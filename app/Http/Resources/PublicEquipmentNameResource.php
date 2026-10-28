@@ -39,6 +39,8 @@ class PublicEquipmentNameResource extends JsonResource
             'equipment_category_name' => $this->equipment ? $this->equipment->name : null,
             'equipment_id' => $this->equipment_id,
             'equipment_name' => $this->equipment_name,
+            'equipment_code' => $this->equipment_code,
+            'chassis_number' => $this->chassis_number,
             'status' => $status,
             'short_reason' => $shortReason,
             'created_at' => $this->created_at,

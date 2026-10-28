@@ -44,6 +44,38 @@ class UpdateEquipmentNameRequest extends FormRequest
                     'equipment_name'
                 )->ignore($equipmentNameId)
 
+            ],
+
+
+            'equipment_code' => [
+
+                'nullable',
+
+                'string',
+
+                'max:50',
+
+                Rule::unique(
+                    'equipment_names',
+                    'equipment_code'
+                )->ignore($equipmentNameId)
+
+            ],
+
+
+            'chassis_number' => [
+
+                'nullable',
+
+                'string',
+
+                'max:32',
+
+                Rule::unique(
+                    'equipment_names',
+                    'chassis_number'
+                )->ignore($equipmentNameId)
+
             ]
 
         ];
@@ -64,7 +96,19 @@ class UpdateEquipmentNameRequest extends FormRequest
             'Equipment name already exists.',
 
             'equipment_name.max' =>
-            'Equipment name cannot be longer than 255 characters.'
+            'Equipment name cannot be longer than 255 characters.',
+
+            'equipment_code.unique' =>
+            'Equipment code already exists.',
+
+            'equipment_code.max' =>
+            'Equipment code cannot be longer than 50 characters.',
+
+            'chassis_number.unique' =>
+            'Chassis number is already assigned to another machine.',
+
+            'chassis_number.max' =>
+            'Chassis number cannot be longer than 32 characters.'
 
         ];
     }

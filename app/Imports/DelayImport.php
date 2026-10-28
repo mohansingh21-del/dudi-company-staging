@@ -280,7 +280,7 @@ class DelayImport implements ToCollection, WithHeadingRow
                         'estimated_production_loss_bcm' => $estimatedProductionLoss,
                         'description' => $description,
                         'remarks' => $remarks !== '' ? $remarks : null,
-                        'created_by' => auth()->id() ?? $shiftPlan->created_by ?? $shiftPlan->supervisor_id ?? 1,
+                        'created_by' => auth()->id() ?? $shiftPlan->created_by ?? $shiftPlan->primarySupervisorId() ?? 1,
                     ];
 
                     Delay::create($delayData);

@@ -1077,6 +1077,8 @@ class ServiceRecordService
             'machine' => $machine ? [
                 'id'            => $machine->id,
                 'name'          => $machine->equipment_name,
+                'equipment_code' => $machine->equipment_code,
+                'chassis_number' => $machine->chassis_number,
                 'category_id'   => $machine->equipment_id,
                 'category_name' => optional($machine->equipment)->name,
                 'is_active'     => (bool) $machine->is_active,

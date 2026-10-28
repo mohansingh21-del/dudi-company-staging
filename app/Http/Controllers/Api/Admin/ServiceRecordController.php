@@ -55,7 +55,7 @@ class ServiceRecordController extends Controller
                 'created_at',
                 'deleted_at',
             ])->with([
-                'machine:id,equipment_name',
+                'machine:id,equipment_name,equipment_code,chassis_number',
                 'site:id,site_name',
                 'breakdown:id,ticket_number',
                 'store:id,name',

@@ -255,7 +255,11 @@ class DispatchDashboardService
                 dispatch_trips.trip_reference_no,
                 dispatch_trips.trip_date_time as time,
                 dumpers.equipment_name as dumper,
+                dumpers.equipment_code as dumper_equipment_code,
+                dumpers.chassis_number as dumper_chassis_number,
                 excavators.equipment_name as excavator,
+                excavators.equipment_code as excavator_equipment_code,
+                excavators.chassis_number as excavator_chassis_number,
                 dispatch_trips.quantity_bcm as quantity,
                 dispatch_trips.cycle_time_minutes as cycle_time
             ')
@@ -269,7 +273,11 @@ class DispatchDashboardService
                 'trip_reference_no' => $item->trip_reference_no,
                 'time'              => $item->time ? Carbon::parse($item->time)->toIso8601String() : null,
                 'dumper'            => $item->dumper ?: 'N/A',
+                'dumper_equipment_code'    => $item->dumper_equipment_code,
+                'dumper_chassis_number'    => $item->dumper_chassis_number,
                 'excavator'         => $item->excavator ?: 'N/A',
+                'excavator_equipment_code' => $item->excavator_equipment_code,
+                'excavator_chassis_number' => $item->excavator_chassis_number,
                 'material'          => 'OB',
                 'quantity'          => (float) $item->quantity,
                 'cycle_time'        => (float) $item->cycle_time,

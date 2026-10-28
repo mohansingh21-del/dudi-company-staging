@@ -24,7 +24,13 @@ class StoreEquipmentNameRequest extends FormRequest
             'required|exists:equipments,id',
 
             'equipment_name' =>
-            'required|string|max:255|unique:equipment_names,equipment_name'
+            'required|string|max:255|unique:equipment_names,equipment_name',
+
+            'equipment_code' =>
+            'nullable|string|max:50|unique:equipment_names,equipment_code',
+
+            'chassis_number' =>
+            'nullable|string|max:32|unique:equipment_names,chassis_number'
 
         ];
     }
@@ -48,7 +54,19 @@ class StoreEquipmentNameRequest extends FormRequest
             'Equipment name already exists.',
 
             'equipment_name.max' =>
-            'Equipment name cannot be longer than 255 characters.'
+            'Equipment name cannot be longer than 255 characters.',
+
+            'equipment_code.unique' =>
+            'Equipment code already exists.',
+
+            'equipment_code.max' =>
+            'Equipment code cannot be longer than 50 characters.',
+
+            'chassis_number.unique' =>
+            'Chassis number is already assigned to another machine.',
+
+            'chassis_number.max' =>
+            'Chassis number cannot be longer than 32 characters.'
 
         ];
     }

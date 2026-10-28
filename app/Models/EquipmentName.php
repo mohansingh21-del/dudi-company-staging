@@ -14,6 +14,7 @@ class EquipmentName extends Model
     protected $fillable = [
         'equipment_id',
         'equipment_name',
+        'equipment_code',
         'chassis_number',
         'is_active'
     ];

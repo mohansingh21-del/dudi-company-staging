@@ -24,7 +24,6 @@ class ShiftPlanSummaryService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'supervisor.employee',
             'siteIncharge.employee'
         ])->find($shiftId);
 
@@ -67,11 +66,6 @@ class ShiftPlanSummaryService
      */
     private function buildShiftPlan(ShiftPlan $shift): array
     {
-        $supervisorName = null;
-        if ($shift->supervisor) {
-            $emp = $shift->supervisor->employee;
-            $supervisorName = $emp ? $emp->name : $shift->supervisor->email;
-        }
 
         $siteInchargeName = null;
         if ($shift->siteIncharge) {
@@ -87,7 +81,8 @@ class ShiftPlanSummaryService
             'location_id' => $shift->site_id,
             'location_name' => optional($shift->site)->site_name,
             'target_bcm' => !is_null($shift->target_bcm) ? round((float) $shift->target_bcm, 2) : 0.00,
-            'supervisor_name' => $supervisorName,
+            'supervisor_name' => $shift->supervisorNames(),
+            'supervisors' => $shift->supervisorList(),
             'site_incharge_name' => $siteInchargeName,
             'status' => $shift->status,
             'shift' => $shift->shift ? [
@@ -174,12 +169,12 @@ class ShiftPlanSummaryService
 
         // Calculate top performing equipment
         $dumperSummaryData = DispatchTrip::where('shift_plan_id', $shift->id)
-            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
+            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_names.equipment_code as dumper_equipment_code', 'equipment_names.chassis_number as dumper_chassis_number')
             ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
-            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name')
+            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
             ->get();
 
         $maxQuantity = 0.0001; // Avoid division by zero
@@ -218,6 +213,8 @@ class ShiftPlanSummaryService
             $formattedDumpers[] = [
                 'equipment_id' => $row->dumper_equipment_id,
                 'equipment_name' => $row->dumper_number,
+                'equipment_code' => $row->dumper_equipment_code,
+                'chassis_number' => $row->dumper_chassis_number,
                 'score' => round($compositeScore, 2)
             ];
         }
@@ -278,6 +275,8 @@ class ShiftPlanSummaryService
 
             $excavatorPerformance[] = [
                 'asset_id' => $allocation->equipmentName->equipment_name ?? 'Unknown',
+                'equipment_code' => optional($allocation->equipmentName)->equipment_code,
+                'chassis_number' => optional($allocation->equipmentName)->chassis_number,
                 'operator' => $operatorName,
                 'target_bcm' => $targetBcmPerExcavator,
                 'actual_bcm' => $actualBcm,
@@ -327,6 +326,8 @@ class ShiftPlanSummaryService
 
             $dumperPerformance[] = [
                 'dumper_id' => $allocation->equipmentName->equipment_name ?? 'Unknown',
+                'equipment_code' => optional($allocation->equipmentName)->equipment_code,
+                'chassis_number' => optional($allocation->equipmentName)->chassis_number,
                 'cycles_trips' => $tripsCount,
                 'avg_cycle_time_minutes' => $avgCycleTime,
                 'total_quantity_bcm' => $totalQty,

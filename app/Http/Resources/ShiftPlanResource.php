@@ -14,7 +14,8 @@ class ShiftPlanResource extends JsonResource
      */
     public function toArray($request)
     {
-        $supervisorEmployee = optional($this->supervisor)->employee;
+        $supervisors = $this->resource->supervisorList();
+        $primarySupervisor = $supervisors[0] ?? null;
         $siteInchargeEmployee = optional($this->siteIncharge)->employee;
         $creatorEmployee = optional($this->creator)->employee;
         $publisherEmployee = optional($this->publisher)->employee;
@@ -29,9 +30,10 @@ class ShiftPlanResource extends JsonResource
             'site_name' => optional($this->site)->site_name,
             'target_bcm' => !is_null($this->target_bcm) ? (string) round((float) $this->target_bcm, 2) : null,
             'actual_bcm' => !is_null($this->actual_bcm) ? (string) round((float) $this->actual_bcm, 2) : null,
-            'supervisor_id' => $supervisorEmployee ? $supervisorEmployee->id : $this->supervisor_id,
-            'supervisor_name' => $supervisorEmployee ? $supervisorEmployee->name : optional($this->supervisor)->email,
-            'supervisor_code' => $supervisorEmployee ? $supervisorEmployee->employee_code : null,
+            'supervisor_id' => $primarySupervisor ? $primarySupervisor['id'] : null,
+            'supervisor_name' => $primarySupervisor ? $primarySupervisor['name'] : null,
+            'supervisor_code' => $primarySupervisor ? $primarySupervisor['code'] : null,
+            'supervisors' => $supervisors,
             'site_incharge_id' => $siteInchargeEmployee ? $siteInchargeEmployee->id : $this->site_incharge_id,
             'site_incharge_name' => $siteInchargeEmployee ? $siteInchargeEmployee->name : optional($this->siteIncharge)->email,
             'site_incharge_code' => $siteInchargeEmployee ? $siteInchargeEmployee->employee_code : null,
@@ -71,6 +73,8 @@ class ShiftPlanResource extends JsonResource
                         'allocation_id' => $child->id,
                         'machine_id' => $childMachine ? $childMachine->id : null,
                         'machine_number' => $childMachine ? $childMachine->equipment_name : null,
+                        'equipment_code' => $childMachine ? $childMachine->equipment_code : null,
+                        'chassis_number' => $childMachine ? $childMachine->chassis_number : null,
                     ];
                 });
 
@@ -78,6 +82,8 @@ class ShiftPlanResource extends JsonResource
                     'allocation_id' => $allocation->id,
                     'machine_id' => $machine ? $machine->id : null,
                     'machine_number' => $machine ? $machine->equipment_name : null,
+                    'equipment_code' => $machine ? $machine->equipment_code : null,
+                    'chassis_number' => $machine ? $machine->chassis_number : null,
                     'category_id' => $thisCategoryId,
                     'category_name' => $category ? $category->name : null,
                     'dumpers' => $dumpers->toArray(),

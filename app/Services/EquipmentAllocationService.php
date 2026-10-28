@@ -150,6 +150,8 @@ class EquipmentAllocationService
             return [
                 'machine_id' => $machine->id,
                 'machine_number' => $machine->equipment_name,
+                'equipment_code' => $machine->equipment_code,
+                'chassis_number' => $machine->chassis_number,
                 'category_id' => $machine->equipment_id,
                 'category_name' => $categoryModel ? $categoryModel->name : null,
                 'status' => $machine->is_active ? 'Active' : 'Inactive',
@@ -360,6 +362,8 @@ class EquipmentAllocationService
                 'shift_id' => $shiftPlan->id,
                 'machine_id' => $machine->id,
                 'machine_number' => $machine->equipment_name,
+                'equipment_code' => $machine->equipment_code,
+                'chassis_number' => $machine->chassis_number,
                 'category_id' => $resolvedCategory ? $resolvedCategory->id : null,
                 'category_name' => $resolvedCategory ? $resolvedCategory->name : null,
                 'parent_category_id' => $parentCategoryId,
@@ -415,6 +419,8 @@ class EquipmentAllocationService
                     'allocation_id' => $child->id,
                     'machine_id' => $childMachine ? $childMachine->id : null,
                     'machine_number' => $childMachine ? $childMachine->equipment_name : null,
+                    'equipment_code' => $childMachine ? $childMachine->equipment_code : null,
+                    'chassis_number' => $childMachine ? $childMachine->chassis_number : null,
                 ];
             });
 
@@ -422,6 +428,8 @@ class EquipmentAllocationService
                 'allocation_id' => $allocation->id,
                 'machine_id' => $machine ? $machine->id : null,
                 'machine_number' => $machine ? $machine->equipment_name : null,
+                'equipment_code' => $machine ? $machine->equipment_code : null,
+                'chassis_number' => $machine ? $machine->chassis_number : null,
                 'category_id' => $thisCategoryId,
                 'category_name' => $category ? $category->name : null,
                 'dumpers' => $dumpers->toArray(),
@@ -585,6 +593,8 @@ class EquipmentAllocationService
                 'allocation_id' => $allocation->id,
                 'machine_id' => $machine ? $machine->id : null,
                 'machine_number' => $machine ? $machine->equipment_name : null,
+                'equipment_code' => $machine ? $machine->equipment_code : null,
+                'chassis_number' => $machine ? $machine->chassis_number : null,
                 'category_id' => $category ? $category->id : null,
                 'category_name' => $category ? $category->name : null,
             ];
