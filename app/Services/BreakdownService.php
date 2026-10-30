@@ -199,7 +199,7 @@ class BreakdownService
             $machineStatsCalculated[] = [
                 'equipment_name_id' => $stat->equipment_name_id,
                 'machine' => $stat->equipmentName->equipment_name,
-                'equipment_code' => $stat->equipmentName->equipment_code,
+                'model_number' => optional($stat->equipmentName->modelNumber)->model_number,
                 'chassis_number' => $stat->equipmentName->chassis_number,
                 'downtime_hours' => $mDowntimeHours,
                 'breakdowns' => $mBreakdownCount,
@@ -225,7 +225,7 @@ class BreakdownService
             if ($mostReliableRaw) {
                 $mostReliableMachine = [
                     'machine' => $mostReliableRaw['machine'],
-                    'equipment_code' => $mostReliableRaw['equipment_code'],
+                    'model_number' => $mostReliableRaw['model_number'],
                     'chassis_number' => $mostReliableRaw['chassis_number'],
                     'downtime' => $mostReliableRaw['downtime_hours'] . ' Hrs',
                     'downtime_hours' => $mostReliableRaw['downtime_hours'],
@@ -247,7 +247,7 @@ class BreakdownService
             if ($leastReliableRaw) {
                 $leastReliableMachine = [
                     'machine' => $leastReliableRaw['machine'],
-                    'equipment_code' => $leastReliableRaw['equipment_code'],
+                    'model_number' => $leastReliableRaw['model_number'],
                     'chassis_number' => $leastReliableRaw['chassis_number'],
                     'downtime' => $leastReliableRaw['downtime_hours'] . ' Hrs',
                     'downtime_hours' => $leastReliableRaw['downtime_hours'],
@@ -290,7 +290,7 @@ class BreakdownService
             ->map(function ($m) {
                 return [
                     'machine' => $m['machine'],
-                    'equipment_code' => $m['equipment_code'],
+                    'model_number' => $m['model_number'],
                     'chassis_number' => $m['chassis_number'],
                     'downtime_hours' => $m['downtime_hours']
                 ];
@@ -321,7 +321,7 @@ class BreakdownService
             ->map(function ($m) {
                 return [
                     'machine' => $m['machine'],
-                    'equipment_code' => $m['equipment_code'],
+                    'model_number' => $m['model_number'],
                     'chassis_number' => $m['chassis_number'],
                     'reliability_score' => $m['reliability_score']
                 ];

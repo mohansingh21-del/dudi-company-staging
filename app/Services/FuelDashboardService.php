@@ -250,11 +250,12 @@ class FuelDashboardService
             ->whereBetween('fuel_entries.date', [$from, $to])
             ->where('fuel_entries.status', 'active')
             ->join('equipment_names', 'equipment_names.id', '=', 'fuel_entries.equipment_name_id')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->selectRaw('
                 equipment_names.id as equipment_name_id,
                 equipment_names.equipment_name as asset_id,
-                equipment_names.equipment_code as equipment_code,
+                equipment_model_numbers.model_number as model_number,
                 equipment_names.chassis_number as chassis_number,
                 COALESCE(SUM(fuel_entries.fuel_consumption), 0) as fuel_consumed,
                 COALESCE(MAX(fuel_entries.hours_meter_reading) - MIN(fuel_entries.hours_meter_reading), 0) as hours_run,
@@ -273,7 +274,7 @@ class FuelDashboardService
             return [
                 'rank'             => ($currentPage - 1) * $perPage + $index + 1,
                 'asset_id'         => $item->asset_id,
-                'equipment_code'   => $item->equipment_code,
+                'model_number'   => $item->model_number,
                 'chassis_number'   => $item->chassis_number,
                 'fuel_consumed'    => $fuelConsumed,
                 'hours_run'        => round((float) $item->hours_run, 2),
@@ -330,10 +331,11 @@ class FuelDashboardService
             ->whereBetween('fuel_entries.date', [$from, $to])
             ->where('fuel_entries.status', 'active')
             ->join('equipment_names', 'equipment_names.id', '=', 'fuel_entries.equipment_name_id')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->selectRaw('
                 equipment_names.equipment_name as asset_id,
-                equipment_names.equipment_code as equipment_code,
+                equipment_model_numbers.model_number as model_number,
                 equipment_names.chassis_number as chassis_number,
                 COALESCE(SUM(fuel_entries.fuel_consumption), 0) as fuel_consumed,
                 COALESCE(SUM(fuel_entries.work_done_bcm), 0) as total_bcm,
@@ -350,7 +352,7 @@ class FuelDashboardService
 
             return [
                 'asset_id'           => $item->asset_id,
-                'equipment_code'   => $item->equipment_code,
+                'model_number'   => $item->model_number,
                 'chassis_number'   => $item->chassis_number,
                 'efficiency'         => $eff,
                 'baseline_efficiency'=> round($avgSiteEff, 2),
@@ -398,11 +400,12 @@ class FuelDashboardService
             ->whereBetween('fuel_entries.date', [$from, $to])
             ->where('fuel_entries.status', 'active')
             ->join('equipment_names', 'equipment_names.id', '=', 'fuel_entries.equipment_name_id')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
             ->leftJoin('employees', 'employees.id', '=', 'fuel_entries.operator_id')
             ->selectRaw('
                 fuel_entries.fuel_log_date as time,
                 equipment_names.equipment_name as vehicle,
-                equipment_names.equipment_code as equipment_code,
+                equipment_model_numbers.model_number as model_number,
                 equipment_names.chassis_number as chassis_number,
                 fuel_entries.fuel_issued as quantity,
                 employees.name as driver,
@@ -416,7 +419,7 @@ class FuelDashboardService
             return [
                 'time'     => $item->time ? Carbon::parse($item->time)->toIso8601String() : null,
                 'vehicle'  => $item->vehicle,
-                'equipment_code' => $item->equipment_code,
+                'model_number' => $item->model_number,
                 'chassis_number' => $item->chassis_number,
                 'quantity' => (float) $item->quantity,
                 'driver'   => $item->driver ?: 'N/A',

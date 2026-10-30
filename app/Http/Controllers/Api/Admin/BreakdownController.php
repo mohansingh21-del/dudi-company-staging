@@ -252,7 +252,7 @@ class BreakdownController extends Controller
                     'ticket_number'       => $ticket->ticket_number,
                     'equipment_name_id'   => $ticket->equipment_name_id,
                     'equipment_name'      => optional($ticket->equipmentName)->equipment_name,
-                    'equipment_code'      => optional($ticket->equipmentName)->equipment_code,
+                    'model_number'      => optional(optional($ticket->equipmentName)->modelNumber)->model_number,
                     'chassis_number'      => optional($ticket->equipmentName)->chassis_number,
                     'equipment_category'  => optional($ticket->equipment)->name,
                     'breakdown_type'      => optional($ticket->breakdownType)->breakdown_type,

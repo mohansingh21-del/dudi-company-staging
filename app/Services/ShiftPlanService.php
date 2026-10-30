@@ -357,7 +357,7 @@ class ShiftPlanService
                     'allocation_id' => $child->id,
                     'machine_id' => $childMachine ? $childMachine->id : null,
                     'machine_number' => $childMachine ? $childMachine->equipment_name : null,
-                    'equipment_code' => $childMachine ? $childMachine->equipment_code : null,
+                    'model_number' => $childMachine ? optional($childMachine->modelNumber)->model_number : null,
                     'chassis_number' => $childMachine ? $childMachine->chassis_number : null,
                 ];
             });
@@ -366,7 +366,7 @@ class ShiftPlanService
                 'allocation_id' => $allocation->id,
                 'machine_id' => $machine ? $machine->id : null,
                 'machine_number' => $machine ? $machine->equipment_name : null,
-                'equipment_code' => $machine ? $machine->equipment_code : null,
+                'model_number' => $machine ? optional($machine->modelNumber)->model_number : null,
                 'chassis_number' => $machine ? $machine->chassis_number : null,
                 'category_id' => $category ? $category->id : null,
                 'category_name' => $category ? $category->name : null,
@@ -417,12 +417,12 @@ class ShiftPlanService
 
             $machineName = null;
 
-            $machineCode = null;
+            $machineModelNumber = null;
 
             $machineChassis = null;
             if ($machine && $machine->equipmentName) {
                 $machineName = $machine->equipmentName->equipment_name;
-                $machineCode = $machine->equipmentName->equipment_code;
+                $machineModelNumber = optional($machine->equipmentName->modelNumber)->model_number;
                 $machineChassis = $machine->equipmentName->chassis_number;
             }
 
@@ -443,7 +443,7 @@ class ShiftPlanService
                 'shift_name' => $shiftName,
                 'home_shift_name' => $homeShiftName,
                 'assigned_machine' => $machineName,
-                'assigned_machine_code' => $machineCode,
+                'assigned_machine_model_number' => $machineModelNumber,
                 'assigned_machine_chassis_number' => $machineChassis,
                 'is_borrowed' => (bool) $dep->is_borrowed,
                 'home_relay_id' => $dep->home_relay_id,

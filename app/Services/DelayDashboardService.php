@@ -340,12 +340,13 @@ class DelayDashboardService
             })
             ->join('delay_categories', 'delay_categories.id', '=', 'delays.delay_category_id')
             ->leftJoin('equipment_names', 'equipment_names.id', '=', 'delays.equipment_name_id')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
             ->selectRaw('
                 delays.id,
                 delays.delay_ref_no,
                 delay_categories.delay_category as category,
                 equipment_names.equipment_name as asset_id,
-                equipment_names.equipment_code as equipment_code,
+                equipment_model_numbers.model_number as model_number,
                 equipment_names.chassis_number as chassis_number,
                 delays.start_time,
                 delays.end_time,
@@ -361,7 +362,7 @@ class DelayDashboardService
                 'delay_ref_no'     => $item->delay_ref_no,
                 'category'         => $item->category,
                 'asset_id'         => $item->asset_id ?: 'N/A',
-                'equipment_code'   => $item->equipment_code,
+                'model_number'   => $item->model_number,
                 'chassis_number'   => $item->chassis_number,
                 'start_time'       => $item->start_time ? Carbon::parse($item->start_time)->toIso8601String() : null,
                 'end_time'         => $item->end_time ? Carbon::parse($item->end_time)->toIso8601String() : null,
@@ -418,12 +419,13 @@ class DelayDashboardService
             ->whereBetween('delays.date', [$from, $to])
             ->join('delay_categories', 'delay_categories.id', '=', 'delays.delay_category_id')
             ->leftJoin('equipment_names', 'equipment_names.id', '=', 'delays.equipment_name_id')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
             ->selectRaw('
                 delays.id,
                 delays.delay_ref_no,
                 delay_categories.delay_category as category,
                 equipment_names.equipment_name as asset_id,
-                equipment_names.equipment_code as equipment_code,
+                equipment_model_numbers.model_number as model_number,
                 equipment_names.chassis_number as chassis_number,
                 delays.start_time,
                 delays.end_time,
@@ -439,7 +441,7 @@ class DelayDashboardService
                 'delay_ref_no'     => $item->delay_ref_no,
                 'category'         => $item->category,
                 'asset_id'         => $item->asset_id ?: 'N/A',
-                'equipment_code'   => $item->equipment_code,
+                'model_number'   => $item->model_number,
                 'chassis_number'   => $item->chassis_number,
                 'start_time'       => $item->start_time ? Carbon::parse($item->start_time)->toIso8601String() : null,
                 'end_time'         => $item->end_time ? Carbon::parse($item->end_time)->toIso8601String() : null,

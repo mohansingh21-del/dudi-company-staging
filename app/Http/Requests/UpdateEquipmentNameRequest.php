@@ -6,6 +6,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
+use App\Models\EquipmentName;
 
 
 class UpdateEquipmentNameRequest extends FormRequest
@@ -24,11 +25,33 @@ class UpdateEquipmentNameRequest extends FormRequest
 
         $equipmentNameId = $this->route('equipment_name');
 
+        // A machine may keep the model it already has after that model is
+        // deactivated; only switching to an inactive one is refused.
+        $currentModelId = optional(EquipmentName::find($equipmentNameId))
+            ->equipment_model_number_id;
+
 
         return [
 
             'equipment_id' =>
             'required|exists:equipments,id',
+
+
+            // Must be a model of the category the machine is filed under.
+            'equipment_model_number_id' => [
+
+                'required',
+
+                'integer',
+
+                Rule::exists('equipment_model_numbers', 'id')
+                    ->where('equipment_id', $this->input('equipment_id'))
+                    ->where(function ($query) use ($currentModelId) {
+                        $query->where('is_active', 1)
+                            ->orWhere('id', $currentModelId);
+                    })
+
+            ],
 
 
             'equipment_name' => [
@@ -42,22 +65,6 @@ class UpdateEquipmentNameRequest extends FormRequest
                 Rule::unique(
                     'equipment_names',
                     'equipment_name'
-                )->ignore($equipmentNameId)
-
-            ],
-
-
-            'equipment_code' => [
-
-                'nullable',
-
-                'string',
-
-                'max:50',
-
-                Rule::unique(
-                    'equipment_names',
-                    'equipment_code'
                 )->ignore($equipmentNameId)
 
             ],
@@ -88,6 +95,12 @@ class UpdateEquipmentNameRequest extends FormRequest
 
         return [
 
+            'equipment_model_number_id.required' =>
+            'Model number is required.',
+
+            'equipment_model_number_id.exists' =>
+            'Selected model number is inactive or does not belong to this equipment category.',
+
             'equipment_name.required' =>
             'Equipment name is required.',
 
@@ -97,12 +110,6 @@ class UpdateEquipmentNameRequest extends FormRequest
 
             'equipment_name.max' =>
             'Equipment name cannot be longer than 255 characters.',
-
-            'equipment_code.unique' =>
-            'Equipment code already exists.',
-
-            'equipment_code.max' =>
-            'Equipment code cannot be longer than 50 characters.',
 
             'chassis_number.unique' =>
             'Chassis number is already assigned to another machine.',

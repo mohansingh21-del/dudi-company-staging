@@ -73,7 +73,7 @@ class ShiftPlanResource extends JsonResource
                         'allocation_id' => $child->id,
                         'machine_id' => $childMachine ? $childMachine->id : null,
                         'machine_number' => $childMachine ? $childMachine->equipment_name : null,
-                        'equipment_code' => $childMachine ? $childMachine->equipment_code : null,
+                        'model_number' => $childMachine ? optional($childMachine->modelNumber)->model_number : null,
                         'chassis_number' => $childMachine ? $childMachine->chassis_number : null,
                     ];
                 });
@@ -82,7 +82,7 @@ class ShiftPlanResource extends JsonResource
                     'allocation_id' => $allocation->id,
                     'machine_id' => $machine ? $machine->id : null,
                     'machine_number' => $machine ? $machine->equipment_name : null,
-                    'equipment_code' => $machine ? $machine->equipment_code : null,
+                    'model_number' => $machine ? optional($machine->modelNumber)->model_number : null,
                     'chassis_number' => $machine ? $machine->chassis_number : null,
                     'category_id' => $thisCategoryId,
                     'category_name' => $category ? $category->name : null,

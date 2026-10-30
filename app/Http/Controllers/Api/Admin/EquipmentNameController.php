@@ -27,7 +27,7 @@ class EquipmentNameController extends Controller
             $limit = $request->input('limit', 10);
 
 
-            $equipmentNames = EquipmentName::with('equipment');
+            $equipmentNames = EquipmentName::with(['equipment', 'modelNumber']);
 
 
 
@@ -47,9 +47,13 @@ class EquipmentNameController extends Controller
                         "%{$search}%"
                     )
 
-                        ->orWhere('equipment_code', 'LIKE', "%{$search}%")
-
                         ->orWhere('chassis_number', 'LIKE', "%{$search}%")
+
+
+                        ->orWhereHas('modelNumber', function ($q) use ($search) {
+
+                            $q->where('model_number', 'LIKE', "%{$search}%");
+                        })
 
 
                         ->orWhereHas('equipment', function ($q) use ($search) {
@@ -142,10 +146,10 @@ class EquipmentNameController extends Controller
             'equipment_id' => $request->equipment_id,
 
 
+            'equipment_model_number_id' => $request->equipment_model_number_id,
+
+
             'equipment_name' => $request->equipment_name,
-
-
-            'equipment_code' => $request->equipment_code,
 
 
             'chassis_number' => $request->chassis_number,
@@ -179,7 +183,7 @@ class EquipmentNameController extends Controller
     {
 
 
-        $equipmentName = EquipmentName::with('equipment')
+        $equipmentName = EquipmentName::with(['equipment', 'modelNumber'])
             ->find($id);
 
 
@@ -246,6 +250,9 @@ class EquipmentNameController extends Controller
             'equipment_id' => $request->equipment_id,
 
 
+            'equipment_model_number_id' => $request->equipment_model_number_id,
+
+
             'equipment_name' => $request->equipment_name
 
 
@@ -256,7 +263,7 @@ class EquipmentNameController extends Controller
         // Only touch these when the client sends them: a form that predates
         // the fields must not wipe a chassis the telematics sync matches on.
 
-        foreach (['equipment_code', 'chassis_number'] as $field) {
+        foreach (['chassis_number'] as $field) {
 
             if ($request->has($field)) {
 
@@ -388,14 +395,16 @@ class EquipmentNameController extends Controller
         try {
             $query = EquipmentName::where('is_active', 1)
                 ->where('equipment_id', $id)
-                ->with('equipment');
+                ->with(['equipment', 'modelNumber']);
 
             if ($request->filled('search')) {
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
                     $q->where('equipment_name', 'LIKE', "%{$search}%")
-                        ->orWhere('equipment_code', 'LIKE', "%{$search}%")
-                        ->orWhere('chassis_number', 'LIKE', "%{$search}%");
+                        ->orWhere('chassis_number', 'LIKE', "%{$search}%")
+                        ->orWhereHas('modelNumber', function ($m) use ($search) {
+                            $m->where('model_number', 'LIKE', "%{$search}%");
+                        });
                 });
             }
 
@@ -452,8 +461,10 @@ class EquipmentNameController extends Controller
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
                     $q->where('equipment_name', 'LIKE', "%{$search}%")
-                        ->orWhere('equipment_code', 'LIKE', "%{$search}%")
-                        ->orWhere('chassis_number', 'LIKE', "%{$search}%");
+                        ->orWhere('chassis_number', 'LIKE', "%{$search}%")
+                        ->orWhereHas('modelNumber', function ($m) use ($search) {
+                            $m->where('model_number', 'LIKE', "%{$search}%");
+                        });
                 });
             }
 
@@ -472,7 +483,7 @@ class EquipmentNameController extends Controller
                 return [
                     'id' => $machine->id,
                     'equipment_name' => $machine->equipment_name,
-                    'equipment_code' => $machine->equipment_code,
+                    'model_number' => optional($machine->modelNumber)->model_number,
 
                     // Null on machines no telematics feed covers. Also what the
                     // fleet dashboard falls back to when equipment_name is

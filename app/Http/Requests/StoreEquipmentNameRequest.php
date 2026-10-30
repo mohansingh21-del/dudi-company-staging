@@ -5,6 +5,7 @@ namespace App\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
 
 class StoreEquipmentNameRequest extends FormRequest
 {
@@ -23,11 +24,22 @@ class StoreEquipmentNameRequest extends FormRequest
             'equipment_id' =>
             'required|exists:equipments,id',
 
+            // Must be an active model of the category the machine is filed under.
+            'equipment_model_number_id' => [
+
+                'required',
+
+                'integer',
+
+                Rule::exists('equipment_model_numbers', 'id')
+                    ->where('equipment_id', $this->input('equipment_id'))
+                    ->where('is_active', 1)
+
+            ],
+
+
             'equipment_name' =>
             'required|string|max:255|unique:equipment_names,equipment_name',
-
-            'equipment_code' =>
-            'nullable|string|max:50|unique:equipment_names,equipment_code',
 
             'chassis_number' =>
             'nullable|string|max:32|unique:equipment_names,chassis_number'
@@ -47,6 +59,12 @@ class StoreEquipmentNameRequest extends FormRequest
             'equipment_id.exists' =>
             'Invalid equipment category.',
 
+            'equipment_model_number_id.required' =>
+            'Model number is required.',
+
+            'equipment_model_number_id.exists' =>
+            'Selected model number is inactive or does not belong to this equipment category.',
+
             'equipment_name.required' =>
             'Equipment name is required.',
 
@@ -55,12 +73,6 @@ class StoreEquipmentNameRequest extends FormRequest
 
             'equipment_name.max' =>
             'Equipment name cannot be longer than 255 characters.',
-
-            'equipment_code.unique' =>
-            'Equipment code already exists.',
-
-            'equipment_code.max' =>
-            'Equipment code cannot be longer than 50 characters.',
 
             'chassis_number.unique' =>
             'Chassis number is already assigned to another machine.',

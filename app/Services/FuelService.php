@@ -551,7 +551,7 @@ class FuelService
         foreach ($trendItems as $entry) {
             $efficiencyTrends[] = [
                 'machine_name' => optional($entry->equipmentName)->equipment_name ?? 'Unknown',
-                'equipment_code' => optional($entry->equipmentName)->equipment_code,
+                'model_number' => optional(optional($entry->equipmentName)->modelNumber)->model_number,
                 'chassis_number' => optional($entry->equipmentName)->chassis_number,
                 'active_selection' => $entry->fuel_per_bcm !== null ? round((float) $entry->fuel_per_bcm, 4) : 0.0,
                 'fleet_average' => $avgFuelPerBcm !== null ? round((float) $avgFuelPerBcm, 4) : null,
@@ -599,15 +599,16 @@ class FuelService
         $machineFuelEfficiencyTrends = (clone $query)
             ->reorder()
             ->join('equipment_names', 'fuel_entries.equipment_name_id', '=', 'equipment_names.id')
-            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_names.equipment_code, equipment_names.chassis_number, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_model_numbers.model_number, equipment_names.chassis_number, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm')
             ->whereNotNull('fuel_entries.fuel_per_bcm')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->toBase()
             ->get()
             ->map(function ($item) use ($avgFuelPerBcm) {
                 return [
                     'machine_name' => $item->equipment_name,
-                    'equipment_code' => $item->equipment_code,
+                    'model_number' => $item->model_number,
                     'chassis_number' => $item->chassis_number,
                     'active_selection' => round((float) $item->avg_fuel_per_bcm, 4),
                     'fleet_average' => $avgFuelPerBcm !== null ? round((float) $avgFuelPerBcm, 4) : 0.0,
@@ -708,8 +709,9 @@ class FuelService
         $machineComparison = (clone $query)
             ->join('shift_equipment_allocations', 'fuel_entries.equipment_allocation_id', '=', 'shift_equipment_allocations.id')
             ->join('equipment_names', 'shift_equipment_allocations.equipment_name_id', '=', 'equipment_names.id')
-            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_names.equipment_code, equipment_names.chassis_number, SUM(fuel_entries.fuel_consumption) as total_consumption, AVG(fuel_entries.fuel_per_bcm) as avg_efficiency')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_model_numbers.model_number, equipment_names.chassis_number, SUM(fuel_entries.fuel_consumption) as total_consumption, AVG(fuel_entries.fuel_per_bcm) as avg_efficiency')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->get()
             ->map(function ($item) {
                 $item->total_consumption = round((float) $item->total_consumption, 2);
@@ -721,8 +723,9 @@ class FuelService
         $topFuelConsumingMachines = (clone $query)
             ->join('shift_equipment_allocations', 'fuel_entries.equipment_allocation_id', '=', 'shift_equipment_allocations.id')
             ->join('equipment_names', 'shift_equipment_allocations.equipment_name_id', '=', 'equipment_names.id')
-            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_names.equipment_code, equipment_names.chassis_number, SUM(fuel_entries.fuel_consumption) as total_consumption')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_model_numbers.model_number, equipment_names.chassis_number, SUM(fuel_entries.fuel_consumption) as total_consumption')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->orderBy('total_consumption', 'desc')
             ->limit(5)
             ->get()
@@ -735,9 +738,10 @@ class FuelService
         $lowestEfficiencyMachines = (clone $query)
             ->join('shift_equipment_allocations', 'fuel_entries.equipment_allocation_id', '=', 'shift_equipment_allocations.id')
             ->join('equipment_names', 'shift_equipment_allocations.equipment_name_id', '=', 'equipment_names.id')
-            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_names.equipment_code, equipment_names.chassis_number, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_model_numbers.model_number, equipment_names.chassis_number, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm')
             ->whereNotNull('fuel_entries.fuel_per_bcm')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->orderBy('avg_fuel_per_bcm', 'desc')
             ->limit(5)
             ->get()
@@ -817,9 +821,10 @@ class FuelService
         $performerRaw = (clone $query)
             ->join('shift_equipment_allocations', 'fuel_entries.equipment_allocation_id', '=', 'shift_equipment_allocations.id')
             ->join('equipment_names', 'shift_equipment_allocations.equipment_name_id', '=', 'equipment_names.id')
-            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_names.equipment_code, equipment_names.chassis_number, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_model_numbers.model_number, equipment_names.chassis_number, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm')
             ->whereNotNull('fuel_entries.fuel_per_bcm')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->get();
 
         $bestPerformer = null;
@@ -832,7 +837,7 @@ class FuelService
             $bestPerformer = [
                 'machine_id' => $best->id,
                 'equipment_name' => $best->equipment_name,
-                'equipment_code' => $best->equipment_code,
+                'model_number' => $best->model_number,
                 'chassis_number' => $best->chassis_number,
                 'fuel_per_bcm' => round((float) $best->avg_fuel_per_bcm, 4),
             ];
@@ -840,7 +845,7 @@ class FuelService
             $worstPerformer = [
                 'machine_id' => $worst->id,
                 'equipment_name' => $worst->equipment_name,
-                'equipment_code' => $worst->equipment_code,
+                'model_number' => $worst->model_number,
                 'chassis_number' => $worst->chassis_number,
                 'fuel_per_bcm' => round((float) $worst->avg_fuel_per_bcm, 4),
             ];
@@ -909,15 +914,16 @@ class FuelService
         $machineFuelPerformance = (clone $query)
             ->join('shift_equipment_allocations', 'fuel_entries.equipment_allocation_id', '=', 'shift_equipment_allocations.id')
             ->join('equipment_names', 'shift_equipment_allocations.equipment_name_id', '=', 'equipment_names.id')
-            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_names.equipment_code, equipment_names.chassis_number, SUM(fuel_entries.fuel_consumption) as total_consumption, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm, SUM(fuel_entries.work_done_bcm) as total_work_done')
-            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->selectRaw('equipment_names.id, equipment_names.equipment_name, equipment_model_numbers.model_number, equipment_names.chassis_number, SUM(fuel_entries.fuel_consumption) as total_consumption, AVG(fuel_entries.fuel_per_bcm) as avg_fuel_per_bcm, SUM(fuel_entries.work_done_bcm) as total_work_done')
+            ->groupBy('equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->orderByRaw('AVG(fuel_entries.fuel_per_bcm) ASC')
             ->get()
             ->map(function ($item, $index) {
                 return [
                     'machine_id' => $item->id,
                     'equipment_name' => $item->equipment_name,
-                    'equipment_code' => $item->equipment_code,
+                    'model_number' => $item->model_number,
                     'chassis_number' => $item->chassis_number,
                     'total_consumption' => round((float) $item->total_consumption, 2),
                     'total_work_done' => $item->total_work_done !== null ? round((float) $item->total_work_done, 2) : null,
@@ -950,13 +956,14 @@ class FuelService
             ->join('shifts', 'shift_plans.shift_id', '=', 'shifts.id')
             ->join('shift_equipment_allocations', 'fuel_entries.equipment_allocation_id', '=', 'shift_equipment_allocations.id')
             ->join('equipment_names', 'shift_equipment_allocations.equipment_name_id', '=', 'equipment_names.id')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
             ->selectRaw('
                 shift_plans.planning_date as planning_date,
                 shifts.id as shift_id,
                 shifts.shift_name as shift_name,
                 equipment_names.id as equipment_name_id,
                 equipment_names.equipment_name as equipment_name,
-                equipment_names.equipment_code as equipment_code,
+                equipment_model_numbers.model_number as model_number,
                 equipment_names.chassis_number as chassis_number,
                 SUM(fuel_entries.fuel_issued) as fuel_allocated_liters,
                 COUNT(fuel_entries.id) as entry_count
@@ -979,7 +986,7 @@ class FuelService
             $query->where('shift_plans.site_id', $filters['site_id']);
         }
 
-        $query->groupBy('shift_plans.planning_date', 'shifts.id', 'shifts.shift_name', 'equipment_names.id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+        $query->groupBy('shift_plans.planning_date', 'shifts.id', 'shifts.shift_name', 'equipment_names.id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->orderBy('shift_plans.planning_date', 'DESC')
             ->orderBy('shifts.id', 'DESC')
             ->orderBy('equipment_names.id', 'DESC');
@@ -1063,7 +1070,7 @@ class FuelService
             $machines[] = [
                 'machine_id' => $machineId,
                 'machine_name' => $machineName,
-                'equipment_code' => optional($machine)->equipment_code,
+                'model_number' => optional(optional($machine)->modelNumber)->model_number,
                 'chassis_number' => optional($machine)->chassis_number,
                 'fuel_issued_liters' => round($fuelIssuedLiters, 2),
                 'closing_fuel_liters' => $closingFuelLiters !== null ? round($closingFuelLiters, 2) : null,

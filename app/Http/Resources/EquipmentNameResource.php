@@ -19,8 +19,9 @@ class EquipmentNameResource extends JsonResource
             'equipment_category_id' => $this->equipment ? $this->equipment->id : null,
             'equipment_category_name' => $this->equipment ? $this->equipment->name : null,
             'equipment_id' => $this->equipment_id,
+            'equipment_model_number_id' => $this->equipment_model_number_id,
+            'model_number' => $this->modelNumber ? $this->modelNumber->model_number : null,
             'equipment_name' => $this->equipment_name,
-            'equipment_code' => $this->equipment_code,
             'chassis_number' => $this->chassis_number,
             'status' => $this->is_active,
 

@@ -157,10 +157,11 @@ class DispatchTripService
 
         // 3. top_performing_dumpers (top 5 by quantity)
         $topDumpersData = (clone $query)
-            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_names.equipment_code as dumper_equipment_code', 'equipment_names.chassis_number as dumper_chassis_number')
+            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_model_numbers.model_number as dumper_model_number', 'equipment_names.chassis_number as dumper_chassis_number')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
-            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->orderBy('total_quantity_bcm', 'DESC')
             ->limit(5)
             ->get();
@@ -169,7 +170,7 @@ class DispatchTripService
             return [
                 'dumper_equipment_id' => $row->dumper_equipment_id,
                 'dumper_number' => $row->dumper_number,
-                'dumper_equipment_code' => $row->dumper_equipment_code,
+                'dumper_model_number' => $row->dumper_model_number,
                 'dumper_chassis_number' => $row->dumper_chassis_number,
                 'total_quantity_bcm' => round((float) $row->total_quantity_bcm, 2),
             ];
@@ -178,8 +179,8 @@ class DispatchTripService
         // 4. recent_trip_activity (latest 10 trips)
         $recentTrips = (clone $query)
             ->with([
-                'dumper:id,equipment_name,equipment_code,chassis_number',
-                'excavator:id,equipment_name,equipment_code,chassis_number',
+                'dumper:id,equipment_name,equipment_model_number_id,chassis_number',
+                'excavator:id,equipment_name,equipment_model_number_id,chassis_number',
                 'driver:id,name',
                 'loadingPoint:id,name',
                 'dumpingPoint:id,name',
@@ -197,10 +198,10 @@ class DispatchTripService
                     'start_time' => $trip->start_time ? $trip->start_time->format('Y-m-d H:i:s') : null,
                     'end_time' => $trip->end_time ? $trip->end_time->format('Y-m-d H:i:s') : null,
                     'dumper_number' => optional($trip->dumper)->equipment_name,
-                    'dumper_equipment_code' => optional($trip->dumper)->equipment_code,
+                    'dumper_model_number' => optional(optional($trip->dumper)->modelNumber)->model_number,
                     'dumper_chassis_number' => optional($trip->dumper)->chassis_number,
                     'excavator_number' => optional($trip->excavator)->equipment_name,
-                    'excavator_equipment_code' => optional($trip->excavator)->equipment_code,
+                    'excavator_model_number' => optional(optional($trip->excavator)->modelNumber)->model_number,
                     'excavator_chassis_number' => optional($trip->excavator)->chassis_number,
                     'driver_name' => optional($trip->driver)->name,
                     'loading_point_name' => optional($trip->loadingPoint)->name,
@@ -244,13 +245,14 @@ class DispatchTripService
 
         // Fetch aggregation group by dumper for top performer KPIs
         $dumperSummaryData = (clone $summaryQuery)
-            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_names.equipment_code as dumper_equipment_code', 'equipment_names.chassis_number as dumper_chassis_number')
+            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_model_numbers.model_number as dumper_model_number', 'equipment_names.chassis_number as dumper_chassis_number')
             ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(dispatch_trips.total_cycles) as sum_total_cycles')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
-            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->get();
 
         $bestDumper = null;
@@ -272,7 +274,7 @@ class DispatchTripService
                 $bestDumper = [
                     'dumper_equipment_id' => $row->dumper_equipment_id,
                     'dumper_number' => $row->dumper_number,
-                    'dumper_equipment_code' => $row->dumper_equipment_code,
+                    'dumper_model_number' => $row->dumper_model_number,
                     'dumper_chassis_number' => $row->dumper_chassis_number,
                     'value' => round($totalQty, 2),
                 ];
@@ -283,7 +285,7 @@ class DispatchTripService
                 $highestTripDumper = [
                     'dumper_equipment_id' => $row->dumper_equipment_id,
                     'dumper_number' => $row->dumper_number,
-                    'dumper_equipment_code' => $row->dumper_equipment_code,
+                    'dumper_model_number' => $row->dumper_model_number,
                     'dumper_chassis_number' => $row->dumper_chassis_number,
                     'value' => $totalCycles,
                 ];
@@ -294,7 +296,7 @@ class DispatchTripService
                 $fastestDumper = [
                     'dumper_equipment_id' => $row->dumper_equipment_id,
                     'dumper_number' => $row->dumper_number,
-                    'dumper_equipment_code' => $row->dumper_equipment_code,
+                    'dumper_model_number' => $row->dumper_model_number,
                     'dumper_chassis_number' => $row->dumper_chassis_number,
                     'value' => round($avgCycle, 2),
                 ];
@@ -313,8 +315,8 @@ class DispatchTripService
 
         // Fetch paginated results
         $records = $query->with([
-            'dumper:id,equipment_name,equipment_code,chassis_number',
-            'excavator:id,equipment_name,equipment_code,chassis_number',
+            'dumper:id,equipment_name,equipment_model_number_id,chassis_number',
+            'excavator:id,equipment_name,equipment_model_number_id,chassis_number',
             'driver:id,name',
             'loadingPoint:id,name',
             'dumpingPoint:id,name',
@@ -341,8 +343,8 @@ class DispatchTripService
     public function getTripDetails($id)
     {
         $trip = DispatchTrip::with([
-            'dumper:id,equipment_name,equipment_code,chassis_number',
-            'excavator:id,equipment_name,equipment_code,chassis_number',
+            'dumper:id,equipment_name,equipment_model_number_id,chassis_number',
+            'excavator:id,equipment_name,equipment_model_number_id,chassis_number',
             'driver:id,name',
             'loadingPoint:id,name',
             'dumpingPoint:id,name',
@@ -371,13 +373,13 @@ class DispatchTripService
                 'dumper' => [
                     'id' => optional($trip->dumper)->id,
                     'machine_number' => optional($trip->dumper)->equipment_name,
-                    'equipment_code' => optional($trip->dumper)->equipment_code,
+                    'model_number' => optional(optional($trip->dumper)->modelNumber)->model_number,
                     'chassis_number' => optional($trip->dumper)->chassis_number,
                 ],
                 'excavator' => [
                     'id' => optional($trip->excavator)->id,
                     'machine_number' => optional($trip->excavator)->equipment_name,
-                    'equipment_code' => optional($trip->excavator)->equipment_code,
+                    'model_number' => optional(optional($trip->excavator)->modelNumber)->model_number,
                     'chassis_number' => optional($trip->excavator)->chassis_number,
                 ],
                 'driver' => [
@@ -542,14 +544,15 @@ class DispatchTripService
 
         // Fetch aggregation group by dumper
         $dumperSummaryData = (clone $query)
-            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_names.equipment_code as dumper_equipment_code', 'equipment_names.chassis_number as dumper_chassis_number')
+            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_model_numbers.model_number as dumper_model_number', 'equipment_names.chassis_number as dumper_chassis_number')
             ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(dispatch_trips.total_cycles) as sum_total_cycles')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->selectRaw('SUM(distance_meters) as distance_covered_meters')
             ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
-            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->get();
 
         $bestDumper = null;
@@ -573,7 +576,7 @@ class DispatchTripService
             $formattedRow = [
                 'dumper_equipment_id' => $row->dumper_equipment_id,
                 'dumper_number' => $row->dumper_number,
-                'dumper_equipment_code' => $row->dumper_equipment_code,
+                'dumper_model_number' => $row->dumper_model_number,
                 'dumper_chassis_number' => $row->dumper_chassis_number,
                 'total_trips' => $trips,
                 'total_quantity_bcm' => round($totalQty, 2),
@@ -590,7 +593,7 @@ class DispatchTripService
                 $bestDumper = [
                     'dumper_equipment_id' => $row->dumper_equipment_id,
                     'dumper_number' => $row->dumper_number,
-                    'dumper_equipment_code' => $row->dumper_equipment_code,
+                    'dumper_model_number' => $row->dumper_model_number,
                     'dumper_chassis_number' => $row->dumper_chassis_number,
                     'value' => round($totalQty, 2),
                 ];
@@ -601,7 +604,7 @@ class DispatchTripService
                 $highestTripDumper = [
                     'dumper_equipment_id' => $row->dumper_equipment_id,
                     'dumper_number' => $row->dumper_number,
-                    'dumper_equipment_code' => $row->dumper_equipment_code,
+                    'dumper_model_number' => $row->dumper_model_number,
                     'dumper_chassis_number' => $row->dumper_chassis_number,
                     'value' => $totalCycles,
                 ];
@@ -612,7 +615,7 @@ class DispatchTripService
                 $fastestDumper = [
                     'dumper_equipment_id' => $row->dumper_equipment_id,
                     'dumper_number' => $row->dumper_number,
-                    'dumper_equipment_code' => $row->dumper_equipment_code,
+                    'dumper_model_number' => $row->dumper_model_number,
                     'dumper_chassis_number' => $row->dumper_chassis_number,
                     'value' => round($avgCycle, 2),
                 ];
@@ -644,13 +647,14 @@ class DispatchTripService
 
         // Fetch dumper list and core statistics
         $dumperSummaryData = (clone $query)
-            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_names.equipment_code as dumper_equipment_code', 'equipment_names.chassis_number as dumper_chassis_number')
+            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_model_numbers.model_number as dumper_model_number', 'equipment_names.chassis_number as dumper_chassis_number')
             ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->selectRaw('SUM(distance_meters) as distance_covered_meters')
             ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
-            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_names.equipment_code', 'equipment_names.chassis_number')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->get();
 
         $activeDumpers = $dumperSummaryData->count();
@@ -732,7 +736,7 @@ class DispatchTripService
             $formattedDumpers[] = [
                 'dumper_equipment_id' => $row->dumper_equipment_id,
                 'dumper_number' => $row->dumper_number,
-                'dumper_equipment_code' => $row->dumper_equipment_code,
+                'dumper_model_number' => $row->dumper_model_number,
                 'dumper_chassis_number' => $row->dumper_chassis_number,
                 'total_trips' => $trips,
                 'total_quantity_bcm' => round($qty, 2),
@@ -793,7 +797,7 @@ class DispatchTripService
             return [
                 'dumper_equipment_id' => $item['dumper_equipment_id'],
                 'dumper_number' => $item['dumper_number'],
-                'dumper_equipment_code' => $item['dumper_equipment_code'],
+                'dumper_model_number' => $item['dumper_model_number'],
                 'dumper_chassis_number' => $item['dumper_chassis_number'],
                 'total_quantity_bcm' => $item['total_quantity_bcm'],
             ];
@@ -804,7 +808,7 @@ class DispatchTripService
             return [
                 'dumper_equipment_id' => $item['dumper_equipment_id'],
                 'dumper_number' => $item['dumper_number'],
-                'dumper_equipment_code' => $item['dumper_equipment_code'],
+                'dumper_model_number' => $item['dumper_model_number'],
                 'dumper_chassis_number' => $item['dumper_chassis_number'],
                 'average_cycle_time_minutes' => $item['average_cycle_time_minutes'],
             ];

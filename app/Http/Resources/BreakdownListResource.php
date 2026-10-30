@@ -17,7 +17,7 @@ class BreakdownListResource extends JsonResource
             'equipment_category'  => optional($this->equipment)->name,
             'equipment_name_id'       => $this->equipment_name_id,
             'equipment_name'          => optional($this->equipmentName)->equipment_name,
-            'equipment_code'          => optional($this->equipmentName)->equipment_code,
+            'model_number'          => optional(optional($this->equipmentName)->modelNumber)->model_number,
             'chassis_number'          => optional($this->equipmentName)->chassis_number,
             'equipment_allocation_id' => $this->equipment_allocation_id,
             'breakdown_date_time'     => $this->breakdown_date_time ? $this->breakdown_date_time->toDateTimeString() : null,

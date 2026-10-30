@@ -249,16 +249,18 @@ class DispatchDashboardService
             })
             ->whereBetween('dispatch_trips.date', [$from, $to])
             ->leftJoin('equipment_names as dumpers', 'dumpers.id', '=', 'dispatch_trips.dumper_equipment_id')
+            ->leftJoin('equipment_model_numbers as dumper_models', 'dumper_models.id', '=', 'dumpers.equipment_model_number_id')
             ->leftJoin('equipment_names as excavators', 'excavators.id', '=', 'dispatch_trips.excavator_equipment_id')
+            ->leftJoin('equipment_model_numbers as excavator_models', 'excavator_models.id', '=', 'excavators.equipment_model_number_id')
             ->selectRaw('
                 dispatch_trips.id,
                 dispatch_trips.trip_reference_no,
                 dispatch_trips.trip_date_time as time,
                 dumpers.equipment_name as dumper,
-                dumpers.equipment_code as dumper_equipment_code,
+                dumper_models.model_number as dumper_model_number,
                 dumpers.chassis_number as dumper_chassis_number,
                 excavators.equipment_name as excavator,
-                excavators.equipment_code as excavator_equipment_code,
+                excavator_models.model_number as excavator_model_number,
                 excavators.chassis_number as excavator_chassis_number,
                 dispatch_trips.quantity_bcm as quantity,
                 dispatch_trips.cycle_time_minutes as cycle_time
@@ -273,10 +275,10 @@ class DispatchDashboardService
                 'trip_reference_no' => $item->trip_reference_no,
                 'time'              => $item->time ? Carbon::parse($item->time)->toIso8601String() : null,
                 'dumper'            => $item->dumper ?: 'N/A',
-                'dumper_equipment_code'    => $item->dumper_equipment_code,
+                'dumper_model_number'    => $item->dumper_model_number,
                 'dumper_chassis_number'    => $item->dumper_chassis_number,
                 'excavator'         => $item->excavator ?: 'N/A',
-                'excavator_equipment_code' => $item->excavator_equipment_code,
+                'excavator_model_number' => $item->excavator_model_number,
                 'excavator_chassis_number' => $item->excavator_chassis_number,
                 'material'          => 'OB',
                 'quantity'          => (float) $item->quantity,

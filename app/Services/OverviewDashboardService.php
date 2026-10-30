@@ -365,11 +365,12 @@ class OverviewDashboardService
             ->whereBetween('dispatch_trips.date', [$from, $to])
             ->whereNotNull('dispatch_trips.excavator_equipment_id')
             ->join('equipment_names as excavators', 'excavators.id', '=', 'dispatch_trips.excavator_equipment_id')
+            ->leftJoin('equipment_model_numbers as excavator_models', 'excavator_models.id', '=', 'excavators.equipment_model_number_id')
             ->leftJoin('shifts', 'shifts.id', '=', 'dispatch_trips.shift_id')
             ->groupBy(
                 'dispatch_trips.excavator_equipment_id',
                 'excavators.equipment_name',
-                'excavators.equipment_code',
+                'excavator_models.model_number',
                 'excavators.chassis_number',
                 'dispatch_trips.shift_plan_id',
                 'dispatch_trips.shift_id',
@@ -378,7 +379,7 @@ class OverviewDashboardService
             ->selectRaw('
                 dispatch_trips.excavator_equipment_id,
                 excavators.equipment_name as asset_id,
-                excavators.equipment_code as equipment_code,
+                excavator_models.model_number as model_number,
                 excavators.chassis_number as chassis_number,
                 dispatch_trips.shift_plan_id,
                 dispatch_trips.shift_id,
@@ -402,7 +403,7 @@ class OverviewDashboardService
             if (!isset($excavatorAggregates[$aggKey])) {
                 $excavatorAggregates[$aggKey] = [
                     'asset_id' => $row->asset_id,
-                    'equipment_code' => $row->equipment_code,
+                    'model_number' => $row->model_number,
                     'chassis_number' => $row->chassis_number,
                     'op_name' => $operatorName,
                     'total_bcm' => 0.00,
@@ -419,7 +420,7 @@ class OverviewDashboardService
             $avgBcmH = $agg['total_hours'] > 0 ? round($agg['total_bcm'] / $agg['total_hours'], 2) : 0.00;
             $resultExcavators[] = [
                 'asset_id' => $agg['asset_id'],
-                'equipment_code' => $agg['equipment_code'],
+                'model_number' => $agg['model_number'],
                 'chassis_number' => $agg['chassis_number'],
                 'op_name' => $agg['op_name'],
                 'avg_bcm_h' => $avgBcmH,
@@ -460,17 +461,18 @@ class OverviewDashboardService
             ->whereBetween('dispatch_trips.date', [$from, $to])
             ->whereNotNull('dispatch_trips.dumper_equipment_id')
             ->join('equipment_names as dumpers', 'dumpers.id', '=', 'dispatch_trips.dumper_equipment_id')
+            ->leftJoin('equipment_model_numbers as dumper_models', 'dumper_models.id', '=', 'dumpers.equipment_model_number_id')
             ->groupBy(
                 'dispatch_trips.dumper_equipment_id',
                 'dumpers.equipment_name',
-                'dumpers.equipment_code',
+                'dumper_models.model_number',
                 'dumpers.chassis_number',
                 'dispatch_trips.shift_plan_id'
             )
             ->selectRaw('
                 dispatch_trips.dumper_equipment_id,
                 dumpers.equipment_name as asset_id,
-                dumpers.equipment_code as equipment_code,
+                dumper_models.model_number as model_number,
                 dumpers.chassis_number as chassis_number,
                 dispatch_trips.shift_plan_id,
                 SUM(COALESCE(dispatch_trips.total_cycles, 1)) as total_trips
@@ -491,7 +493,7 @@ class OverviewDashboardService
             if (!isset($dumperAggregates[$aggKey])) {
                 $dumperAggregates[$aggKey] = [
                     'asset_id' => $row->asset_id,
-                    'equipment_code' => $row->equipment_code,
+                    'model_number' => $row->model_number,
                     'chassis_number' => $row->chassis_number,
                     'op_name' => $operatorName,
                     'total_trips' => 0,
@@ -510,7 +512,7 @@ class OverviewDashboardService
 
             $resultDumpers[] = [
                 'asset_id' => $agg['asset_id'],
-                'equipment_code' => $agg['equipment_code'],
+                'model_number' => $agg['model_number'],
                 'chassis_number' => $agg['chassis_number'],
                 'op_name' => $agg['op_name'],
                 'trips_shift' => $tripsPerShift,

@@ -33,7 +33,7 @@ class ServiceRecordReportResource extends JsonResource
             'machine' => [
                 'id'            => $this->machine_id,
                 'name'          => optional($this->machine)->equipment_name,
-                'equipment_code' => optional($this->machine)->equipment_code,
+                'model_number' => optional(optional($this->machine)->modelNumber)->model_number,
                 'chassis_number' => optional($this->machine)->chassis_number,
                 'category_name' => optional(optional($this->machine)->equipment)->name,
             ],
