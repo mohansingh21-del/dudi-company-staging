@@ -1015,7 +1015,7 @@ class ServiceRecordService
      */
     public function getMachineServiceHistory($machineId, array $filters = [])
     {
-        $machine = Machine::with('equipment')->find($machineId);
+        $machine = Machine::with(['equipment', 'modelNumber'])->find($machineId);
 
         $base = ServiceRecord::where('machine_id', $machineId)
             ->where('status', '!=', 'cancelled');
