@@ -3,6 +3,7 @@
 namespace App\Console;
 
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 
 class Kernel extends ConsoleKernel
@@ -31,10 +32,17 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule)
     {
         // $schedule->command('inspire')->hourly();
+        //
+        // Every task is registered through inProcess() rather than
+        // $schedule->command(). command() runs each task as a child process via
+        // proc_open, which shared hosting disables - every task then failed
+        // before starting, and roster:rotate silently skipped whole weeks.
+        // Do not add runInBackground() either; it needs proc_open as well.
+
         // Midnight as the new week's first day (Monday) begins, on site time
         // whatever the server clock is set to.
-        $schedule->command('roster:rotate')->mondays()->at('00:00')->timezone('Asia/Kolkata');
-        $schedule->command('borrowed:cleanup')->everyMinute();
+        $this->inProcess($schedule, 'roster:rotate')->mondays()->at('00:00')->timezone('Asia/Kolkata');
+        $this->inProcess($schedule, 'borrowed:cleanup')->everyMinute();
 
         // Carries an in-progress fleet refresh to its next feed.
         //
@@ -48,7 +56,7 @@ class Kernel extends ConsoleKernel
         // Idle runs cost nothing - with no cycle in progress it returns without
         // touching the network. It also records the heartbeat the API uses to
         // tell whether a waiting cycle will move on its own.
-        $schedule->command('telematics:advance-refresh')
+        $this->inProcess($schedule, 'telematics:advance-refresh')
             ->everyMinute()
             ->withoutOverlapping();
 
@@ -61,7 +69,7 @@ class Kernel extends ConsoleKernel
         | above disabled. 03:30 keeps it clear of the telemetry slots
         | (:00/:15/:30/:45, :01/:16/:31/:46) and the 03:10 service-history run.
         */
-        $schedule->command('telematics:register-chassis')
+        $this->inProcess($schedule, 'telematics:register-chassis')
             ->dailyAt('03:30')
             ->withoutOverlapping();
 
@@ -93,8 +101,9 @@ class Kernel extends ConsoleKernel
         |   php artisan vecv:sync-location
         |   php artisan vecv:sync-service-history
         |
-        | To restore, uncomment below. The intervals are config-driven, so a
-        | lighter cadence is a .env change rather than a code change - e.g.
+        | To restore, uncomment below - and register them through inProcess()
+        | without runInBackground(), or they hit the proc_open failure above.
+        | The intervals are config-driven, so a lighter cadence is a .env change rather than a code change - e.g.
         | VECV_FUEL_SYNC_CRON="0 * * * *" for hourly, which is ample for
         | reporting totals at 24 calls a day.
         |
@@ -114,6 +123,25 @@ class Kernel extends ConsoleKernel
         //     ->cron(config('vecv.service_history_sync_cron'))
         //     ->withoutOverlapping()
         //     ->runInBackground();
+    }
+
+    /**
+     * Schedule an artisan command to run inside the schedule:run process.
+     *
+     * A closure event calls the command directly instead of spawning
+     * "php artisan ..." through proc_open, so it works where proc_open is
+     * disabled. The name doubles as the mutex key, which withoutOverlapping()
+     * requires on closure events.
+     *
+     * @param  \Illuminate\Console\Scheduling\Schedule  $schedule
+     * @param  string  $command
+     * @return \Illuminate\Console\Scheduling\CallbackEvent
+     */
+    private function inProcess(Schedule $schedule, string $command)
+    {
+        return $schedule->call(function () use ($command) {
+            Artisan::call($command);
+        })->name($command);
     }
 
     /**
