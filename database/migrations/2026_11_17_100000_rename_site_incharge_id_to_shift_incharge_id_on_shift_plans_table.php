@@ -16,6 +16,12 @@ class RenameSiteInchargeIdToShiftInchargeIdOnShiftPlansTable extends Migration
      */
     public function up()
     {
+        // Only rename when the old column is still there (keeps this safe on
+        // databases where it was already renamed).
+        if (!Schema::hasColumn('shift_plans', 'site_incharge_id') || Schema::hasColumn('shift_plans', 'shift_incharge_id')) {
+            return;
+        }
+
         Schema::table('shift_plans', function (Blueprint $table) {
             $table->dropForeign('shift_plans_site_incharge_id_foreign');
         });

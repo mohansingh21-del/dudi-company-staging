@@ -16,8 +16,15 @@ class AddProductionInchargeIdToShiftPlansTable extends Migration
      */
     public function up()
     {
-        Schema::table('shift_plans', function (Blueprint $table) {
-            $table->unsignedBigInteger('production_incharge_id')->nullable()->after('shift_incharge_id');
+        if (Schema::hasColumn('shift_plans', 'production_incharge_id')) {
+            return;
+        }
+
+        // Place it after the incharge column under whichever name it has on this database.
+        $after = Schema::hasColumn('shift_plans', 'shift_incharge_id') ? 'shift_incharge_id' : 'site_incharge_id';
+
+        Schema::table('shift_plans', function (Blueprint $table) use ($after) {
+            $table->unsignedBigInteger('production_incharge_id')->nullable()->after($after);
 
             $table->foreign('production_incharge_id')
                 ->references('id')
