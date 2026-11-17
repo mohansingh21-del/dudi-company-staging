@@ -50,6 +50,23 @@ class RoleSeeder extends Seeder
             ['name' => 'Survey HOD', 'slug' => 'survey-hod'],
             ['name' => 'Time Keeper', 'slug' => 'time-keeper'],
             ['name' => 'Welder', 'slug' => 'welder'],
+
+            ['name' => 'Asst. Accountant', 'slug' => 'asst-accountant'],
+            ['name' => 'Asst. Manager', 'slug' => 'asst-manager'],
+            ['name' => 'Billing Manager', 'slug' => 'billing-manager'],
+            ['name' => 'Data Entry Operator', 'slug' => 'data-entry-operator'],
+            ['name' => 'Engineer', 'slug' => 'engineer'],
+            ['name' => 'Finance Head', 'slug' => 'finance-head'],
+            ['name' => 'Fleet Incharge', 'slug' => 'fleet-incharge'],
+            ['name' => 'Gate Pass Supervisor', 'slug' => 'gate-pass-supervisor'],
+            ['name' => 'HR & Time Office', 'slug' => 'hr-time-office'],
+            ['name' => 'Mechanical Incharge', 'slug' => 'mechanical-incharge'],
+            ['name' => 'MIS Executive', 'slug' => 'mis-executive'],
+            ['name' => 'Purchase Manager', 'slug' => 'purchase-manager'],
+            ['name' => 'Relationship Manager', 'slug' => 'relationship-manager'],
+            ['name' => 'Store Keeper', 'slug' => 'store-keeper'],
+            ['name' => 'Surveyor Assistant', 'slug' => 'surveyor-assistant'],
+            ['name' => 'VTC Assistant', 'slug' => 'vtc-assistant'],
         ];
 
         foreach ($roles as $role) {

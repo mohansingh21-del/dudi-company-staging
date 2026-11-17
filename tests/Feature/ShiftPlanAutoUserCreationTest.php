@@ -94,7 +94,8 @@ class ShiftPlanAutoUserCreationTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 20,
             'supervisor_id' => $supervisorEmployee->id,
-            'site_incharge_id' => $siteInchargeEmployee->id,
+            'shift_incharge_id' => $siteInchargeEmployee->id,
+            'production_incharge_id' => $siteInchargeEmployee->id,
         ];
 
         $response = $this->postJson('/api/v1/admin/shift-plans', $payload);
@@ -130,7 +131,7 @@ class ShiftPlanAutoUserCreationTest extends TestCase
             'shift_id' => $this->shift->id,
             'site_id' => $this->site->id,
             'supervisor_id' => $supUser->id,
-            'site_incharge_id' => $incUser->id,
+            'shift_incharge_id' => $incUser->id,
         ]);
     }
 }

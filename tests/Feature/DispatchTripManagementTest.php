@@ -155,7 +155,7 @@ class DispatchTripManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->supervisorUser->id,
+            'shift_incharge_id' => $this->supervisorUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-PUB-001',
         ]);
@@ -168,7 +168,7 @@ class DispatchTripManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'closed',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->supervisorUser->id,
+            'shift_incharge_id' => $this->supervisorUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-CMP-001',
         ]);
@@ -671,7 +671,7 @@ class DispatchTripManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->supervisorUser->id,
+            'shift_incharge_id' => $this->supervisorUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-PUB-002',
         ]);
@@ -863,7 +863,7 @@ class DispatchTripManagementTest extends TestCase
             'target_bcm'    => 500,
             'status'        => 'published',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->supervisorUser->id,
+            'shift_incharge_id' => $this->supervisorUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-PUB-003',
         ]);

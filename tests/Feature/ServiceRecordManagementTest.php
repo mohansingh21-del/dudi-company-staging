@@ -694,7 +694,7 @@ class ServiceRecordManagementTest extends TestCase
             'site_id'          => $this->site->id,
             'target_bcm'       => 1000,
             'supervisor_id'    => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'status'           => 'draft',
             'created_by'       => $this->adminUser->id,
             'reference_no'     => 'SP-2026-0001',

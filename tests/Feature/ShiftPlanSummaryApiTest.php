@@ -126,7 +126,8 @@ class ShiftPlanSummaryApiTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1500.00,
             'supervisor_id' => $this->supervisorEmp->id,
-            'site_incharge_id' => $this->inchargeEmp->id,
+            'shift_incharge_id' => $this->inchargeEmp->id,
+            'production_incharge_id' => $this->inchargeEmp->id,
         ]);
         $response->assertStatus(201);
         $shiftPlanId = $response->json('data.id');
@@ -153,7 +154,8 @@ class ShiftPlanSummaryApiTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1500.00,
             'supervisor_id' => $this->supervisorEmp->id,
-            'site_incharge_id' => $this->inchargeEmp->id,
+            'shift_incharge_id' => $this->inchargeEmp->id,
+            'production_incharge_id' => $this->inchargeEmp->id,
         ]);
         $response->assertStatus(201);
         $shiftPlanId = $response->json('data.id');
@@ -327,7 +329,8 @@ class ShiftPlanSummaryApiTest extends TestCase
                         'location_name',
                         'target_bcm',
                         'supervisor_name',
-                        'site_incharge_name',
+                        'shift_incharge_name',
+                        'production_incharge_name',
                         'status',
                         'shift' => [
                             'id',
@@ -390,7 +393,8 @@ class ShiftPlanSummaryApiTest extends TestCase
         $this->assertEquals('Test Mine Site', $data['shift_plan']['location_name']);
         $this->assertEquals(1500.00, $data['shift_plan']['target_bcm']);
         $this->assertEquals('Supervisor Employee', $data['shift_plan']['supervisor_name']);
-        $this->assertEquals('Incharge Employee', $data['shift_plan']['site_incharge_name']);
+        $this->assertEquals('Incharge Employee', $data['shift_plan']['shift_incharge_name']);
+        $this->assertEquals('Incharge Employee', $data['shift_plan']['production_incharge_name']);
         $this->assertEquals('completed', $data['shift_plan']['status']);
 
         // Check nested shift details
@@ -461,7 +465,8 @@ class ShiftPlanSummaryApiTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000.00,
             'supervisor_id' => $this->supervisorEmp->id,
-            'site_incharge_id' => $this->inchargeEmp->id,
+            'shift_incharge_id' => $this->inchargeEmp->id,
+            'production_incharge_id' => $this->inchargeEmp->id,
         ]);
         $response->assertStatus(201);
         $shiftPlanId = $response->json('data.id');

@@ -154,7 +154,7 @@ class DashboardSummaryApiTest extends TestCase
             'target_bcm' => 1500.00,
             'status' => 'completed',
             'supervisor_id' => $supervisorUser->id,
-            'site_incharge_id' => $inchargeUser->id,
+            'shift_incharge_id' => $inchargeUser->id,
             'created_by' => $this->adminUser->id,
         ]);
 

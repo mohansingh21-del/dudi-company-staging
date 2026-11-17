@@ -16,7 +16,8 @@ class ShiftPlanResource extends JsonResource
     {
         $supervisors = $this->resource->supervisorList();
         $primarySupervisor = $supervisors[0] ?? null;
-        $siteInchargeEmployee = optional($this->siteIncharge)->employee;
+        $shiftInchargeEmployee = optional($this->shiftIncharge)->employee;
+        $productionInchargeEmployee = optional($this->productionIncharge)->employee;
         $creatorEmployee = optional($this->creator)->employee;
         $publisherEmployee = optional($this->publisher)->employee;
 
@@ -34,9 +35,12 @@ class ShiftPlanResource extends JsonResource
             'supervisor_name' => $primarySupervisor ? $primarySupervisor['name'] : null,
             'supervisor_code' => $primarySupervisor ? $primarySupervisor['code'] : null,
             'supervisors' => $supervisors,
-            'site_incharge_id' => $siteInchargeEmployee ? $siteInchargeEmployee->id : $this->site_incharge_id,
-            'site_incharge_name' => $siteInchargeEmployee ? $siteInchargeEmployee->name : optional($this->siteIncharge)->email,
-            'site_incharge_code' => $siteInchargeEmployee ? $siteInchargeEmployee->employee_code : null,
+            'shift_incharge_id' => $shiftInchargeEmployee ? $shiftInchargeEmployee->id : $this->shift_incharge_id,
+            'shift_incharge_name' => $shiftInchargeEmployee ? $shiftInchargeEmployee->name : optional($this->shiftIncharge)->email,
+            'shift_incharge_code' => $shiftInchargeEmployee ? $shiftInchargeEmployee->employee_code : null,
+            'production_incharge_id' => $productionInchargeEmployee ? $productionInchargeEmployee->id : $this->production_incharge_id,
+            'production_incharge_name' => $productionInchargeEmployee ? $productionInchargeEmployee->name : optional($this->productionIncharge)->email,
+            'production_incharge_code' => $productionInchargeEmployee ? $productionInchargeEmployee->employee_code : null,
             'equipment_count' => (int) $this->equipment_count,
             'status' => $this->status,
             'created_by' => $this->created_by,

@@ -146,7 +146,7 @@ class DelayManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->siteInchargeUser->id,
+            'shift_incharge_id' => $this->siteInchargeUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-PUBLISHED-001',
         ]);
@@ -159,7 +159,7 @@ class DelayManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'closed',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->siteInchargeUser->id,
+            'shift_incharge_id' => $this->siteInchargeUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-CLOSED-001',
         ]);
@@ -343,7 +343,7 @@ class DelayManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->siteInchargeUser->id,
+            'shift_incharge_id' => $this->siteInchargeUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-PUBLISHED-999',
         ]);
@@ -584,7 +584,7 @@ class DelayManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->siteInchargeUser->id,
+            'shift_incharge_id' => $this->siteInchargeUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-ANALYSIS-001',
         ]);
@@ -754,7 +754,7 @@ class DelayManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->supervisorUser->id,
-            'site_incharge_id' => $this->siteInchargeUser->id,
+            'shift_incharge_id' => $this->siteInchargeUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-PUBLISHED-002',
         ]);

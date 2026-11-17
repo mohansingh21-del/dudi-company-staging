@@ -200,7 +200,8 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1500.00,
             'supervisor_id' => $this->supervisorEmp->id,
-            'site_incharge_id' => $this->inchargeEmp->id,
+            'shift_incharge_id' => $this->inchargeEmp->id,
+            'production_incharge_id' => $this->inchargeEmp->id,
         ]);
 
         $response->assertStatus(201);

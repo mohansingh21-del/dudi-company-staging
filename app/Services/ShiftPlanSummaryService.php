@@ -24,7 +24,8 @@ class ShiftPlanSummaryService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'siteIncharge.employee'
+            'shiftIncharge.employee',
+            'productionIncharge.employee'
         ])->find($shiftId);
 
         if (!$shiftPlan) {
@@ -67,10 +68,16 @@ class ShiftPlanSummaryService
     private function buildShiftPlan(ShiftPlan $shift): array
     {
 
-        $siteInchargeName = null;
-        if ($shift->siteIncharge) {
-            $emp = $shift->siteIncharge->employee;
-            $siteInchargeName = $emp ? $emp->name : $shift->siteIncharge->email;
+        $shiftInchargeName = null;
+        if ($shift->shiftIncharge) {
+            $emp = $shift->shiftIncharge->employee;
+            $shiftInchargeName = $emp ? $emp->name : $shift->shiftIncharge->email;
+        }
+
+        $productionInchargeName = null;
+        if ($shift->productionIncharge) {
+            $emp = $shift->productionIncharge->employee;
+            $productionInchargeName = $emp ? $emp->name : $shift->productionIncharge->email;
         }
 
         return [
@@ -83,7 +90,8 @@ class ShiftPlanSummaryService
             'target_bcm' => !is_null($shift->target_bcm) ? round((float) $shift->target_bcm, 2) : 0.00,
             'supervisor_name' => $shift->supervisorNames(),
             'supervisors' => $shift->supervisorList(),
-            'site_incharge_name' => $siteInchargeName,
+            'shift_incharge_name' => $shiftInchargeName,
+            'production_incharge_name' => $productionInchargeName,
             'status' => $shift->status,
             'shift' => $shift->shift ? [
                 'id' => $shift->shift->id,

@@ -608,7 +608,7 @@ class EmployeeController extends Controller
             try {
                 $roleName = $request->input('role');
 
-                // supervisor / site-incharge / driver name a group of
+                // supervisor / site-incharge / shift-incharge / driver name a group of
                 // designations (Supervisor also covers Shift Incharge, Diesel
                 // Supervisor, ...); anything else must name one role.
                 $slugs = \App\Enums\RoleSlug::pickerGroup($roleName)
@@ -774,7 +774,7 @@ class EmployeeController extends Controller
                     ->filter()
                     ->values();
 
-                // A group name (driver, supervisor, site-incharge) expands to
+                // A group name (driver, supervisor, site-incharge, shift-incharge) expands to
                 // every designation in it.
                 $slugs = $wanted->flatMap(function ($value) {
                     return \App\Enums\RoleSlug::pickerGroup($value)

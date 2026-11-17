@@ -80,7 +80,7 @@ class FuelManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-PUBLISHED-001',
         ]);
@@ -93,7 +93,7 @@ class FuelManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'draft',
             'supervisor_id' => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-DRAFT-001',
         ]);
@@ -567,7 +567,7 @@ class FuelManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-PUBLISHED-002',
         ]);
@@ -849,7 +849,7 @@ class FuelManagementTest extends TestCase
             'site_id'          => $this->site->id,
             'target_bcm'       => 15000,
             'supervisor_id'    => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'status'           => 'published',
             'created_by'       => $this->adminUser->id,
             'reference_no'     => 'SP-NEW-456'
@@ -968,7 +968,7 @@ class FuelManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-OTHER-DATE-001',
         ]);
@@ -1032,7 +1032,7 @@ class FuelManagementTest extends TestCase
             'target_bcm'    => 1000,
             'status'        => 'published',
             'supervisor_id' => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'created_by'    => $this->adminUser->id,
             'reference_no'  => 'SP-LY-001',
         ]);

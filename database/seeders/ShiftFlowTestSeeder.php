@@ -242,7 +242,7 @@ class ShiftFlowTestSeeder extends Seeder
                 'site_id' => $site->id,
                 'target_bcm' => 1500.00,
                 'supervisor_id' => $supervisorUser->id,
-                'site_incharge_id' => $inchargeUser->id,
+                'shift_incharge_id' => $inchargeUser->id,
                 'status' => 'in_progress',
                 'reference_no' => 'PLN-2026-000001',
                 'created_by' => $adminUser->id,

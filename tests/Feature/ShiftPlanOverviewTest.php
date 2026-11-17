@@ -135,7 +135,7 @@ class ShiftPlanOverviewTest extends TestCase
             'target_bcm' => 45000,
             'actual_bcm' => 42200,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -204,7 +204,7 @@ class ShiftPlanOverviewTest extends TestCase
             'target_bcm' => 45000,
             'actual_bcm' => 42200,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'

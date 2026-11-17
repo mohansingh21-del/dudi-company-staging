@@ -133,6 +133,46 @@ class GetEmployeesByRoleTest extends TestCase
         ]);
     }
 
+    public function test_can_fetch_employees_filtered_by_shift_incharge_role()
+    {
+        $shiftInchargeRole = Role::create([
+            'name' => 'Shift Incharge',
+            'slug' => 'shift-incharge',
+            'is_active' => 1
+        ]);
+
+        Employee::create([
+            'employee_code' => 'EMP_SHI01',
+            'name' => 'Ravi Shift Incharge',
+            'joining_date' => '2026-01-01',
+            'designation_id' => $shiftInchargeRole->id,
+            'is_active' => 1
+        ]);
+
+        // A site incharge is not a shift incharge.
+        Employee::create([
+            'employee_code' => 'EMP_INC01',
+            'name' => 'Alice Incharge',
+            'joining_date' => '2026-01-01',
+            'designation_id' => $this->siteInchargeRole->id,
+            'is_active' => 1
+        ]);
+
+        foreach (['shift-incharge', 'Shift Incharge', 'shift_incharge'] as $role) {
+            $response = $this->getJson('/api/v1/employees?role=' . urlencode($role));
+
+            $response->assertStatus(200);
+            $response->assertJsonCount(1, 'data');
+            $response->assertJsonFragment([
+                'name' => 'Ravi Shift Incharge',
+                'employee_code' => 'EMP_SHI01'
+            ]);
+            $response->assertJsonMissing([
+                'name' => 'Alice Incharge'
+            ]);
+        }
+    }
+
     public function test_role_filtering_fails_with_invalid_role()
     {
         $response = $this->getJson('/api/v1/employees?role=Worker');

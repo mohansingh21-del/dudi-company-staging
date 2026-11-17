@@ -120,7 +120,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -141,7 +142,8 @@ class PublishShiftTest extends TestCase
                     'equipment_allocated',
                     'workforce_deployed',
                     'supervisor_assigned',
-                    'site_incharge_assigned',
+                    'shift_incharge_assigned',
+                    'production_incharge_assigned',
                     'target_bcm_defined'
                 ]
             ]
@@ -163,7 +165,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'planned',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -195,7 +198,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -238,7 +242,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -300,7 +305,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -358,7 +364,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -417,6 +424,34 @@ class PublishShiftTest extends TestCase
         $this->assertNotNull($response->json('data.published_at'));
     }
 
+    public function test_publish_fails_if_production_incharge_missing()
+    {
+        $planningDate = \Carbon\Carbon::now()->format('Y-m-d');
+
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'draft',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TEST-NO-PROD-INC'
+        ]);
+
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/publish");
+
+        $response->assertStatus(422);
+        $this->assertFalse($response->json('data.can_publish'));
+        $this->assertFalse($response->json('data.validations.production_incharge_assigned.status'));
+        $this->assertEquals(
+            'Production Incharge must be assigned to the shift.',
+            $response->json('data.validations.production_incharge_assigned.message')
+        );
+        $this->assertEquals('draft', $shiftPlan->fresh()->status);
+    }
+
     public function test_publish_fails_if_planning_date_is_in_future()
     {
         $futureDate = \Carbon\Carbon::tomorrow()->format('Y-m-d');
@@ -427,7 +462,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-FUTURE'

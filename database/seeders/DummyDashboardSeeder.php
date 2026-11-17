@@ -179,7 +179,7 @@ class DummyDashboardSeeder extends Seeder
                 ], [
                     'target_bcm' => 2000.00,
                     'supervisor_id' => $supervisorUser->id,
-                    'site_incharge_id' => $adminUser->id,
+                    'shift_incharge_id' => $adminUser->id,
                     'status' => 'completed',
                     'reference_no' => 'PLN-DUMMY-' . $dateStr,
                     'created_by' => $adminUser->id,

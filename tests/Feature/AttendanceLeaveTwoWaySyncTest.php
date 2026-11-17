@@ -266,7 +266,7 @@ class AttendanceLeaveTwoWaySyncTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->admin->id,
-            'site_incharge_id' => $this->admin->id,
+            'shift_incharge_id' => $this->admin->id,
             'status' => 'active',
             'created_by' => $this->admin->id,
             'reference_no' => 'SP-' . $date,

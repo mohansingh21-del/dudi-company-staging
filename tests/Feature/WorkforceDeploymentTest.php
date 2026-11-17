@@ -161,7 +161,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -201,7 +201,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -242,7 +242,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'planned',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -285,7 +285,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -326,7 +326,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -367,7 +367,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-002'
@@ -392,7 +392,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -442,7 +442,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-002'
@@ -523,7 +523,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -612,7 +612,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -731,7 +731,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-VIEW-STATS'
@@ -798,7 +798,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-002'
@@ -849,7 +849,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'planned',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TARGET'
@@ -862,7 +862,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-HOME'
@@ -896,7 +896,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'planned',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TARGET'
@@ -919,7 +919,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'planned',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-HOME'
@@ -960,7 +960,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'planned',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-002'
@@ -1010,7 +1010,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-FUTURE'
@@ -1053,7 +1053,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-ATT'
@@ -1093,7 +1093,7 @@ class WorkforceDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-ROT'

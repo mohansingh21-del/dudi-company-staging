@@ -76,7 +76,7 @@ class BreakdownManagementTest extends TestCase
             'site_id' => $site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001',
         ]);
@@ -293,7 +293,7 @@ class BreakdownManagementTest extends TestCase
             'site_id'          => $siteId,
             'target_bcm'       => 1000,
             'supervisor_id'    => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'created_by'       => $this->adminUser->id,
             'reference_no'     => 'SP-TEST-002',
         ]);

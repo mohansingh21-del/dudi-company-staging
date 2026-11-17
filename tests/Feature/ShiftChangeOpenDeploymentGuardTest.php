@@ -107,7 +107,7 @@ class ShiftChangeOpenDeploymentGuardTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1500.00,
             'supervisor_id' => $this->adminUser->id,
-            'site_incharge_id' => $this->adminUser->id,
+            'shift_incharge_id' => $this->adminUser->id,
             'status' => $status,
             'created_by' => $this->adminUser->id,
             'reference_no' => $reference,

@@ -22,7 +22,8 @@ class ShiftPlanService
         $query = ShiftPlan::with([
             'shift',
             'site',
-            'siteIncharge.employee',
+            'shiftIncharge.employee',
+            'productionIncharge.employee',
             'creator.employee'
         ]);
 
@@ -103,7 +104,11 @@ class ShiftPlanService
                     ->orWhere(function ($sup) use ($search) {
                         $this->whereSupervisorMatches($sup, $search);
                     })
-                    ->orWhereHas('siteIncharge.employee', function ($emp) use ($search) {
+                    ->orWhereHas('shiftIncharge.employee', function ($emp) use ($search) {
+                        $emp->where('name', 'LIKE', "%{$search}%")
+                            ->orWhere('employee_code', 'LIKE', "%{$search}%");
+                    })
+                    ->orWhereHas('productionIncharge.employee', function ($emp) use ($search) {
                         $emp->where('name', 'LIKE', "%{$search}%")
                             ->orWhere('employee_code', 'LIKE', "%{$search}%");
                     });
@@ -184,8 +189,11 @@ class ShiftPlanService
 
             $data['supervisor_id'] = implode(',', $supervisorUserIds);
         }
-        if (isset($data['site_incharge_id'])) {
-            $data['site_incharge_id'] = $this->resolveEmployeeToUserId($data['site_incharge_id'], 'site-incharge');
+        if (isset($data['shift_incharge_id'])) {
+            $data['shift_incharge_id'] = $this->resolveEmployeeToUserId($data['shift_incharge_id'], 'shift-incharge');
+        }
+        if (isset($data['production_incharge_id'])) {
+            $data['production_incharge_id'] = $this->resolveEmployeeToUserId($data['production_incharge_id'], 'production-incharge');
         }
 
         if ($id) {
@@ -246,7 +254,8 @@ class ShiftPlanService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'siteIncharge.employee',
+            'shiftIncharge.employee',
+            'productionIncharge.employee',
             'creator.employee',
             'equipmentAllocations.equipmentName.equipment'
         ])->find($id);
@@ -278,7 +287,8 @@ class ShiftPlanService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'siteIncharge.employee',
+            'shiftIncharge.employee',
+            'productionIncharge.employee',
             'creator.employee',
             'publisher.employee',
             'equipmentAllocations.equipmentName.equipment',
@@ -309,7 +319,8 @@ class ShiftPlanService
 
         // ── Shift Plan Details ────────────────────────────────────
         $supervisors = $shiftPlan->supervisorList();
-        $siteInchargeEmployee = optional($shiftPlan->siteIncharge)->employee;
+        $shiftInchargeEmployee = optional($shiftPlan->shiftIncharge)->employee;
+        $productionInchargeEmployee = optional($shiftPlan->productionIncharge)->employee;
         $creatorEmployee = optional($shiftPlan->creator)->employee;
         $publisherEmployee = optional($shiftPlan->publisher)->employee;
 
@@ -324,9 +335,12 @@ class ShiftPlanService
             'target_bcm' => !is_null($shiftPlan->target_bcm) ? (string) round((float) $shiftPlan->target_bcm, 2) : null,
             'actual_bcm' => !is_null($shiftPlan->actual_bcm) ? (string) round((float) $shiftPlan->actual_bcm, 2) : null,
             'supervisors' => $supervisors,
-            'site_incharge_id' => $siteInchargeEmployee ? $siteInchargeEmployee->id : $shiftPlan->site_incharge_id,
-            'site_incharge_name' => $siteInchargeEmployee ? $siteInchargeEmployee->name : optional($shiftPlan->siteIncharge)->email,
-            'site_incharge_code' => $siteInchargeEmployee ? $siteInchargeEmployee->employee_code : null,
+            'shift_incharge_id' => $shiftInchargeEmployee ? $shiftInchargeEmployee->id : $shiftPlan->shift_incharge_id,
+            'shift_incharge_name' => $shiftInchargeEmployee ? $shiftInchargeEmployee->name : optional($shiftPlan->shiftIncharge)->email,
+            'shift_incharge_code' => $shiftInchargeEmployee ? $shiftInchargeEmployee->employee_code : null,
+            'production_incharge_id' => $productionInchargeEmployee ? $productionInchargeEmployee->id : $shiftPlan->production_incharge_id,
+            'production_incharge_name' => $productionInchargeEmployee ? $productionInchargeEmployee->name : optional($shiftPlan->productionIncharge)->email,
+            'production_incharge_code' => $productionInchargeEmployee ? $productionInchargeEmployee->employee_code : null,
             'equipment_count' => (int) $shiftPlan->equipment_count,
             'status' => $shiftPlan->status,
             'created_by' => $shiftPlan->created_by,
@@ -557,7 +571,7 @@ class ShiftPlanService
         $activePersonnel = $this->countActivePersonnel($query);
 
         $limit = $filters['limit'] ?? 10;
-        $shiftPlans = $query->with(['shift', 'site', 'siteIncharge', 'creator'])
+        $shiftPlans = $query->with(['shift', 'site', 'shiftIncharge.employee', 'productionIncharge.employee', 'creator'])
             ->latest('planning_date')
             ->paginate($limit);
         ShiftPlan::loadSupervisors($shiftPlans->items());
@@ -795,7 +809,8 @@ class ShiftPlanService
 
         $hasWorkforce = $shiftPlan->workforceDeployments()->active()->exists();
         $supervisorAssigned = !empty($shiftPlan->supervisorIds());
-        $siteInchargeAssigned = !is_null($shiftPlan->site_incharge_id);
+        $shiftInchargeAssigned = !is_null($shiftPlan->shift_incharge_id);
+        $productionInchargeAssigned = !is_null($shiftPlan->production_incharge_id);
         $targetBcmAvailable = !is_null($shiftPlan->target_bcm) && $shiftPlan->target_bcm > 0;
         $planningDateReached = $shiftPlan->planning_date->lte(\Carbon\Carbon::today());
 
@@ -803,7 +818,8 @@ class ShiftPlanService
             && $equipmentAllocated
             && $hasWorkforce
             && $supervisorAssigned
-            && $siteInchargeAssigned
+            && $shiftInchargeAssigned
+            && $productionInchargeAssigned
             && $targetBcmAvailable
             && $planningDateReached;
 
@@ -831,9 +847,13 @@ class ShiftPlanService
                         'status' => $supervisorAssigned,
                         'message' => $supervisorAssigned ? 'Supervisor assigned.' : 'Supervisor must be assigned to the shift.'
                     ],
-                    'site_incharge_assigned' => [
-                        'status' => $siteInchargeAssigned,
-                        'message' => $siteInchargeAssigned ? 'Site Incharge assigned.' : 'Site Incharge must be assigned to the shift.'
+                    'shift_incharge_assigned' => [
+                        'status' => $shiftInchargeAssigned,
+                        'message' => $shiftInchargeAssigned ? 'Shift Incharge assigned.' : 'Shift Incharge must be assigned to the shift.'
+                    ],
+                    'production_incharge_assigned' => [
+                        'status' => $productionInchargeAssigned,
+                        'message' => $productionInchargeAssigned ? 'Production Incharge assigned.' : 'Production Incharge must be assigned to the shift.'
                     ],
                     'target_bcm_defined' => [
                         'status' => $targetBcmAvailable,

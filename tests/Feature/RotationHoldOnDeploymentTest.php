@@ -111,7 +111,7 @@ class RotationHoldOnDeploymentTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1500.00,
             'supervisor_id' => $this->user->id,
-            'site_incharge_id' => $this->user->id,
+            'shift_incharge_id' => $this->user->id,
             'status' => 'in_progress',
             'created_by' => $this->user->id,
             'reference_no' => 'SP-OPEN',

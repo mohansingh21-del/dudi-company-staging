@@ -18,6 +18,8 @@ class RoleSlug
     public const SUPER_ADMIN = 'super-admin';
     public const SUPERVISOR = 'supervisor';
     public const SITE_INCHARGE = 'site-incharge';
+    public const SHIFT_INCHARGE = 'shift-incharge';
+    public const PRODUCTION_INCHARGE = 'production-incharge';
     public const DRIVER = 'driver';
 
     // Designations treated as a supervisor: same route access, and offered
@@ -29,10 +31,22 @@ class RoleSlug
     ];
 
     // Designations treated as a site incharge: same route access, and offered
-    // by the shift-plan site incharge picker.
+    // by ?role=site-incharge.
     public const SITE_INCHARGES = [
         'site-incharge',
         'shift-incharge',
+        'production-incharge',
+    ];
+
+    // Designations offered by the shift-plan shift incharge picker
+    // (?role=shift-incharge). The plan's shift_incharge_id is one of these.
+    public const SHIFT_INCHARGES = [
+        'shift-incharge',
+    ];
+
+    // Designations offered by the shift-plan production incharge picker
+    // (?role=production-incharge). The plan's production_incharge_id is one of these.
+    public const PRODUCTION_INCHARGES = [
         'production-incharge',
     ];
 
@@ -58,13 +72,15 @@ class RoleSlug
 
     /**
      * The slug group a picker value names, or null when it names no group.
-     * Accepts a slug or a display name ("Site Incharge", "site_incharge").
+     * Accepts a slug or a display name ("Shift Incharge", "shift_incharge").
      */
     public static function pickerGroup($value)
     {
         $groups = [
             self::SUPERVISOR => self::SUPERVISORS,
             self::SITE_INCHARGE => self::SITE_INCHARGES,
+            self::SHIFT_INCHARGE => self::SHIFT_INCHARGES,
+            self::PRODUCTION_INCHARGE => self::PRODUCTION_INCHARGES,
             self::DRIVER => self::DRIVERS,
         ];
 

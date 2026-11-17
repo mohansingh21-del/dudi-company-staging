@@ -97,7 +97,8 @@ class StoreShiftPlanRequest extends FormRequest
             'target_bcm' => 'required|numeric|gt:0|max:' . ShiftPlan::MAX_BCM,
             'supervisor_ids' => 'required|array|min:1|max:' . ShiftPlan::MAX_SUPERVISORS,
             'supervisor_ids.*' => 'required|integer|distinct|exists:employees,id',
-            'site_incharge_id' => 'required|exists:employees,id',
+            'shift_incharge_id' => 'required|exists:employees,id',
+            'production_incharge_id' => 'required|exists:employees,id',
             'status' => 'nullable|in:draft,published,in_progress,planned,active,closed',
             'actual_bcm' => 'nullable|numeric|min:0|max:' . ShiftPlan::MAX_BCM,
         ];
@@ -129,8 +130,10 @@ class StoreShiftPlanRequest extends FormRequest
             'supervisor_ids.max' => 'A shift plan can have at most ' . ShiftPlan::MAX_SUPERVISORS . ' supervisors.',
             'supervisor_ids.*.distinct' => 'The same supervisor is selected more than once.',
             'supervisor_ids.*.exists' => 'Selected supervisor is invalid.',
-            'site_incharge_id.required' => 'Site incharge is required.',
-            'site_incharge_id.exists' => 'Selected site incharge is invalid.',
+            'shift_incharge_id.required' => 'Shift incharge is required.',
+            'shift_incharge_id.exists' => 'Selected shift incharge is invalid.',
+            'production_incharge_id.required' => 'Production incharge is required.',
+            'production_incharge_id.exists' => 'Selected production incharge is invalid.',
         ];
     }
 

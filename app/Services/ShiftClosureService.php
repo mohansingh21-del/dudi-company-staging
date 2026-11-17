@@ -36,7 +36,7 @@ class ShiftClosureService
      */
     public function getClosureSummary(ShiftPlan $shift)
     {
-        $shift->load(['shift', 'site', 'siteIncharge.employee', 'equipmentAllocations']);
+        $shift->load(['shift', 'site', 'shiftIncharge.employee', 'productionIncharge.employee', 'equipmentAllocations']);
 
         $shiftDetails = $this->buildShiftDetails($shift);
         $productionSummary = $this->buildProductionSummary($shift);
@@ -129,7 +129,7 @@ class ShiftClosureService
             }
 
             // ── 3. Build & freeze snapshot (BR-SHFT-030) ──────────
-            $shift->load(['shift', 'site', 'siteIncharge.employee', 'equipmentAllocations']);
+            $shift->load(['shift', 'site', 'shiftIncharge.employee', 'productionIncharge.employee', 'equipmentAllocations']);
             $snapshot = $this->getClosureSummary($shift);
 
             // ── 4. Update shift row ───────────────────────────────
@@ -196,11 +196,18 @@ class ShiftClosureService
      */
     private function buildShiftDetails(ShiftPlan $shift)
     {
-        $siteInchargeName = null;
-        $siteIncharge = $shift->siteIncharge;
-        if ($siteIncharge) {
-            $emp = $siteIncharge->employee;
-            $siteInchargeName = $emp ? $emp->name : $siteIncharge->email;
+        $shiftInchargeName = null;
+        $shiftIncharge = $shift->shiftIncharge;
+        if ($shiftIncharge) {
+            $emp = $shiftIncharge->employee;
+            $shiftInchargeName = $emp ? $emp->name : $shiftIncharge->email;
+        }
+
+        $productionInchargeName = null;
+        $productionIncharge = $shift->productionIncharge;
+        if ($productionIncharge) {
+            $emp = $productionIncharge->employee;
+            $productionInchargeName = $emp ? $emp->name : $productionIncharge->email;
         }
 
         return [
@@ -210,7 +217,8 @@ class ShiftClosureService
             'location' => optional($shift->site)->site_name,
             'supervisor' => $shift->supervisorNames(),
             'supervisors' => $shift->supervisorList(),
-            'site_incharge' => $siteInchargeName,
+            'shift_incharge' => $shiftInchargeName,
+            'production_incharge' => $productionInchargeName,
         ];
     }
 

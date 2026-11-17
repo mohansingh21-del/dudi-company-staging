@@ -27,7 +27,8 @@ class ShiftPlan extends Model
         'site_id',
         'target_bcm',
         'supervisor_id',
-        'site_incharge_id',
+        'shift_incharge_id',
+        'production_incharge_id',
         'equipment_count',
         'status',
         'created_by',
@@ -203,9 +204,14 @@ class ShiftPlan extends Model
         return $names ? implode(', ', $names) : null;
     }
 
-    public function siteIncharge()
+    public function shiftIncharge()
     {
-        return $this->belongsTo(User::class, 'site_incharge_id');
+        return $this->belongsTo(User::class, 'shift_incharge_id');
+    }
+
+    public function productionIncharge()
+    {
+        return $this->belongsTo(User::class, 'production_incharge_id');
     }
 
     public function creator()
