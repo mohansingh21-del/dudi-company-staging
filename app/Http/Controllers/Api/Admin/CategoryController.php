@@ -192,15 +192,19 @@ class CategoryController extends Controller
         }
     }
 
-    public function getPublicCategories()
+    public function getPublicCategories(Request $request)
     {
         try {
-            $categories = Category::where('is_active', 1)->get();
+            $categories = Category::where('is_active', 1);
+
+            if ($request->filled('search')) {
+                $categories->where('name', 'LIKE', "%{$request->search}%");
+            }
 
             return response()->json([
                 'status' => 200,
                 'message' => 'Categories retrieved successfully',
-                'data' => CategoryResource::collection($categories)
+                'data' => CategoryResource::collection($categories->get())
             ]);
         } catch (\Throwable $th) {
             return response()->json([

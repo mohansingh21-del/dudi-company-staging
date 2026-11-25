@@ -33,6 +33,18 @@ return [
         // datalake and behaves differently: no clientId, date-ranged, and the
         // records it returns are mutable rather than point-in-time.
         'service_history' => '/service-gateway/datalake/serviceHistory/getServiceHistory',
+
+        // Driving-behaviour, fuel and predictive-uptime alerts - the only VECV
+        // source for harsh braking/acceleration, over-speeding and the like,
+        // none of which appear on the fuel or location feeds.
+        //
+        // Vendor spells this "getGetAlertLogs", with the doubled Get. Verified,
+        // not a typo on our side: this path rate-limits (429), while the
+        // sensibly spelled getAlertLogs returns 401.
+        //
+        // Takes chassisNo + startDate/endDate and no clientId, so - like
+        // service history - the fleet cannot be fetched in one call.
+        'alerts' => '/service-gateway/alertLog/getGetAlertLogs',
     ],
 
     /*
@@ -96,11 +108,43 @@ return [
 
     'service_history_sync_cron' => env('VECV_SERVICE_HISTORY_SYNC_CRON', '10 3 * * *'),
 
-    // How far back each nightly run looks. Job cards are amended after opening
-    // (an invoice is attached once the work is billed), so the window has to
-    // be wide enough to re-read and update records that have already been
-    // stored, not just catch new ones.
-    'service_history_lookback_days' => (int) env('VECV_SERVICE_HISTORY_LOOKBACK_DAYS', 90),
+    // How far back each run looks. Job cards are amended after opening (an
+    // invoice is attached once the work is billed), so a wider window re-reads
+    // and updates records already stored rather than only catching new ones.
+    //
+    // Kept at the vendor's per-request maximum so a routine run costs a single
+    // request. Anything larger is split into windows of
+    // service_history_max_range_days and each window costs its own
+    // rate-limit slot - a 90 day backfill is 45 minutes of wall clock, so ask
+    // for it deliberately with --from/--to rather than making it the default.
+    // Default 1, not 2: the range is inclusive at both ends, so a lookback of 1
+    // spans today and yesterday - exactly the vendor's 2 day maximum, and
+    // exactly ONE request. A lookback of 2 spans three calendar days, which
+    // splits into two windows and therefore two calls, and the second is
+    // guaranteed to be rate limited.
+    'service_history_lookback_days' => (int) env('VECV_SERVICE_HISTORY_LOOKBACK_DAYS', 1),
+
+    // Pause between successive service history requests within one sync. This
+    // endpoint is the only one that can need more than a single call - a wide
+    // range splits into windows, and many chassis split into chunks - and
+    // without spacing the second call is refused before the first has even
+    // been processed.
+    'service_history_request_gap_seconds' => (int) env('VECV_SERVICE_HISTORY_REQUEST_GAP', 60),
+
+    // Hard vendor limit, discovered 2026-09-02: a wider range is rejected with
+    // "The date range should not exceed 2 days (48 hours)". The default
+    // lookback was 90 days until then, which meant this sync had never once
+    // succeeded - it failed identically on every run and the error was only
+    // visible in the log.
+    'service_history_max_range_days' => (int) env('VECV_SERVICE_HISTORY_MAX_RANGE_DAYS', 2),
+
+    // A second, separate vendor limit found the same day: "Dates should not
+    // exceed 30 days (720 hours) from today's date". So 30 days is ALL the
+    // history this endpoint will ever give up - a job card older than that is
+    // unreachable no matter how the range is split. Anything needing a longer
+    // record has to be accumulated locally by syncing regularly, which is the
+    // one thing an on-demand-only setup does not do.
+    'service_history_max_age_days' => (int) env('VECV_SERVICE_HISTORY_MAX_AGE_DAYS', 30),
 
     // Chassis numbers per request. The vendor documents no cap on the list, so
     // this is a self-imposed limit to keep request bodies sane; it also bounds
@@ -120,4 +164,141 @@ return [
     */
 
     'stale_after_minutes' => (int) env('VECV_STALE_AFTER_MINUTES', 30),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Alerts
+    |--------------------------------------------------------------------------
+    |
+    | Driving-behaviour, fuel, device and predictive-uptime events. The only
+    | VECV source for over-speeding, harsh braking, fuel drain and the like -
+    | none of them appear on the fuel or location feeds.
+    |
+    | The request body uses eventStartDate / eventEndDate. NOT startDate /
+    | endDate, which every other dated VECV endpoint uses: sending those returns
+    | HTTP 200 with a generic "service not responding" 500 body, which reads as
+    | a vendor outage rather than as a rejected request. That mistake cost days.
+    |
+    */
+
+    // Same 48-hour cap as service history, and enforced the same way: a wider
+    // range comes back HTTP 200 with an EMPTY alertLog and the reason in
+    // errorMessage. It looks exactly like "no alerts", so errorMessage has to
+    // be read on every call.
+    'alerts_max_range_days' => (int) env('VECV_ALERTS_MAX_RANGE_DAYS', 2),
+
+    // How far back a routine sync looks. Kept inside the per-request cap so one
+    // run costs a single request.
+    'alerts_lookback_days' => (int) env('VECV_ALERTS_LOOKBACK_DAYS', 1),
+
+    // Chassis per request. The endpoint accepts the whole fleet in one call -
+    // verified with 11 - so this only bounds how much is lost if one batch is
+    // rejected.
+    'alerts_chunk' => (int) env('VECV_ALERTS_CHUNK', 25),
+
+    // Pause between successive alert requests within one sync, for the same
+    // reason service history needs one: a second call inside the same minute is
+    // refused before the first has been processed.
+    'alerts_request_gap_seconds' => (int) env('VECV_ALERTS_REQUEST_GAP', 60),
+
+    // Rows in the Recent Alerts list, and in "events by dumper".
+    'recent_alerts_limit'     => (int) env('VECV_RECENT_ALERTS_LIMIT', 10),
+    'alerts_by_machine_limit' => (int) env('VECV_ALERTS_BY_MACHINE_LIMIT', 5),
+
+    /*
+    |--------------------------------------------------------------------------
+    | On-demand refresh
+    |--------------------------------------------------------------------------
+    |
+    | The dashboard refresh button walks every feed one call at a time, because
+    | VECV throttles by API key: a successful call is followed by a 429 on the
+    | next endpoint whatever it is. Four feeds therefore need four windows, and
+    | no single HTTP request should be held open that long.
+    |
+    | So one POST runs one feed and reports what is left. The caller polls until
+    | nothing is pending. A feed that is rate limited stays pending and is
+    | retried on a later call - never skipped, because a skipped feed is a
+    | silent hole in the data that nothing downstream would reveal.
+    |
+    */
+
+    // The refresh button now spans both telematics vendors, so this list is
+    // wider than the VECV feeds it sits beside. Order matters: the two that
+    // the dashboard actually renders from come first, so the screen is correct
+    // within seconds and everything after it only adds detail.
+    // location and service_history are deliberately NOT here.
+    //
+    // Nothing on the dashboard reads either of them: every panel is built from
+    // equipment_fuel_readings, truck_connect_readings and vecv_alerts. The fuel
+    // feed already carries position, speed and odometer, so the location feed
+    // adds only vehicle_direction, which no screen shows; and service history
+    // is workshop job cards, which change over days rather than minutes and
+    // have no place behind a button at all.
+    //
+    // Each feed costs its own rate-limit window, so dropping the two takes a
+    // full pass from roughly four minutes to about one.
+    //
+    // Keep syncing them on a schedule rather than abandoning them:
+    //   php artisan vecv:sync-location
+    //   php artisan vecv:sync-service-history
+    //
+    // Service history especially - VECV serves only the last 30 days, so a job
+    // card that is never fetched inside that window becomes unreachable for
+    // good. Add either back to this list to put it behind the button again.
+    'refresh_feeds' => ['truck_connect', 'fuel', 'alerts'],
+
+    // Feeds that do NOT share the VECV rate-limit budget and so need no
+    // cooldown before or after them. Truck Connect is a different vendor, a
+    // different key and a different host, and its own documentation asks for a
+    // call every minute - waiting a VECV window before it would add a minute
+    // to every pass for no reason at all.
+    'refresh_unthrottled_feeds' => ['truck_connect'],
+
+    // Minimum gap between two outbound calls. Held on our side so a too-early
+    // click is answered instantly instead of spending a rate-limit slot to be
+    // told no.
+    'refresh_cooldown_seconds' => (int) env('VECV_REFRESH_COOLDOWN', 60),
+
+    // Attempts per feed before a cycle gives up on it and moves on. Without a
+    // cap, a feed that is genuinely unavailable - the alert log, currently -
+    // would hold a cycle open indefinitely.
+    'refresh_max_attempts' => (int) env('VECV_REFRESH_MAX_ATTEMPTS', 3),
+
+    // A cycle left untouched this long is treated as abandoned, so a new click
+    // starts fresh rather than resuming something from hours ago.
+    'refresh_cycle_ttl_minutes' => (int) env('VECV_REFRESH_CYCLE_TTL', 30),
+
+    // PHP binary used to launch the background pass. PHP_BINARY is the CLI
+    // binary on the command line but the FPM one under a web request, which
+    // cannot always run artisan - so it is overridable. Set VECV_PHP_BINARY to
+    // an absolute path if the refresh button reports that it could not start.
+    'php_binary' => env('VECV_PHP_BINARY', PHP_BINARY),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Fleet dashboard
+    |--------------------------------------------------------------------------
+    |
+    | Fuel bucket boundaries, as a percentage of tank. Kept here so the donut,
+    | the "lowest fuel" list and the per-vehicle status badge all read the same
+    | numbers - the mock-up they came from disagreed with itself, labelling 22%
+    | Critical in one panel and Low in another.
+    |
+    | Read as: Normal is above normal_min; Low is normal_min down to and
+    | including critical_max; Critical is below critical_max. The boundaries
+    | themselves (40 and 20) therefore both fall in Low, leaving no gap and no
+    | overlap.
+    |
+    */
+
+    'fuel_buckets' => [
+        'normal_min'   => (float) env('VECV_FUEL_NORMAL_MIN', 40),
+        'critical_max' => (float) env('VECV_FUEL_CRITICAL_MAX', 20),
+    ],
+
+    /*
+    | Rows returned by the "lowest fuel" panel.
+    */
+
+    'lowest_fuel_limit' => (int) env('VECV_LOWEST_FUEL_LIMIT', 5),
 ];

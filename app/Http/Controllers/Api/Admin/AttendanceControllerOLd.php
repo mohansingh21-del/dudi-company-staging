@@ -895,7 +895,7 @@ public function bulkUpload(Request $request)
 
         return response()->json([
             'status' => 200,
-            'message' => 'Attendance statuses updated successfully'
+            'message' => 'Attendance status updated successfully'
         ]);
     }
     public function index_1122(Request $request)

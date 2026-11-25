@@ -95,6 +95,9 @@ class DelayImport implements ToCollection, WithHeadingRow
                 $shift = Shift::where('shift_name', $shiftName)->first();
                 if (!$shift) {
                     $rowErrors[] = "Shift with name '{$shiftName}' not found.";
+                } elseif (!$shift->is_active) {
+                    $rowErrors[] = "Shift '{$shiftName}' is inactive and cannot be used.";
+                    $shift = null;
                 }
             }
 
@@ -277,7 +280,7 @@ class DelayImport implements ToCollection, WithHeadingRow
                         'estimated_production_loss_bcm' => $estimatedProductionLoss,
                         'description' => $description,
                         'remarks' => $remarks !== '' ? $remarks : null,
-                        'created_by' => auth()->id() ?? $shiftPlan->created_by ?? $shiftPlan->supervisor_id ?? 1,
+                        'created_by' => auth()->id() ?? $shiftPlan->created_by ?? $shiftPlan->primarySupervisorId() ?? 1,
                     ];
 
                     Delay::create($delayData);

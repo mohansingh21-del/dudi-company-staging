@@ -2,12 +2,15 @@
 
 namespace App\Http\Controllers\Api\Admin;
 
+use App\Exports\LeaveRegisterExport;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
 use App\Models\LeaveRegisterReport;
+use App\Models\LeaveRegisterReportRow;
 use App\Services\LeaveBalanceService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Maatwebsite\Excel\Facades\Excel;
 
 /**
  * Form E leave balances. Read-only — every figure is computed from the leave
@@ -333,6 +336,92 @@ class LeaveBalanceController extends Controller
             'status' => 200,
             'message' => 'Generated report deleted successfully'
         ]);
+    }
+
+    /**
+     * Form E for a year as an xlsx, in the printed layout.
+     *
+     * Defaults to the generated register for that year, so what downloads is the
+     * frozen document rather than figures that may have moved since. `source=preview`
+     * exports the live computed register instead, for a year not yet generated.
+     *
+     * The whole register is written. `search` is a screen filter and is not honoured
+     * here — a register exported minus some of its employees is not the register.
+     */
+    public function export(Request $request)
+    {
+        try {
+            $year = (int) $request->input('year', now()->year);
+
+            if ($year < 2000 || $year > 2100) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'Invalid year.'
+                ], 422);
+            }
+
+            $source = strtolower((string) $request->input('source', 'report'));
+
+            if (! in_array($source, ['report', 'preview'], true)) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Invalid source. Use 'report' for the generated register or 'preview' for the live one."
+                ], 422);
+            }
+
+            if ($source === 'report') {
+                $report = LeaveRegisterReport::forYear($year);
+
+                if (! $report) {
+                    // Deliberately not falling back to the preview: the two are
+                    // different documents and a silent swap would hand the caller
+                    // a file that is not the register they asked for.
+                    return response()->json([
+                        'status' => 404,
+                        'message' => "No leave register has been generated for {$year} yet."
+                            . ' Generate it first, or export the live register with source=preview.'
+                    ], 404);
+                }
+
+                $rows = $report->rows()->get()->map->toFormE()->values()->all();
+                $label = "Form E {$year}";
+                $filename = "leave-register-{$year}.xlsx";
+            } else {
+                $employees = $this->balances->registerEmployeeQuery($year, $request->only([
+                    'site_id', 'department_id', 'designation_id', 'employee_status',
+                ]))->get();
+
+                $ledger = $this->balances->ledgerFor($employees, $year);
+
+                // Built through the row model so the sheet and the API agree on the
+                // Form E shape rather than each assembling it their own way.
+                $rows = [];
+                $serial = 1;
+
+                foreach ($employees as $employee) {
+                    $entry = $ledger[$employee->id] ?? ['days_worked' => 0.0, 'groups' => []];
+
+                    $rows[] = LeaveRegisterReportRow::formEFromLedger($serial++, $employee, $entry);
+                }
+
+                $label = "Form E {$year} (Live)";
+                $filename = "leave-register-{$year}-preview.xlsx";
+            }
+
+            if (empty($rows)) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "The leave register for {$year} has no rows to export."
+                ], 422);
+            }
+
+            return Excel::download(new LeaveRegisterExport($rows, $year, $label), $filename);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
     }
 
     /**

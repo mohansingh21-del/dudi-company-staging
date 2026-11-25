@@ -4,161 +4,195 @@ namespace App\Services;
 
 use App\Models\Inventory;
 use App\Models\InventoryLog;
-use App\Models\Product;
-use App\Models\User;
-use App\Mail\LowStockAlertMail;
 use Illuminate\Http\Exceptions\HttpResponseException;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 
+/**
+ * The one stock service.
+ *
+ * Every movement is against a single `inventories` row, which already names
+ * both the product and the store. A deduction may take a row down to zero but
+ * never below it. products.min_stock is only a warning line: crossing it raises
+ * an inventory alert, it does not block the issue.
+ */
 class InventoryStockService
 {
     /**
-     * Deduct stock for a product, ensuring quantity does not drop below min_stock.
+     * The rejection shared by every path that issues stock.
      *
-     * @param int $productId
-     * @param float $quantity
-     * @param int $userId
-     * @param string|null $remarks
-     * @return array
+     * @param  string       $productName
+     * @param  string|null  $storeName
+     * @param  float        $availableStock
+     * @return string
      */
-    public function deductStock($productId, $quantity, $userId, $remarks = null)
+    public static function insufficientStockMessage($productName, $storeName, $availableStock)
     {
-        $product = Product::find($productId);
-        if (!$product) {
-            throw new HttpResponseException(response()->json([
-                'status' => 422,
-                'message' => 'Validation failed',
-                'errors' => [
-                    'spare_parts' => ["Inventory product with ID {$productId} not found."]
-                ]
-            ], 422));
+        $storeName = $storeName ?: 'Unknown Store';
+
+        if ((float) $availableStock <= 0) {
+            return "'{$productName}' is out of stock at '{$storeName}'. Add stock before issuing it.";
         }
 
-        $inventory = Inventory::where('product_id', $productId)->first();
-        if (!$inventory) {
+        $available = rtrim(rtrim(number_format((float) $availableStock, 2, '.', ''), '0'), '.');
+
+        return "Only {$available} units of '{$productName}' are left at '{$storeName}'.";
+    }
+
+    /**
+     * Issue stock from a store.
+     *
+     * @param  int          $inventoryId
+     * @param  float        $quantity
+     * @param  int          $userId
+     * @param  int|null     $expectedStoreId  The store the service record is
+     *                                        pinned to. When given, a part from
+     *                                        any other store is rejected — one
+     *                                        record draws from one store.
+     * @param  string|null  $remarks
+     * @return array
+     */
+    public function deductStock($inventoryId, $quantity, $userId, $expectedStoreId = null, $remarks = null)
+    {
+        $inventory = $this->findInventory($inventoryId);
+
+        $partName = $this->partName($inventory);
+        $storeName = $this->storeName($inventory);
+
+        if ($expectedStoreId !== null && (int) $inventory->store_id !== (int) $expectedStoreId) {
             throw new HttpResponseException(response()->json([
                 'status' => 422,
                 'message' => 'Validation failed',
                 'errors' => [
-                    'spare_parts' => ["No inventory stock record found for product '{$product->name}'."]
+                    'spare_parts' => ["Spare part '{$partName}' belongs to '{$storeName}', which is not the store selected on this service record. A service record can only draw parts from one store."]
                 ]
             ], 422));
         }
 
         $availableStock = (float) $inventory->left_quantity;
-        $minStock = (float) $product->min_stock;
         $qtyToDeduct = (float) $quantity;
 
-        // Check if assigning quantity causes stock to go below minimum stock
-        if (($availableStock - $qtyToDeduct) < $minStock) {
-            $productName = $product->name ?? 'Unknown Product';
-            $this->sendLowStockAlert($productName, $availableStock);
-
+        // Only an empty shelf stops an issue. Dropping under min_stock is
+        // allowed and raises an alert below.
+        if ($qtyToDeduct > $availableStock) {
             throw new HttpResponseException(response()->json([
                 'status' => 422,
                 'message' => 'Validation failed',
                 'errors' => [
-                    'spare_parts' => ["Cannot assign/deduct stock for '{$productName}'. Stock level after deduction would drop below minimum stock limit ({$minStock}). Current available stock: {$availableStock}."]
+                    'spare_parts' => [self::insufficientStockMessage($partName, $storeName, $availableStock)]
                 ]
             ], 422));
         }
 
-        // Deduct inventory left_quantity
+        // Only left_quantity moves; quantity is the running total ever stocked.
         $inventory->left_quantity -= $qtyToDeduct;
         $inventory->save();
 
-        // Send low stock alert if left_quantity reaches or drops below min_stock
-        if ((float) $inventory->left_quantity <= $minStock) {
-            $this->sendLowStockAlert($product->name, (float) $inventory->left_quantity);
-        }
-
-        // Create inventory log entry
         InventoryLog::create([
-            'product_id' => $productId,
+            'product_id' => $inventory->product_id,
+            'store_id'   => $inventory->store_id,
             'user_id'    => $userId,
             'type'       => 'out',
             'action'     => 'service_spare_part',
             'quantity'   => -$qtyToDeduct,
-            'remarks'    => "Deducted {$qtyToDeduct} units for service record" . ($remarks ? " - {$remarks}" : "")
+            'remarks'    => "Issued {$qtyToDeduct} units from store '{$storeName}' for service record" . ($remarks ? " - {$remarks}" : "")
         ]);
 
+        $this->alerts()->syncStockLevel($inventory, 'service_record', $userId, $remarks);
+
         return [
-            'part_name'  => $product->name,
-            'unit_price' => 0.00,
+            'part_name'  => $partName,
+            'product_id' => (int) $inventory->product_id,
+            'store_id'   => (int) $inventory->store_id,
+            'store_name' => $storeName,
         ];
     }
 
     /**
-     * Return previously deducted stock for a product.
+     * Return previously issued stock.
      *
-     * The exact inverse of deductStock: only left_quantity moves, because the
-     * total quantity on hand was never reduced in the first place. Used when a
-     * spare part is taken off a service record, or its quantity is lowered.
+     * The exact inverse of deductStock, and deliberately without a floor check:
+     * putting stock back can never make a store's position worse.
      *
-     * @param int $productId
-     * @param float $quantity
-     * @param int $userId
-     * @param string|null $remarks
+     * @param  int          $inventoryId
+     * @param  float        $quantity
+     * @param  int          $userId
+     * @param  string|null  $remarks
      * @return array
      */
-    public function restockStock($productId, $quantity, $userId, $remarks = null)
+    public function restockStock($inventoryId, $quantity, $userId, $remarks = null)
     {
-        $product = Product::find($productId);
-        if (!$product) {
-            throw new HttpResponseException(response()->json([
-                'status' => 422,
-                'message' => 'Validation failed',
-                'errors' => [
-                    'spare_parts' => ["Inventory product with ID {$productId} not found."]
-                ]
-            ], 422));
-        }
-
-        $inventory = Inventory::where('product_id', $productId)->first();
-        if (!$inventory) {
-            throw new HttpResponseException(response()->json([
-                'status' => 422,
-                'message' => 'Validation failed',
-                'errors' => [
-                    'spare_parts' => ["No inventory stock record found for product '{$product->name}', so the previously issued stock cannot be returned."]
-                ]
-            ], 422));
-        }
+        $inventory = $this->findInventory($inventoryId);
 
         $qtyToReturn = (float) $quantity;
+        $storeName = $this->storeName($inventory);
 
         $inventory->left_quantity += $qtyToReturn;
         $inventory->save();
 
         InventoryLog::create([
-            'product_id' => $productId,
+            'product_id' => $inventory->product_id,
+            'store_id'   => $inventory->store_id,
             'user_id'    => $userId,
             'type'       => 'in',
             'action'     => 'service_spare_part_return',
             'quantity'   => $qtyToReturn,
-            'remarks'    => "Returned {$qtyToReturn} units from service record" . ($remarks ? " - {$remarks}" : "")
+            'remarks'    => "Returned {$qtyToReturn} units to store '{$storeName}' from service record" . ($remarks ? " - {$remarks}" : "")
         ]);
 
+        // A return can lift a row back over min_stock and close its alerts.
+        $this->alerts()->syncStockLevel($inventory, 'service_record_return', $userId, $remarks);
+
         return [
-            'part_name'  => $product->name,
-            'unit_price' => 0.00,
+            'part_name'  => $this->partName($inventory),
+            'product_id' => (int) $inventory->product_id,
+            'store_id'   => (int) $inventory->store_id,
+            'store_name' => $storeName,
         ];
     }
 
-    private function sendLowStockAlert($productName, $currentStock)
+    /**
+     * @return InventoryAlertService
+     */
+    protected function alerts()
     {
-        try {
-            $recipients = User::whereHas('roles', function ($query) {
-                $query->whereIn('slug', ['super-admin', 'supervisor']);
-            })->get();
+        return app(InventoryAlertService::class);
+    }
 
-            $emails = $recipients->pluck('email')->filter()->toArray();
-            if (!empty($emails) && class_exists(LowStockAlertMail::class)) {
-                Mail::to($emails)->send(new LowStockAlertMail($productName, $currentStock));
-            }
-        } catch (\Throwable $th) {
-            Log::error("Failed to send low stock alert email: " . $th->getMessage());
+    /**
+     * @param  int  $inventoryId
+     * @return Inventory
+     */
+    protected function findInventory($inventoryId)
+    {
+        $inventory = Inventory::with(['store', 'product'])->find($inventoryId);
+
+        if (!$inventory) {
+            throw new HttpResponseException(response()->json([
+                'status' => 422,
+                'message' => 'Validation failed',
+                'errors' => [
+                    'spare_parts' => ["Stock record with ID {$inventoryId} not found."]
+                ]
+            ], 422));
         }
+
+        return $inventory;
+    }
+
+    /**
+     * @param  Inventory  $inventory
+     * @return string
+     */
+    protected function partName(Inventory $inventory)
+    {
+        return optional($inventory->product)->name ?: 'Unknown Product';
+    }
+
+    /**
+     * @param  Inventory  $inventory
+     * @return string
+     */
+    protected function storeName(Inventory $inventory)
+    {
+        return optional($inventory->store)->name ?: 'Unknown Store';
     }
 }

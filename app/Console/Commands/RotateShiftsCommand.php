@@ -8,6 +8,7 @@ use App\Models\EmployeeShiftAssignment;
 use App\Models\EmployeeShiftOverride;
 use App\Models\RelayShiftMapping;
 use App\Models\Relay;
+use App\Models\ShiftWorkforceDeployment;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -25,12 +26,17 @@ class RotateShiftsCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Rotate relay shift mappings according to a hardcoded sequence every Sunday';
+    protected $description = 'Rotate relay shift mappings according to a hardcoded sequence every Monday at midnight';
 
     /**
      * The sequence defines the rotation order by shift ID.
      */
     protected $sequence = [1, 3, 2]; // Shift ID 1 -> 3 -> 2 -> 1
+
+    /**
+     * Marks the overrides this command writes to hold an employee on their shift.
+     */
+    const HOLD_REASON = 'Rotation held: deployed on an open shift plan';
 
     /**
      * Execute the console command.
@@ -50,11 +56,12 @@ class RotateShiftsCommand extends Command
         // Current week boundary (runs on Sunday/Monday, mapping is for the week starting today/yesterday)
         // Ensure weekStart is always the current week's Monday (or Sunday) to match scheduler
         $today = Carbon::today();
-        if ($today->dayOfWeek === Carbon::SUNDAY) {
-            $weekStart = $today->copy()->addDay()->toDateString();
-        } else {
-            $weekStart = $today->copy()->startOfWeek(Carbon::MONDAY)->toDateString();
-        }
+        // if ($today->dayOfWeek === Carbon::SUNDAY) {
+        //     $weekStart = $today->copy()->addDay()->toDateString();
+        // } else {
+        //     $weekStart = $today->copy()->startOfWeek(Carbon::MONDAY)->toDateString();
+        // }
+        $weekStart = $today->copy()->startOfWeek(Carbon::SUNDAY)->toDateString();
         $weekEnd = Carbon::parse($weekStart)->addDays(6)->toDateString();
 
         // Check if mappings for this week already exist (prevent duplicate runs)
@@ -73,6 +80,10 @@ class RotateShiftsCommand extends Command
         }
 
         DB::transaction(function () use ($activeSequence, $weekStart, $weekEnd, $force, $today, $rotatingRelays) {
+            // Step 0: Capture who is held back BEFORE Step 1 expires the overrides
+            // that may be what currently puts them on their shift.
+            $heldShifts = $this->heldEmployeeShifts($rotatingRelays);
+
             // Step 1: Expire all open-ended overrides (from previous weeks)
             $yesterday = $today->copy()->subDay()->toDateString();
             EmployeeShiftOverride::whereNull('effective_until')
@@ -94,7 +105,12 @@ class RotateShiftsCommand extends Command
                 // First run — seed from current employee_shift_assignments
                 $this->seedInitialMappings($rotatingRelays, $activeSequence, $weekStart, $weekEnd);
             } else {
-                // Rotate: each relay's shift moves to the next in the sequence
+                // Rotate: each relay's shift moves to the next in the sequence.
+                // Advancing every relay by one step preserves distinctness, so a
+                // collision here means the previous week's mappings were already
+                // inconsistent — skip and warn rather than write a duplicate.
+                $claimedShifts = [];
+
                 foreach ($rotatingRelays as $relay) {
                     $prevMapping = $latestMappings->firstWhere('relay_id', $relay->id);
 
@@ -104,6 +120,12 @@ class RotateShiftsCommand extends Command
 
                     $currentIndex = array_search($prevMapping->shift_id, $activeSequence);
                     $nextShiftId = $activeSequence[($currentIndex + 1) % count($activeSequence)];
+
+                    if (in_array($nextShiftId, $claimedShifts)) {
+                        $this->warn("Relay {$relay->name}: Shift {$nextShiftId} already claimed this week. Skipping.");
+                        continue;
+                    }
+                    $claimedShifts[] = $nextShiftId;
 
                     RelayShiftMapping::create([
                         'week_start_date' => $weekStart,
@@ -116,12 +138,129 @@ class RotateShiftsCommand extends Command
                 }
             }
 
-            // Step 3: Sync employee_shift_assignments for backward compatibility
-            $this->syncEmployeeAssignments($weekStart);
+            // Step 3: Keep held employees on their current shift for the new week
+            $this->holdEmployees($heldShifts, $weekStart, $today);
+
+            // Step 4: Sync employee_shift_assignments for backward compatibility
+            $this->syncEmployeeAssignments($weekStart, array_keys($heldShifts));
         });
 
         $this->info('Relay-based shift rotation completed successfully.');
         return 0;
+    }
+
+    /**
+     * Shift each rotating-relay employee must stay on, keyed by employee_id, for
+     * those still actively deployed on a shift plan that has not been closed.
+     *
+     * Rotating them would move the shift they resolve to out from under the open
+     * plan's workforce, machine allocations and attendance, the same reason the
+     * Shift Rotation module refuses to change them. They rejoin their relay's
+     * rotation on the first run after the plan is closed.
+     */
+    private function heldEmployeeShifts($rotatingRelays)
+    {
+        $deployments = ShiftWorkforceDeployment::active()
+            ->whereHas('shiftPlan', function ($q) {
+                $q->notClosed();
+            })
+            ->whereHas('employee', function ($q) use ($rotatingRelays) {
+                $q->where('is_active', 1)->whereIn('relay_id', $rotatingRelays->pluck('id'));
+            })
+            ->with(['employee', 'shiftPlan'])
+            ->get()
+            ->sortByDesc(function ($deployment) {
+                return $deployment->shiftPlan->planning_date;
+            })
+            ->unique('employee_id');
+
+        $held = [];
+
+        foreach ($deployments as $deployment) {
+            // Hold them on the shift of the plan they are standing on. A borrowed
+            // employee works another relay's plan, so keep their own shift as it
+            // resolved on that date instead.
+            $shiftId = $deployment->is_borrowed
+                ? $deployment->employee->getShiftIdForDate($deployment->shiftPlan->planning_date->toDateString())
+                : $deployment->shiftPlan->shift_id;
+            if (!$shiftId) {
+                continue;
+            }
+
+            $held[$deployment->employee_id] = $shiftId;
+
+            $plan = $deployment->shiftPlan;
+            $this->warn("Employee {$deployment->employee->name}: deployed on open shift plan "
+                . ($plan->reference_no ?: "#{$plan->id}") . ". Holding on Shift {$shiftId}.");
+        }
+
+        return $held;
+    }
+
+    /**
+     * Write an open-ended override from the new week's start for every held
+     * employee. It outranks the relay mapping, and Step 1 of the next run expires
+     * it so they are re-evaluated every week.
+     */
+    private function holdEmployees(array $heldShifts, string $weekStart, Carbon $today)
+    {
+        $this->releaseHolds($heldShifts, $weekStart, $today);
+
+        foreach ($heldShifts as $employeeId => $shiftId) {
+            // A deliberate override already planned for the new week wins.
+            $planned = EmployeeShiftOverride::where('employee_id', $employeeId)
+                ->where('effective_from', '>=', $weekStart)
+                ->where(function ($q) {
+                    $q->whereNull('reason')->orWhere('reason', '!=', self::HOLD_REASON);
+                })
+                ->exists();
+            if ($planned) {
+                continue;
+            }
+
+            EmployeeShiftOverride::updateOrCreate(
+                [
+                    'employee_id' => $employeeId,
+                    'effective_from' => $weekStart,
+                    'reason' => self::HOLD_REASON,
+                ],
+                [
+                    'effective_until' => null,
+                    'shift_id' => $shiftId,
+                ]
+            );
+        }
+    }
+
+    /**
+     * Drop this week's holds for employees who are no longer standing on an open
+     * plan — their plan was closed after the hold was written.
+     *
+     * Step 1 only expires overrides from earlier weeks, so a hold written this week
+     * would otherwise keep outranking the relay mapping and park the employee off
+     * the rotation. Days already worked under the hold keep resolving to the held
+     * shift; from today they follow their relay again.
+     */
+    private function releaseHolds(array $heldShifts, string $weekStart, Carbon $today)
+    {
+        $stale = EmployeeShiftOverride::where('reason', self::HOLD_REASON)
+            ->where('effective_from', '>=', $weekStart)
+            ->whereNull('effective_until')
+            ->whereNotIn('employee_id', array_keys($heldShifts))
+            ->get();
+
+        foreach ($stale as $override) {
+            $endsOn = $today->copy()->subDay()->toDateString();
+
+            // Held only for days that have not started yet — nothing to preserve.
+            if ($endsOn < $weekStart) {
+                $override->delete();
+            } else {
+                $override->update(['effective_until' => $endsOn]);
+            }
+
+            $this->line("Employee #{$override->employee_id}: shift plan closed, hold released.");
+        }
     }
 
     /**
@@ -131,6 +270,10 @@ class RotateShiftsCommand extends Command
     private function seedInitialMappings($rotatingRelays, array $activeSequence, string $weekStart, string $weekEnd)
     {
         $this->info('No previous relay mappings found. Seeding from current employee assignments...');
+
+        // Each relay's most common shift is derived independently, so two relays
+        // can land on the same shift. Only the first may claim it.
+        $claimedShifts = [];
 
         foreach ($rotatingRelays as $relay) {
             // Find the most common shift_id for employees in this relay
@@ -142,7 +285,14 @@ class RotateShiftsCommand extends Command
                 ->orderByDesc('cnt')
                 ->value('shift_id');
 
+            if ($mostCommonShiftId && in_array($mostCommonShiftId, $claimedShifts)) {
+                $this->warn("Shift {$mostCommonShiftId} already claimed this week. Skipping Relay {$relay->name}.");
+                continue;
+            }
+
             if ($mostCommonShiftId && in_array($mostCommonShiftId, $activeSequence)) {
+                $claimedShifts[] = $mostCommonShiftId;
+
                 RelayShiftMapping::create([
                     'week_start_date' => $weekStart,
                     'week_end_date' => $weekEnd,
@@ -161,7 +311,7 @@ class RotateShiftsCommand extends Command
      * Sync employee_shift_assignments from relay mappings for backward compatibility.
      * This ensures all existing code that reads employee_shift_assignments still works.
      */
-    private function syncEmployeeAssignments(string $weekStart)
+    private function syncEmployeeAssignments(string $weekStart, array $heldEmployeeIds = [])
     {
         $mappings = RelayShiftMapping::where('week_start_date', $weekStart)->get();
         $rotatedCount = 0;
@@ -173,6 +323,10 @@ class RotateShiftsCommand extends Command
                 ->get();
 
             foreach ($employees as $employee) {
+                if (in_array($employee->id, $heldEmployeeIds)) {
+                    continue;
+                }
+
                 $currentAssignment = $employee->currentShiftAssignment;
 
                 if ($currentAssignment) {

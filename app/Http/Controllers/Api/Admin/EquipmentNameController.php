@@ -27,7 +27,7 @@ class EquipmentNameController extends Controller
             $limit = $request->input('limit', 10);
 
 
-            $equipmentNames = EquipmentName::with('equipment');
+            $equipmentNames = EquipmentName::with(['equipment', 'modelNumber']);
 
 
 
@@ -46,6 +46,14 @@ class EquipmentNameController extends Controller
                         'LIKE',
                         "%{$search}%"
                     )
+
+                        ->orWhere('chassis_number', 'LIKE', "%{$search}%")
+
+
+                        ->orWhereHas('modelNumber', function ($q) use ($search) {
+
+                            $q->where('model_number', 'LIKE', "%{$search}%");
+                        })
 
 
                         ->orWhereHas('equipment', function ($q) use ($search) {
@@ -138,7 +146,13 @@ class EquipmentNameController extends Controller
             'equipment_id' => $request->equipment_id,
 
 
+            'equipment_model_number_id' => $request->equipment_model_number_id,
+
+
             'equipment_name' => $request->equipment_name,
+
+
+            'chassis_number' => $request->chassis_number,
 
 
             'is_active' => 1
@@ -169,7 +183,7 @@ class EquipmentNameController extends Controller
     {
 
 
-        $equipmentName = EquipmentName::with('equipment')
+        $equipmentName = EquipmentName::with(['equipment', 'modelNumber'])
             ->find($id);
 
 
@@ -230,16 +244,36 @@ class EquipmentNameController extends Controller
 
 
 
-        $equipmentName->update([
+        $data = [
 
 
             'equipment_id' => $request->equipment_id,
 
 
+            'equipment_model_number_id' => $request->equipment_model_number_id,
+
+
             'equipment_name' => $request->equipment_name
 
 
-        ]);
+        ];
+
+
+
+        // Only touch these when the client sends them: a form that predates
+        // the fields must not wipe a chassis the telematics sync matches on.
+
+        foreach (['chassis_number'] as $field) {
+
+            if ($request->has($field)) {
+
+                $data[$field] = $request->input($field);
+            }
+        }
+
+
+
+        $equipmentName->update($data);
 
 
 
@@ -361,12 +395,16 @@ class EquipmentNameController extends Controller
         try {
             $query = EquipmentName::where('is_active', 1)
                 ->where('equipment_id', $id)
-                ->with('equipment');
+                ->with(['equipment', 'modelNumber']);
 
             if ($request->filled('search')) {
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
-                    $q->where('equipment_name', 'LIKE', "%{$search}%");
+                    $q->where('equipment_name', 'LIKE', "%{$search}%")
+                        ->orWhere('chassis_number', 'LIKE', "%{$search}%")
+                        ->orWhereHas('modelNumber', function ($m) use ($search) {
+                            $m->where('model_number', 'LIKE', "%{$search}%");
+                        });
                 });
             }
 
@@ -422,8 +460,21 @@ class EquipmentNameController extends Controller
             if ($request->filled('search')) {
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
-                    $q->where('equipment_name', 'LIKE', "%{$search}%");
+                    $q->where('equipment_name', 'LIKE', "%{$search}%")
+                        ->orWhere('chassis_number', 'LIKE', "%{$search}%")
+                        ->orWhereHas('modelNumber', function ($m) use ($search) {
+                            $m->where('model_number', 'LIKE', "%{$search}%");
+                        });
                 });
+            }
+
+            // Only machines a telematics feed reports on. For the fleet
+            // dashboard's dumper filter: without it the dropdown also lists
+            // machines with no chassis - a dozer, a pump - and picking one
+            // returns an empty dashboard that reads as a fault rather than as
+            // "this machine has no telemetry".
+            if ($request->boolean('has_telematics')) {
+                $query->whereNotNull('chassis_number');
             }
 
             $query->orderBy('equipment_name', 'asc');
@@ -432,6 +483,13 @@ class EquipmentNameController extends Controller
                 return [
                     'id' => $machine->id,
                     'equipment_name' => $machine->equipment_name,
+                    'model_number' => optional($machine->modelNumber)->model_number,
+
+                    // Null on machines no telematics feed covers. Also what the
+                    // fleet dashboard falls back to when equipment_name is
+                    // still the raw chassis.
+                    'chassis_number' => $machine->chassis_number,
+
                     'equipment_id' => $machine->equipment_id,
                     'equipment_category_name' => $machine->equipment ? $machine->equipment->name : null,
                     'is_active' => $machine->is_active,

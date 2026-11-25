@@ -12,6 +12,33 @@ use Illuminate\Support\Facades\DB;
 class WorkforceDeploymentService
 {
     /**
+     * Shift plan IDs on this date that still hold a claim on their deployed employees.
+     *
+     * A closed shift plan has already been worked and its summary frozen, so a
+     * deployment sitting on it no longer occupies the employee: once their shift is
+     * overridden onto another shift for the same date they must still be loadable
+     * into that shift's plan. Open plans keep blocking, so nobody ends up standing
+     * on two live shifts at once.
+     *
+     * @param  string    $planningDate
+     * @param  int|null  $alwaysInclude  plan that counts as occupying even when closed
+     * @return array
+     */
+    private function occupyingPlanIds($planningDate, $alwaysInclude = null)
+    {
+        $planIds = ShiftPlan::whereDate('planning_date', $planningDate)
+            ->notClosed()
+            ->pluck('id')
+            ->toArray();
+
+        if ($alwaysInclude && !in_array((int) $alwaysInclude, array_map('intval', $planIds), true)) {
+            $planIds[] = (int) $alwaysInclude;
+        }
+
+        return $planIds;
+    }
+
+    /**
      * BR-SHFT-008: Auto-load all active employees from the shift's relay
      * into shift_workforce_deployments. Idempotent — skips already-deployed employees.
      *
@@ -94,13 +121,12 @@ class WorkforceDeploymentService
             return $employee->getShiftIdForDate($planningDate) == $shiftPlan->shift_id;
         });
 
-        // Get all shift plan IDs on this planning date
-        $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
-            ->pluck('id')
-            ->toArray();
-
-        // Get IDs already actively deployed on any shift plan on this date
-        $alreadyDeployedIds = ShiftWorkforceDeployment::whereIn('shift_plan_id', $sameDatePlanIds)
+        // Get IDs already actively deployed on any still-open shift plan on this date.
+        // This plan is always counted so a repeat call stays idempotent on its own rows.
+        $alreadyDeployedIds = ShiftWorkforceDeployment::whereIn(
+                'shift_plan_id',
+                $this->occupyingPlanIds($planningDate, $shiftPlanId)
+            )
             ->active()
             ->pluck('employee_id')
             ->toArray();
@@ -139,6 +165,8 @@ class WorkforceDeploymentService
                     'deployed_by' => $userId,
                     'status' => 'active',
                 ]);
+
+                app(RotationHoldService::class)->holdDeployment($deployment);
 
                 $newDeployments[] = $deployment;
             }
@@ -216,8 +244,9 @@ class WorkforceDeploymentService
             }
         }
 
-        // Find all shift_plan IDs for the same date
+        // Find all shift_plan IDs for the same date (completed/closed plans release their employees)
         $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
+            ->whereNotIn('status', ['completed', 'closed'])
             ->pluck('id')
             ->toArray();
 
@@ -344,8 +373,10 @@ class WorkforceDeploymentService
 
         $planningDate = $shiftPlan->planning_date->format('Y-m-d');
 
-        // Pre-fetch all shift_plan IDs for the same date (single query)
+        // Pre-fetch all shift_plan IDs for the same date (single query).
+        // Completed/closed plans release their employees for borrowing.
         $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
+            ->whereNotIn('status', ['completed', 'closed'])
             ->pluck('id')
             ->toArray();
 
@@ -482,6 +513,8 @@ class WorkforceDeploymentService
                     'status' => 'active',
                 ]);
 
+                app(RotationHoldService::class)->holdDeployment($deployment);
+
                 $deployments[] = $deployment;
 
                 // Track this ID so subsequent duplicates in the same batch are caught
@@ -561,6 +594,8 @@ class WorkforceDeploymentService
             'status' => 'removed',
             'removed_reason' => $reason,
         ]);
+
+        app(RotationHoldService::class)->releaseUnstartedHolds([$deployment->employee_id]);
 
         $listResult = $this->getWorkforceList($shiftPlan->id, $limit);
 
@@ -672,13 +707,13 @@ class WorkforceDeploymentService
             return $d->status === 'removed';
         })->keyBy('employee_id');
 
-        // Get all shift plan IDs on this planning date
-        $sameDatePlanIds = ShiftPlan::whereDate('planning_date', $planningDate)
-            ->pluck('id')
-            ->toArray();
-
-        // Get all active deployments on OTHER shift plans for this date
-        $otherDeployments = ShiftWorkforceDeployment::whereIn('shift_plan_id', $sameDatePlanIds)
+        // Get all active deployments on OTHER still-open shift plans for this date.
+        // A deployment on a closed plan no longer occupies the employee, so it must
+        // not report them as busy elsewhere here either.
+        $otherDeployments = ShiftWorkforceDeployment::whereIn(
+                'shift_plan_id',
+                $this->occupyingPlanIds($planningDate)
+            )
             ->where('shift_plan_id', '!=', $shiftPlanId)
             ->active()
             ->with('shiftPlan.shift')
@@ -706,9 +741,11 @@ class WorkforceDeploymentService
             $processedEmployeeIds[] = $emp->id;
         }
 
-        // 2. Add borrowed employees (both active and removed)
+        // 2. Add borrowed employees — active ones only. A borrowed employee who has
+        // been removed no longer belongs to this shift, so they drop off the list
+        // entirely (unlike home employees, who stay on with status 'Removed').
         foreach ($allDeployments as $dep) {
-            if ($dep->is_borrowed && !in_array($dep->employee_id, $processedEmployeeIds)) {
+            if ($dep->is_borrowed && $dep->status === 'active' && !in_array($dep->employee_id, $processedEmployeeIds)) {
                 if ($dep->employee) {
                     $unifiedEmployees->push($dep->employee);
                     $processedEmployeeIds[] = $dep->employee_id;
@@ -723,28 +760,35 @@ class WorkforceDeploymentService
             $removedDep = isset($removedDeployments[$empId]) ? $removedDeployments[$empId] : null;
             $dep = $activeDep ?: $removedDep; // use either active or removed deployment details
 
-            // Determine status
+            // Attendance label for the day, if attendance has been processed
+            $attendanceLabel = null;
+            if (isset($attendanceRecords[$empId])) {
+                $attStatus = $attendanceRecords[$empId]->attendance_status;
+                if ($attStatus === 'present') {
+                    $attendanceLabel = 'Present';
+                } elseif ($attStatus === 'absent') {
+                    $attendanceLabel = 'Absent';
+                } elseif ($attStatus === 'rest_day') {
+                    $attendanceLabel = 'Rest Day';
+                } elseif ($attStatus === 'leave') {
+                    $attendanceLabel = 'On Leave';
+                } else {
+                    $attendanceLabel = ucfirst(str_replace('_', ' ', $attStatus));
+                }
+            }
+
+            // Determine status. An active deployment on this plan (home or borrowed)
+            // reads 'Deployed' — being marked present must not override it. Only
+            // attendance that takes the employee off the shift (absent / leave /
+            // rest day) still wins, matching the summary which drops them too.
             $status = 'Not Deployed';
 
             if (isset($leaves[$empId])) {
                 $status = 'On Leave';
-            } elseif (isset($attendanceRecords[$empId])) {
-                $attStatus = $attendanceRecords[$empId]->attendance_status;
-                if ($attStatus === 'present') {
-                    $status = 'Present';
-                } elseif ($attStatus === 'absent') {
-                    $status = 'Absent';
-                } elseif ($attStatus === 'rest_day') {
-                    $status = 'Rest Day';
-                } elseif ($attStatus === 'leave') {
-                    $status = 'On Leave';
-                } else {
-                    $status = ucfirst(str_replace('_', ' ', $attStatus));
-                }
-            } elseif ($activeDep && $activeDep->is_borrowed) {
-                $status = 'Borrowed';
-            } elseif ($activeDep && !$activeDep->is_borrowed) {
+            } elseif ($activeDep && !in_array($attendanceLabel, ['Absent', 'On Leave', 'Rest Day'], true)) {
                 $status = 'Deployed';
+            } elseif ($attendanceLabel !== null) {
+                $status = $attendanceLabel;
             } elseif (isset($otherDeployments[$empId])) {
                 $otherDep = $otherDeployments[$empId]->first();
                 $otherShiftName = ($otherDep->shiftPlan && $otherDep->shiftPlan->shift)
@@ -760,11 +804,18 @@ class WorkforceDeploymentService
                 $status = 'Removed';
             }
 
+            // Summary counts stay attendance-driven: a deployed employee is counted
+            // as present/absent once attendance is processed, whatever the row shows.
+            $statsStatus = ($status === 'Deployed' && $attendanceLabel !== null) ? $attendanceLabel : $status;
+
             // Formatting fields
             $designationName = $emp->designation ? $emp->designation->name : null;
-            $machineName = ($activeDep && $activeDep->assignedMachine && $activeDep->assignedMachine->equipmentName)
-                ? $activeDep->assignedMachine->equipmentName->name
+            $assignedMachine = ($activeDep && $activeDep->assignedMachine)
+                ? $activeDep->assignedMachine->equipmentName
                 : null;
+            $machineName = $assignedMachine ? $assignedMachine->equipment_name : null;
+            $machineModelNumber = $assignedMachine ? optional($assignedMachine->modelNumber)->model_number : null;
+            $machineChassis = $assignedMachine ? $assignedMachine->chassis_number : null;
 
             $homeShift = $emp->getShiftForDate($planningDate);
             $homeShiftName = $homeShift ? $homeShift->shift_name : null;
@@ -780,16 +831,25 @@ class WorkforceDeploymentService
                 'shift_name' => $shiftPlan->shift ? $shiftPlan->shift->shift_name : null,
                 'home_shift_name' => $homeShiftName,
                 'assigned_machine' => $machineName,
+                'assigned_machine_model_number' => $machineModelNumber,
+                'assigned_machine_chassis_number' => $machineChassis,
                 'is_borrowed' => $dep ? (bool) $dep->is_borrowed : false,
                 'home_relay_id' => $dep ? $dep->home_relay_id : $emp->relay_id,
                 'home_relay_shift' => $dep && $dep->homeRelay ? $dep->homeRelay->name : optional($emp->relay)->name,
                 'borrowing_reason' => $dep ? $dep->borrowing_reason : null,
                 'status' => $status,
+                'stats_status' => $statsStatus,
             ];
         });
 
         // Compute stats from formatted items
         $stats = $this->calculateStats($shiftPlan, $formattedItems);
+
+        // stats_status is internal to the counts — keep it out of the response
+        $formattedItems = $formattedItems->map(function ($item) {
+            unset($item['stats_status']);
+            return $item;
+        });
 
         // Sort items:
         // Weight 1: Deployed (non-borrowed)
@@ -928,8 +988,14 @@ class WorkforceDeploymentService
             }
 
             $machineName = null;
+
+            $machineModelNumber = null;
+
+            $machineChassis = null;
             if ($machine && $machine->equipmentName) {
-                $machineName = $machine->equipmentName->name;
+                $machineName = $machine->equipmentName->equipment_name;
+                $machineModelNumber = optional($machine->equipmentName->modelNumber)->model_number;
+                $machineChassis = $machine->equipmentName->chassis_number;
             }
 
             $homeShiftName = null;
@@ -949,6 +1015,8 @@ class WorkforceDeploymentService
                 'shift_name' => $shiftName, // The shift of the current shift plan
                 'home_shift_name' => $homeShiftName, // The home shift of the employee on this date
                 'assigned_machine' => $machineName,
+                'assigned_machine_model_number' => $machineModelNumber,
+                'assigned_machine_chassis_number' => $machineChassis,
                 'is_borrowed' => (bool) $dep->is_borrowed,
                 'home_relay_id' => $dep->home_relay_id,
                 'home_relay_shift' => $dep->homeRelay ? $dep->homeRelay->name : null,
@@ -976,6 +1044,9 @@ class WorkforceDeploymentService
         $borrowedInOtherShiftCount = 0;
 
         foreach ($formattedItems as $item) {
+            $rowStatus = $item['status'];
+            $item['status'] = $item['stats_status'];
+
             // Stats categorization
             if ($item['is_borrowed']) {
                 $borrowedCount++;
@@ -999,7 +1070,7 @@ class WorkforceDeploymentService
                 }
             }
 
-            if ($item['status'] === 'Removed') {
+            if ($rowStatus === 'Removed') {
                 $removedCount++;
             }
 

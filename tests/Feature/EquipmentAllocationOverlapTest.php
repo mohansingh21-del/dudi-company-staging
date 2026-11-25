@@ -131,7 +131,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-A'
@@ -160,7 +160,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-B'
@@ -198,7 +198,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-A'
@@ -227,7 +227,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-B'
@@ -260,7 +260,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-A'
@@ -289,7 +289,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-B'
@@ -325,7 +325,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-A'
@@ -354,7 +354,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-B'
@@ -387,7 +387,7 @@ class EquipmentAllocationOverlapTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-A'

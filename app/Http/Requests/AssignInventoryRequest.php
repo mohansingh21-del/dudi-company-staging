@@ -16,6 +16,7 @@ class AssignInventoryRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'store_id' => 'required|integer|exists:stores,id',
             'product_id' => 'required|exists:products,id',
             'employee_id' => 'required|exists:employees,id',
             'site_id' => 'nullable|exists:sites,id',
@@ -29,6 +30,8 @@ class AssignInventoryRequest extends FormRequest
     public function messages(): array
     {
         return [
+            'store_id.required' => 'Store is required.',
+            'store_id.exists' => 'Selected store is invalid.',
             'product_id.required' => 'Product is required.',
             'product_id.exists' => 'Selected product is invalid.',
             'employee_id.required' => 'Employee is required.',

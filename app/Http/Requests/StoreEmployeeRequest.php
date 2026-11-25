@@ -11,6 +11,16 @@ class StoreEmployeeRequest extends FormRequest
         return true;
     }
 
+    /**
+     * Accept "un_skilled" as an alias for the canonical "unskilled" value.
+     */
+    protected function prepareForValidation(): void
+    {
+        if ($this->input('skill_category') === 'un_skilled') {
+            $this->merge(['skill_category' => 'unskilled']);
+        }
+    }
+
     public function rules(): array
     {
         return [
@@ -54,6 +64,8 @@ class StoreEmployeeRequest extends FormRequest
             'skill_category' => 'nullable|in:highly_skilled,skilled,semi_skilled,unskilled',
 
             'site_id' => 'nullable|exists:sites,id',
+
+            'place_of_employment' => 'nullable|in:underground,opencast,surface',
 
             'supervisor_id' => 'nullable|exists:employees,id',
 

@@ -16,7 +16,7 @@ class StoreBreakdownRequest extends FormRequest
     public function rules()
     {
         return [
-            'shift_id' => 'required|integer|exists:shifts,id',
+            'shift_id' => ['required', 'integer', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             'breakdown_date_time' => 'required|date_format:Y-m-d H:i:s',
             'reported_by' => 'required|integer|exists:employees,id',
             'equipment_id' => 'required|integer|exists:equipments,id',

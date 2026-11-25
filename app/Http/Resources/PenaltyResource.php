@@ -49,6 +49,11 @@ class PenaltyResource extends JsonResource
             'number_of_installments' =>
             $this->number_of_installments,
 
+            // Regular monthly deduction. The final installment collects
+            // the remainder and is usually smaller than this.
+            'installment_amount' =>
+            $this->installment_amount,
+
             'first_month' =>
             $this->first_month,
 

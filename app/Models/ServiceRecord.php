@@ -10,12 +10,23 @@ class ServiceRecord extends Model
 {
     use SoftDeletes;
 
+    /**
+     * How many attachments a single service record may hold in total.
+     *
+     * Counted across what is already stored plus whatever an update is
+     * uploading, so the cap holds over the life of the record and not just
+     * per request.
+     */
+    const MAX_ATTACHMENTS = 3;
+
     protected $table = 'service_records';
 
     protected $fillable = [
         'ticket_number',
+        'job_card_number',
         'machine_id',
         'site_id',
+        'store_id',
         'is_breakdown_service',
         'breakdown_id',
         'service_type',
@@ -94,6 +105,14 @@ class ServiceRecord extends Model
     public function breakdown()
     {
         return $this->belongsTo(Breakdown::class, 'breakdown_id');
+    }
+
+    /**
+     * The single outside store this record's parts were drawn from, if any.
+     */
+    public function store()
+    {
+        return $this->belongsTo(Store::class, 'store_id');
     }
 
     public function checklistDetail()

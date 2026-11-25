@@ -36,18 +36,36 @@ class UpdateDispatchTripRequest extends FormRequest
             'trip_date_time' => 'sometimes|required|date_format:Y-m-d H:i:s',
             'start_time' => 'sometimes|required|date_format:H:i:s',
             'end_time' => 'sometimes|required|date_format:H:i:s',
-            'quantity_bcm' => 'sometimes|required|numeric|gt:0',
-            'distance_meters' => 'nullable|numeric|gt:0',
-            'total_cycles' => 'sometimes|nullable|integer|gt:0',
+            'quantity_bcm' => 'sometimes|required|numeric|gt:0|max:' . DispatchTrip::MAX_QUANTITY_BCM,
+            'distance_meters' => 'nullable|numeric|gt:0|max:' . DispatchTrip::MAX_DISTANCE_METERS,
+            'total_cycles' => 'sometimes|nullable|integer|gt:0|max:' . DispatchTrip::MAX_TOTAL_CYCLES,
             'site_id' => 'sometimes|required|exists:sites,id',
             'dumper_equipment_id' => 'sometimes|required|exists:equipment_names,id',
             'shift_plan_id' => 'sometimes|required|exists:shift_plans,id',
-            'shift_id' => 'sometimes|required|exists:shifts,id',
+            'shift_id' => ['sometimes', 'required', 'exists:shifts,id', new \App\Rules\ActiveShift($this->currentShiftId())],
             'trip_reference_no' => 'sometimes|required|string',
             'status' => 'sometimes|required|string',
             'created_by' => 'sometimes|required|exists:users,id',
             'created_date' => 'sometimes|required|date_format:Y-m-d H:i:s',
-            'cycle_time_minutes' => 'sometimes|required|numeric',
+            'cycle_time_minutes' => 'sometimes|required|numeric|max:' . DispatchTrip::MAX_CYCLE_TIME_MINUTES,
+        ];
+    }
+
+    /**
+     * Get custom messages for validator errors.
+     *
+     * @return array
+     */
+    public function messages()
+    {
+        return [
+            'quantity_bcm.max' => 'Quantity Moved (BCM) may not be greater than 99,999,999.99.',
+            'quantity_bcm.gt' => 'Quantity Moved (BCM) must be greater than 0.',
+            'quantity_bcm.numeric' => 'Quantity Moved (BCM) must be a number.',
+            'quantity_bcm.required' => 'Quantity Moved (BCM) is required.',
+            'distance_meters.max' => 'Distance may not be greater than 99,999,999.99 meters.',
+            'total_cycles.max' => 'Total cycles may not be greater than 2,147,483,647.',
+            'cycle_time_minutes.max' => 'Cycle time may not be greater than 999,999.99 minutes.',
         ];
     }
 
@@ -251,6 +269,20 @@ class UpdateDispatchTripRequest extends FormRequest
                         $validator->errors()->add('end_time', 'The end time must be after the start time.');
                     }
                 }
+
+                // Validate supplied start_time / end_time fall inside the shift window
+                if ($currentShiftPlan) {
+                    $timeFormat = '/^\d{2}:\d{2}:\d{2}$/';
+
+                    if ($startTimeInput && preg_match($timeFormat, $startTimeInput)
+                        && !\App\Services\DispatchTripService::isTimeWithinShift($startTimeInput, $currentShiftPlan)) {
+                        $validator->errors()->add('start_time', \App\Services\DispatchTripService::outsideShiftMessage('start time', $currentShiftPlan));
+                    }
+                    if ($endTimeInput && preg_match($timeFormat, $endTimeInput)
+                        && !\App\Services\DispatchTripService::isTimeWithinShift($endTimeInput, $currentShiftPlan)) {
+                        $validator->errors()->add('end_time', \App\Services\DispatchTripService::outsideShiftMessage('end time', $currentShiftPlan));
+                    }
+                }
             } else {
                 $validator->errors()->add('id', 'Trip Record Not Found');
             }
@@ -274,5 +306,19 @@ class UpdateDispatchTripRequest extends FormRequest
                 'errors'  => $validator->errors()
             ], 422)
         );
+    }
+
+    /**
+     * The shift the record is saved on now, which may stay even if inactive.
+     */
+    private function currentShiftId()
+    {
+        $record = $this->route('id');
+
+        if (!is_object($record)) {
+            $record = \App\Models\DispatchTrip::find($record);
+        }
+
+        return $record ? $record->shift_id : null;
     }
 }

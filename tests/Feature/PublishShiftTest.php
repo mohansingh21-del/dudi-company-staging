@@ -120,7 +120,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -141,7 +142,8 @@ class PublishShiftTest extends TestCase
                     'equipment_allocated',
                     'workforce_deployed',
                     'supervisor_assigned',
-                    'site_incharge_assigned',
+                    'shift_incharge_assigned',
+                    'production_incharge_assigned',
                     'target_bcm_defined'
                 ]
             ]
@@ -163,7 +165,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'planned',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -195,7 +198,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -238,7 +242,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -275,6 +280,80 @@ class PublishShiftTest extends TestCase
         ]);
     }
 
+    private function allocateDumper(ShiftPlan $shiftPlan)
+    {
+        $dumperCategory = Equipment::create(['name' => 'Dumper', 'is_active' => 1]);
+        $dumperMachine = EquipmentName::create([
+            'equipment_id' => $dumperCategory->id,
+            'equipment_name' => 'DP-01',
+            'is_active' => 1,
+        ]);
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $dumperMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+    }
+
+    public function test_publish_fails_if_only_excavator_allocated()
+    {
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => \Carbon\Carbon::now()->format('Y-m-d'),
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'draft',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TEST-001'
+        ]);
+
+        // Allocate Excavator only, no Dumper
+        $excavatorCategory = Equipment::create(['name' => 'Excavator', 'is_active' => 1]);
+        $excavatorMachine = EquipmentName::create([
+            'equipment_id' => $excavatorCategory->id,
+            'equipment_name' => 'EX-01',
+            'is_active' => 1,
+        ]);
+        ShiftEquipmentAllocation::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'equipment_name_id' => $excavatorMachine->id,
+            'parent_equipment_id' => null,
+            'allocated_by' => $this->adminUser->id,
+            'allocation_time' => now(),
+        ]);
+
+        ShiftWorkforceDeployment::create([
+            'shift_plan_id' => $shiftPlan->id,
+            'employee_id' => $this->supervisorEmployee->id,
+            'relay_shift' => 'relay_1',
+            'designation' => 'Supervisor',
+            'is_borrowed' => false,
+            'deployed_by' => $this->adminUser->id,
+            'status' => 'active',
+        ]);
+
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/publish");
+
+        $response->assertStatus(422);
+        $response->assertJson([
+            'data' => [
+                'can_publish' => false,
+                'validations' => [
+                    'equipment_allocated' => [
+                        'status' => false,
+                        'message' => 'At Least One Dumper Must Be Allocated.',
+                    ]
+                ]
+            ]
+        ]);
+        $this->assertEquals('draft', $shiftPlan->fresh()->status);
+    }
+
     public function test_publish_succeeds_when_all_conditions_met()
     {
         $planningDate = \Carbon\Carbon::now()->format('Y-m-d');
@@ -285,7 +364,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -305,6 +385,8 @@ class PublishShiftTest extends TestCase
             'allocated_by' => $this->adminUser->id,
             'allocation_time' => now(),
         ]);
+
+        $this->allocateDumper($shiftPlan);
 
         // Deploy workforce
         ShiftWorkforceDeployment::create([
@@ -342,6 +424,34 @@ class PublishShiftTest extends TestCase
         $this->assertNotNull($response->json('data.published_at'));
     }
 
+    public function test_publish_fails_if_production_incharge_missing()
+    {
+        $planningDate = \Carbon\Carbon::now()->format('Y-m-d');
+
+        $shiftPlan = ShiftPlan::create([
+            'planning_date' => $planningDate,
+            'shift_id' => $this->shift->id,
+            'site_id' => $this->site->id,
+            'target_bcm' => 45000,
+            'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'status' => 'draft',
+            'created_by' => $this->adminUser->id,
+            'reference_no' => 'SP-TEST-NO-PROD-INC'
+        ]);
+
+        $response = $this->postJson("/api/v1/admin/shift-plans/{$shiftPlan->id}/publish");
+
+        $response->assertStatus(422);
+        $this->assertFalse($response->json('data.can_publish'));
+        $this->assertFalse($response->json('data.validations.production_incharge_assigned.status'));
+        $this->assertEquals(
+            'Production Incharge must be assigned to the shift.',
+            $response->json('data.validations.production_incharge_assigned.message')
+        );
+        $this->assertEquals('draft', $shiftPlan->fresh()->status);
+    }
+
     public function test_publish_fails_if_planning_date_is_in_future()
     {
         $futureDate = \Carbon\Carbon::tomorrow()->format('Y-m-d');
@@ -352,7 +462,8 @@ class PublishShiftTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'production_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-FUTURE'
@@ -372,6 +483,8 @@ class PublishShiftTest extends TestCase
             'allocated_by' => $this->adminUser->id,
             'allocation_time' => now(),
         ]);
+
+        $this->allocateDumper($shiftPlan);
 
         // Deploy workforce
         ShiftWorkforceDeployment::create([

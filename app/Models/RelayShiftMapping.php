@@ -43,6 +43,23 @@ class RelayShiftMapping extends Model
     }
 
     /**
+     * Get the mapping holding a shift for the week containing $dateStr, if any.
+     * A shift belongs to at most one relay per week, so this identifies the
+     * relay that a would-be assignment of $shiftId would collide with.
+     */
+    public static function getHolderOfShift($shiftId, $dateStr, $exceptRelayId = null)
+    {
+        return static::with('relay')
+            ->where('shift_id', $shiftId)
+            ->where('week_start_date', '<=', $dateStr)
+            ->where('week_end_date', '>=', $dateStr)
+            ->when($exceptRelayId, function ($q) use ($exceptRelayId) {
+                $q->where('relay_id', '!=', $exceptRelayId);
+            })
+            ->first();
+    }
+
+    /**
      * Get the latest mapping for a relay (most recent week).
      */
     public static function getLatestForRelay($relayId)

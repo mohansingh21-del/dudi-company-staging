@@ -96,7 +96,8 @@ class StoreIncidentRequest extends FormRequest
 
             'shift_id' => [
                 'required',
-                'exists:shifts,id'
+                'exists:shifts,id',
+                new \App\Rules\ActiveShift()
             ],
 
 
@@ -134,13 +135,14 @@ class StoreIncidentRequest extends FormRequest
             ],
 
             'equipment_id' => [
-                'required',
+                'nullable',
+                'required_with:equipment_name_id',
                 'exists:equipments,id'
             ],
 
             'equipment_name_id' => [
 
-                'required',
+                'nullable',
 
                 Rule::exists('equipment_names', 'id')
                     ->where(function ($query) {

@@ -1,6 +1,7 @@
 <?php
 
 namespace App\Http\Controllers\Api\Admin;
+use App\Exports\AttendanceRegisterExport;
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
 use App\Models\Leave;
@@ -147,8 +148,11 @@ class AttendanceController extends Controller
             $date = $request->input('date');
 
             if ($employeeId && $date) {
+                // employee_id + date is the only unambiguous key: a row the list
+                // returns with id null has no attendance record yet, and its
+                // employee id must not be read as an attendance id.
                 $attendance = AttendanceProcessed::where('employee_id', $employeeId)
-                    ->where('date', $date)
+                    ->whereDate('date', $date)
                     ->first();
             } else if ($id) {
                 $recordByAttendanceId = null;
@@ -160,17 +164,17 @@ class AttendanceController extends Controller
                     $recordByAttendanceId = AttendanceProcessed::find($id);
                 }
 
-                $employee = \App\Models\Employee::find($id);
+                // An employee_id sent without a date still pins whose row this is.
+                if ($recordByAttendanceId && $employeeId && $recordByAttendanceId->employee_id != $employeeId) {
+                    $recordByAttendanceId = null;
+                }
+
+                $employee = \App\Models\Employee::find($employeeId ?: $id);
 
                 if ($recordByAttendanceId && $employee) {
-                    // Collision check
-                    if ($recordByAttendanceId->employee_id != $employee->id) {
-                        // Collision! Prioritize specific date context record
-                        $attendance = $recordByAttendanceId;
-                    } else {
-                        // No collision
-                        $attendance = $recordByAttendanceId;
-                    }
+                    // {id} is read as an attendance id first. A row with no
+                    // attendance yet must send employee_id + date instead.
+                    $attendance = $recordByAttendanceId;
                 } else {
                     // No collision
                     if ($recordByAttendanceId) {
@@ -233,11 +237,30 @@ class AttendanceController extends Controller
                 }
             }
 
-            if ($checkIn && $checkOut && $checkOut->lessThanOrEqualTo($checkIn)) {
-                return response()->json([
-                    'status' => 422,
-                    'message' => 'Check-out must be greater than check-in'
-                ], 422);
+            // Both times are parsed against the one attendance date, so a night
+            // shift's check-out lands before its own check-in until it is rolled
+            // onto the next day. Same rule the import applies.
+            if ($checkIn && $checkOut) {
+
+                if ($checkOut->equalTo($checkIn)) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Check-out cannot equal check-in'
+                    ], 422);
+                }
+
+                $checkOut = \App\Services\ShiftRosterResolver::resolveCheckOut($checkIn, $checkOut);
+
+                $spanHours = $checkIn->diffInMinutes($checkOut) / 60;
+
+                if ($spanHours > \App\Services\ShiftRosterResolver::MAX_ATTENDANCE_SPAN_HOURS) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'Check-in to check-out spans ' . round($spanHours, 2)
+                            . ' hours, which exceeds the '
+                            . \App\Services\ShiftRosterResolver::MAX_ATTENDANCE_SPAN_HOURS . ' hour limit'
+                    ], 422);
+                }
             }
 
             $status = strtolower($data['attendance_status']);
@@ -246,11 +269,67 @@ class AttendanceController extends Controller
                 $dbStatus = 'absent';
             }
 
+            // A day marked leave/rest_day must be backed by a Leave row so the
+            // register and payroll read one source. A day marked worked cancels
+            // the leave covering it; 'absent' must not silently bury a leave
+            // someone filed by hand.
+            // 'leave' + a Compensatory Rest type folds to a rest day first.
+            $leaveTypeId = $request->filled('leave_type_id') ? (int) $request->input('leave_type_id') : null;
+            [$dbStatus, $leaveTypeId] = \App\Services\AttendanceLeaveSync::normalize($dbStatus, $leaveTypeId);
+
+            // A correction cannot be used to slip past the monthly rest-day cap
+            // either. The row being corrected is excluded so a day already
+            // marked rest_day can still be re-saved.
+            if ($dbStatus === 'rest_day') {
+                $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
+                    $employee->id,
+                    $attendanceDate,
+                    $attendance ? [$attendance->id] : []
+                );
+
+                if ($capMessage) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => $capMessage
+                    ], 422);
+                }
+            }
+
+            if (in_array($dbStatus, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                try {
+                    $syncLeaveType = \App\Services\AttendanceLeaveSync::resolveLeaveType($dbStatus, $leaveTypeId);
+                } catch (\InvalidArgumentException $e) {
+                    return response()->json(['status' => 422, 'message' => $e->getMessage()], 422);
+                }
+
+                $blockMessage = \App\Services\AttendanceLeaveSync::blockMessage(
+                    $employee->id,
+                    $attendanceDate,
+                    $syncLeaveType
+                );
+
+                if ($blockMessage) {
+                    return response()->json(['status' => 422, 'message' => $blockMessage], 422);
+                }
+            } elseif (! in_array($dbStatus, \App\Services\AttendanceLeaveSync::WORKED_STATUSES, true)) {
+                $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($employee->id, $attendanceDate);
+
+                if ($manualLeave) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => 'An approved leave in Leave Management covers ' . $attendanceDate
+                            . '. Cancel it there before changing this day.',
+                    ], 422);
+                }
+            }
+
             // Resolve shift
             $shift = $attendance ? $attendance->shift : null;
             $shiftId = $attendance ? $attendance->shift_id : null;
             if (!$shift) {
-                $shiftId = $employee->shift_id;
+                // shift_id on the model resolves against today; the day being
+                // marked may sit on the other side of a rotation.
+                $shiftId = $employee->getShiftIdForDate(Carbon::parse($attendanceDate)->format('Y-m-d'));
                 $shift = $shiftId ? \App\Models\Shift::find($shiftId) : null;
             }
 
@@ -285,7 +364,7 @@ class AttendanceController extends Controller
             $placeOfWork = $request->filled('place_of_work') ? $request->input('place_of_work') : null;
 
             $resultAttendance = null;
-            DB::transaction(function () use (&$attendance, $employee, $shiftId, $attendanceDate, $checkIn, $checkOut, $workingHours, $lateMinutes, $earlyExitMinutes, $dbStatus, $remarks, $placeOfWork, &$resultAttendance) {
+            DB::transaction(function () use (&$attendance, $employee, $shiftId, $attendanceDate, $checkIn, $checkOut, $workingHours, $lateMinutes, $earlyExitMinutes, $dbStatus, $leaveTypeId, $remarks, $placeOfWork, &$resultAttendance) {
                 if ($attendance) {
                     $payload = [
                         'check_in' => $checkIn,
@@ -308,7 +387,10 @@ class AttendanceController extends Controller
                     $resultAttendance = AttendanceProcessed::create([
                         'employee_id' => $employee->id,
                         'shift_id' => $shiftId,
-                        'place_of_work' => $placeOfWork,
+                        // A new day starts at the worker's standing assignment
+                        // so Form D column 4 is never blank; a later correction
+                        // overrides it with where they actually were.
+                        'place_of_work' => $placeOfWork ?: $employee->place_of_employment,
                         'date' => $attendanceDate,
                         'check_in' => $checkIn,
                         'check_out' => $checkOut,
@@ -318,6 +400,18 @@ class AttendanceController extends Controller
                         'attendance_status' => $dbStatus,
                         'remarks' => $remarks,
                     ]);
+                }
+
+                // Keep the backing Leave row in step with the day.
+                if (in_array($dbStatus, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                    \App\Services\AttendanceLeaveSync::sync(
+                        $employee->id,
+                        $attendanceDate,
+                        $dbStatus,
+                        $leaveTypeId
+                    );
+                } else {
+                    \App\Services\AttendanceLeaveSync::dayLeftLeave($employee->id, $attendanceDate, $dbStatus);
                 }
             });
 
@@ -698,6 +792,7 @@ class AttendanceController extends Controller
                 while ($curr->lte($to)) {
                     $leaveDays[$curr->format('Y-m-d')] = [
                         'status' => 'Leave',
+                        'leave_type_id' => $leave->leave_type_id,
                         'leave_type' => optional($leave->leaveType)->name ?? 'Leave',
                         'is_paid' => optional($leave->leaveType)->leave_category === 'paid',
                     ];
@@ -753,10 +848,15 @@ class AttendanceController extends Controller
                     $status = 'Weekend';
                 }
 
+                // Leave type comes from the backing `leaves` row keyed by date.
+                $dayLeave = $leaveDays[$dateString] ?? null;
+
                 $history[] = [
                     'date' => $dateString,
                     'formatted_date' => $carbonDate->format('d/m/Y'),
                     'status' => $status,
+                    'leave_type_id' => $dayLeave['leave_type_id'] ?? null,
+                    'leave_type_name' => $dayLeave['leave_type'] ?? null,
                     'check_in' => $checkIn,
                     'check_out' => $checkOut,
                     'duration' => $durationFormatted,
@@ -813,211 +913,20 @@ class AttendanceController extends Controller
     public function attendanceRegister(Request $request)
     {
         try {
-            $month = (int) $request->input('month', now()->month);
-            $year = (int) $request->input('year', now()->year);
+            $result = $this->buildAttendanceRegister($request);
 
-            if ($request->filled('date')) {
-                try {
-                    $parsed = Carbon::parse($request->date);
-                    $month = $parsed->month;
-                    $year = $parsed->year;
-                } catch (\Exception $e) {
-                    return response()->json([
-                        'status' => 422,
-                        'message' => 'Invalid date format.'
-                    ], 422);
-                }
-            }
-
-            if ($month < 1 || $month > 12) {
+            if (isset($result['error'])) {
                 return response()->json([
                     'status' => 422,
-                    'message' => 'Invalid month.'
+                    'message' => $result['error']
                 ], 422);
             }
 
-            $startDate = Carbon::create($year, $month, 1)->startOfDay();
-            $endDate = $startDate->copy()->endOfMonth()->endOfDay();
-            $daysInMonth = $startDate->daysInMonth;
-
-            $employeeQuery = \App\Models\Employee::with(['relay', 'site', 'department', 'designation'])
-                ->orderBy('employee_code')
-                ->orderBy('id');
-
-            // Register rows are the establishment's own workers, so the same roles
-            // the attendance listing hides are hidden here.
-            $excludedRoles = ['Super Admin', 'CEO'];
-            $employeeQuery->whereDoesntHave('roleUser.user.roles', function ($q) use ($excludedRoles) {
-                $q->whereIn('name', $excludedRoles);
-            });
-
-            if ($request->filled('site_id')) {
-                $employeeQuery->where('site_id', $request->site_id);
-            }
-
-            if ($request->filled('department_id')) {
-                $employeeQuery->where('department_id', $request->department_id);
-            }
-
-            if ($request->filled('relay_id')) {
-                $employeeQuery->where('relay_id', $request->relay_id);
-            }
-
-            if ($request->filled('search')) {
-                $search = $request->search;
-                $employeeQuery->where(function ($q) use ($search) {
-                    $q->where('name', 'like', "%{$search}%")
-                        ->orWhere('surname', 'like', "%{$search}%")
-                        ->orWhere('employee_code', 'like', "%{$search}%");
-                });
-            }
-
-            // Default to the people on the register during that month: anyone who
-            // had not yet joined, or who had already left, does not get a row.
-            $employeeStatus = strtolower((string) $request->input('employee_status', 'active'));
-            if ($employeeStatus !== 'all') {
-                $employeeQuery->whereDate('joining_date', '<=', $endDate->format('Y-m-d'))
-                    ->where(function ($q) use ($startDate) {
-                        $q->whereNull('date_of_exit')
-                            ->orWhereDate('date_of_exit', '>=', $startDate->format('Y-m-d'));
-                    });
-            }
-
-            $limit = (int) $request->input('limit', 25);
-            $employees = $limit > 0
-                ? $employeeQuery->paginate($limit)
-                : $employeeQuery->get();
-
-            $employeeList = collect($limit > 0 ? $employees->items() : $employees);
-            $employeeIds = $employeeList->pluck('id');
-
-            $records = AttendanceProcessed::whereIn('employee_id', $employeeIds)
-                ->whereBetween('date', [$startDate->format('Y-m-d'), $endDate->format('Y-m-d')])
-                ->get()
-                ->groupBy('employee_id');
-
-            // Overtime is measured against the day's own rostered shift, so the
-            // shift has to be resolved even though it is not part of the response.
-            // attendance_processeds.shift_id is mostly NULL, so the roster is the
-            // real source: the same override -> relay mapping -> legacy assignment
-            // precedence Employee::getShiftIdForDate() applies, preloaded here so a
-            // 31-day grid does not run those lookups once per employee per day.
-            $shiftHours = \App\Models\Shift::all()
-                ->mapWithKeys(function ($shift) {
-                    return [$shift->id => $this->shiftScheduledHours($shift)];
-                })
-                ->filter();
-            $rosterContext = $this->buildShiftRosterContext($employeeList, $startDate, $endDate);
-
-            // Column 1 continues across pages so the printed register numbers run 1..n.
-            $serial = $limit > 0
-                ? (($employees->currentPage() - 1) * $employees->perPage()) + 1
-                : 1;
-
-            $rows = [];
-            foreach ($limit > 0 ? $employees->items() : $employees as $employee) {
-                $empRecords = ($records->get($employee->id) ?? collect())
-                    ->keyBy(function ($item) {
-                        return (int) Carbon::parse($item->date)->day;
-                    });
-
-                $days = [];
-                $totalDays = 0.0;
-                $totalOtHours = 0.0;
-                $placesWorked = [];
-
-                for ($day = 1; $day <= $daysInMonth; $day++) {
-                    $record = $empRecords->get($day);
-                    $dateStr = $startDate->copy()->day($day)->format('Y-m-d');
-
-                    if (!$record) {
-                        $days[$day] = [
-                            'in' => null,
-                            'out' => null,
-                            'status' => null,
-                            'place_of_work' => null,
-                            'ot_hours' => null,
-                        ];
-                        continue;
-                    }
-
-                    if ($record->attendance_status === 'present') {
-                        $totalDays += 1;
-                    } else if ($record->attendance_status === 'half_day') {
-                        $totalDays += 0.5;
-                    }
-
-                    if ($record->place_of_work) {
-                        $placesWorked[$record->place_of_work] = true;
-                    }
-
-                    // Overtime is whatever was worked beyond the shift the employee
-                    // was rostered on that day — a 09:00-11:00 shift worked until
-                    // 12:00 is one hour of OT. What the row recorded wins over the
-                    // roster; the constant is only reached when no shift resolves.
-                    $shiftId = $record->shift_id
-                        ?: $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
-                    $scheduledHours = $shiftId && isset($shiftHours[$shiftId])
-                        ? $shiftHours[$shiftId]
-                        : self::STANDARD_WORKING_HOURS;
-
-                    // Status-agnostic on purpose: overtime follows the hours logged,
-                    // so a day worked beyond a full shift counts even if it was a
-                    // rest day. Absent and leave days carry 0 hours and so score 0.
-                    $otHours = round(max(0, (float) $record->working_hours - $scheduledHours), 2);
-                    $totalOtHours += $otHours;
-
-                    $days[$day] = [
-                        'in' => $record->check_in ? Carbon::parse($record->check_in)->format('H:i') : null,
-                        'out' => $record->check_out ? Carbon::parse($record->check_out)->format('H:i') : null,
-                        'status' => $record->attendance_status,
-                        'place_of_work' => $record->place_of_work,
-                        'ot_hours' => $otHours,
-                    ];
-                }
-
-                // Column 4 is a single cell, so a worker moved between locations
-                // during the month shows every location they were recorded at.
-                $places = array_keys($placesWorked);
-
-                $rows[] = [
-                    'serial_no' => $serial++,
-                    'employee_id' => $employee->id,
-                    'employee_code' => $employee->employee_code,
-                    'name' => $employee->full_name,
-                    'relay' => optional($employee->relay)->name,
-                    'place_of_work' => count($places) === 1 ? $places[0] : null,
-                    'place_of_work_label' => implode(', ', array_map('ucfirst', $places)) ?: null,
-                    'days' => $days,
-                    'total_days' => $totalDays,
-                    'total_ot_hours' => round($totalOtHours, 2),
-                    // Column 10 is left for the register keeper to fill in by hand.
-                    'remarks' => null,
-                ];
-            }
-
-            $response = [
+            return response()->json([
                 'status' => 200,
                 'message' => 'Attendance register fetched successfully',
-                'data' => [
-                    'month' => $startDate->format('F Y'),
-                    'month_num' => $month,
-                    'year' => $year,
-                    'days_in_month' => $daysInMonth,
-                    'rows' => $rows,
-                ]
-            ];
-
-            if ($limit > 0) {
-                $response['data']['pagination'] = [
-                    'current_page' => $employees->currentPage(),
-                    'per_page' => $employees->perPage(),
-                    'total' => $employees->total(),
-                    'last_page' => $employees->lastPage(),
-                ];
-            }
-
-            return response()->json($response);
+                'data' => $result['data'],
+            ]);
         } catch (\Throwable $th) {
             return response()->json([
                 'status' => 500,
@@ -1027,163 +936,282 @@ class AttendanceController extends Controller
     }
 
     /**
-     * How many hours a shift is scheduled for, from its own clock times. A shift
-     * whose end is at or before its start runs past midnight and lands next day.
-     * minimum_working_hours is deliberately not used: it is a payroll threshold,
-     * not the length of the shift.
+     * Form D as a downloadable spreadsheet.
+     *
+     * Same rows as attendanceRegister() and the same filters, but never
+     * paginated: a register printed for the inspector has to carry every worker
+     * on it, so limit is forced to 0 whatever the caller asked for.
+     */
+    public function exportAttendanceRegister(Request $request)
+    {
+        try {
+            $request->merge(['limit' => 0]);
+
+            $result = $this->buildAttendanceRegister($request);
+
+            if (isset($result['error'])) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $result['error']
+                ], 422);
+            }
+
+            $data = $result['data'];
+
+            if (empty($data['rows'])) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "The attendance register for {$data['month']} has no rows to export."
+                ], 422);
+            }
+
+            $filename = 'attendance-register-' . sprintf('%04d-%02d', $data['year'], $data['month_num']) . '.xlsx';
+
+            return Excel::download(new AttendanceRegisterExport($data), $filename);
+        } catch (\Throwable $th) {
+            return response()->json([
+                'status' => 500,
+                'message' => $th->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Builds the Form D grid shared by the JSON endpoint and the export.
+     *
+     * Returns ['data' => ...] on success, or ['error' => message] for the two
+     * caller mistakes (unparseable date, month out of range) so each entry
+     * point can shape its own 422.
+     */
+    private function buildAttendanceRegister(Request $request): array
+    {
+        $month = (int) $request->input('month', now()->month);
+        $year = (int) $request->input('year', now()->year);
+
+        if ($request->filled('date')) {
+            try {
+                $parsed = Carbon::parse($request->date);
+                $month = $parsed->month;
+                $year = $parsed->year;
+            } catch (\Exception $e) {
+                return ['error' => 'Invalid date format.'];
+            }
+        }
+
+        if ($month < 1 || $month > 12) {
+            return ['error' => 'Invalid month.'];
+        }
+
+        $startDate = Carbon::create($year, $month, 1)->startOfDay();
+        $endDate = $startDate->copy()->endOfMonth()->endOfDay();
+        $daysInMonth = $startDate->daysInMonth;
+
+        $employeeQuery = \App\Models\Employee::with(['relay', 'site', 'department', 'designation'])
+            ->orderBy('employee_code')
+            ->orderBy('id');
+
+        // Register rows are the establishment's own workers, so the same roles
+        // the attendance listing hides are hidden here.
+        $excludedRoles = ['Super Admin', 'CEO'];
+        $employeeQuery->whereDoesntHave('roleUser.user.roles', function ($q) use ($excludedRoles) {
+            $q->whereIn('name', $excludedRoles);
+        });
+
+        if ($request->filled('site_id')) {
+            $employeeQuery->where('site_id', $request->site_id);
+        }
+
+        if ($request->filled('department_id')) {
+            $employeeQuery->where('department_id', $request->department_id);
+        }
+
+        if ($request->filled('relay_id')) {
+            $employeeQuery->where('relay_id', $request->relay_id);
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $employeeQuery->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                    ->orWhere('surname', 'like', "%{$search}%")
+                    ->orWhere('employee_code', 'like', "%{$search}%");
+            });
+        }
+
+        // Default to the people on the register during that month: anyone who
+        // had not yet joined, or who had already left, does not get a row.
+        $employeeStatus = strtolower((string) $request->input('employee_status', 'active'));
+        if ($employeeStatus !== 'all') {
+            $employeeQuery->whereDate('joining_date', '<=', $endDate->format('Y-m-d'))
+                ->where(function ($q) use ($startDate) {
+                    $q->whereNull('date_of_exit')
+                        ->orWhereDate('date_of_exit', '>=', $startDate->format('Y-m-d'));
+                });
+        }
+
+        $limit = (int) $request->input('limit', 25);
+        $employees = $limit > 0
+            ? $employeeQuery->paginate($limit)
+            : $employeeQuery->get();
+
+        $employeeList = collect($limit > 0 ? $employees->items() : $employees);
+        $employeeIds = $employeeList->pluck('id');
+
+        $records = AttendanceProcessed::whereIn('employee_id', $employeeIds)
+            ->whereBetween('date', [$startDate->format('Y-m-d'), $endDate->format('Y-m-d')])
+            ->get()
+            ->groupBy('employee_id');
+
+        // Overtime is measured against the day's own rostered shift, so the
+        // shift has to be resolved even though it is not part of the response.
+        // attendance_processeds.shift_id is mostly NULL, so the roster is the
+        // real source: the same override -> relay mapping -> legacy assignment
+        // precedence Employee::getShiftIdForDate() applies, preloaded here so a
+        // 31-day grid does not run those lookups once per employee per day.
+        $shiftHours = \App\Models\Shift::all()
+            ->mapWithKeys(function ($shift) {
+                return [$shift->id => $this->shiftScheduledHours($shift)];
+            })
+            ->filter();
+        $rosterContext = $this->buildShiftRosterContext($employeeList, $startDate, $endDate);
+
+        // Column 1 continues across pages so the printed register numbers run 1..n.
+        $serial = $limit > 0
+            ? (($employees->currentPage() - 1) * $employees->perPage()) + 1
+            : 1;
+
+        $rows = [];
+        foreach ($limit > 0 ? $employees->items() : $employees as $employee) {
+            $empRecords = ($records->get($employee->id) ?? collect())
+                ->keyBy(function ($item) {
+                    return (int) Carbon::parse($item->date)->day;
+                });
+
+            $days = [];
+            $totalDays = 0.0;
+            $totalOtHours = 0.0;
+            $placesWorked = [];
+
+            for ($day = 1; $day <= $daysInMonth; $day++) {
+                $record = $empRecords->get($day);
+                $dateStr = $startDate->copy()->day($day)->format('Y-m-d');
+
+                if (!$record) {
+                    $days[$day] = [
+                        'in' => null,
+                        'out' => null,
+                        'status' => null,
+                        'place_of_work' => null,
+                        'ot_hours' => null,
+                    ];
+                    continue;
+                }
+
+                if ($record->attendance_status === 'present') {
+                    $totalDays += 1;
+                } else if ($record->attendance_status === 'half_day') {
+                    $totalDays += 0.5;
+                }
+
+                // Place of work is not captured when attendance is marked, so
+                // it reads through from the worker's standing assignment the
+                // way their name does. A value stored on the day - a correction
+                // recording where they actually were - still wins.
+                $dayPlace = $record->place_of_work ?: $employee->place_of_employment;
+
+                if ($dayPlace) {
+                    $placesWorked[$dayPlace] = true;
+                }
+
+                // Overtime is whatever was worked beyond the shift the employee
+                // was rostered on that day — a 09:00-11:00 shift worked until
+                // 12:00 is one hour of OT. What the row recorded wins over the
+                // roster; the constant is only reached when no shift resolves.
+                $shiftId = $record->shift_id
+                    ?: $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
+                $scheduledHours = $shiftId && isset($shiftHours[$shiftId])
+                    ? $shiftHours[$shiftId]
+                    : self::STANDARD_WORKING_HOURS;
+
+                // Status-agnostic on purpose: overtime follows the hours logged,
+                // so a day worked beyond a full shift counts even if it was a
+                // rest day. Absent and leave days carry 0 hours and so score 0.
+                $otHours = round(max(0, (float) $record->working_hours - $scheduledHours), 2);
+                $totalOtHours += $otHours;
+
+                $days[$day] = [
+                    'in' => $record->check_in ? Carbon::parse($record->check_in)->format('H:i') : null,
+                    'out' => $record->check_out ? Carbon::parse($record->check_out)->format('H:i') : null,
+                    'status' => $record->attendance_status,
+                    'place_of_work' => $dayPlace,
+                    'ot_hours' => $otHours,
+                ];
+            }
+
+            // Column 4 is a single cell, so a worker moved between locations
+            // during the month shows every location they were recorded at.
+            $places = array_keys($placesWorked);
+
+            // A worker with no attendance at all this month still has a place:
+            // column 4 falls back to the employee record so it is never blank.
+            if (empty($places) && $employee->place_of_employment) {
+                $places = [$employee->place_of_employment];
+            }
+
+            $rows[] = [
+                'serial_no' => $serial++,
+                'employee_id' => $employee->id,
+                'employee_code' => $employee->employee_code,
+                'name' => $employee->full_name,
+                'relay' => optional($employee->relay)->name,
+                'place_of_work' => count($places) === 1 ? $places[0] : null,
+                'place_of_work_label' => implode(', ', array_map('ucfirst', $places)) ?: null,
+                'days' => $days,
+                'total_days' => $totalDays,
+                'total_ot_hours' => round($totalOtHours, 2),
+                // Column 10 is left for the register keeper to fill in by hand.
+                'remarks' => null,
+            ];
+        }
+
+        $data = [
+            'month' => $startDate->format('F Y'),
+            'month_num' => $month,
+            'year' => $year,
+            'days_in_month' => $daysInMonth,
+            'rows' => $rows,
+        ];
+
+        if ($limit > 0) {
+            $data['pagination'] = [
+                'current_page' => $employees->currentPage(),
+                'per_page' => $employees->perPage(),
+                'total' => $employees->total(),
+                'last_page' => $employees->lastPage(),
+            ];
+        }
+
+        return ['data' => $data];
+    }
+
+    /**
+     * Shift-roster resolution is shared with payroll overtime — see
+     * ShiftRosterResolver. These stay as thin wrappers so the register code
+     * below reads unchanged.
      */
     private function shiftScheduledHours($shift): ?float
     {
-        if (!$shift || !$shift->start_time || !$shift->end_time) {
-            return null;
-        }
-
-        $start = Carbon::parse($shift->start_time);
-        $end = Carbon::parse($shift->end_time);
-
-        if ($end->lessThanOrEqualTo($start)) {
-            $end->addDay();
-        }
-
-        return round($start->diffInMinutes($end) / 60, 2);
+        return app(\App\Services\ShiftRosterResolver::class)->scheduledHours($shift);
     }
 
-    /**
-     * Preload every table Employee::getShiftIdForDate() consults, for one page of
-     * the register, so the per-day resolution below stays in memory.
-     */
     private function buildShiftRosterContext($employees, Carbon $startDate, Carbon $endDate): array
     {
-        $employeeIds = $employees->pluck('id');
-        $relayIds = $employees->pluck('relay_id')->filter()->unique()->values();
-
-        $from = $startDate->format('Y-m-d');
-        $to = $endDate->format('Y-m-d');
-
-        $overrides = \App\Models\EmployeeShiftOverride::whereIn('employee_id', $employeeIds)
-            ->whereDate('effective_from', '<=', $to)
-            ->where(function ($q) use ($from) {
-                $q->whereNull('effective_until')
-                    ->orWhereDate('effective_until', '>=', $from);
-            })
-            ->orderBy('effective_from', 'desc')
-            ->orderBy('id', 'desc')
-            ->get()
-            ->groupBy('employee_id');
-
-        $relayMappings = \App\Models\RelayShiftMapping::whereIn('relay_id', $relayIds)
-            ->whereDate('week_start_date', '<=', $to)
-            ->whereDate('week_end_date', '>=', $from)
-            ->get()
-            ->groupBy('relay_id');
-
-        // Only consulted for today, mirroring the model's own fallback.
-        $latestRelayMappings = \App\Models\RelayShiftMapping::whereIn('relay_id', $relayIds)
-            ->orderBy('week_start_date', 'desc')
-            ->get()
-            ->groupBy('relay_id')
-            ->map(function ($group) {
-                return $group->first();
-            });
-
-        $assignments = \App\Models\EmployeeShiftAssignment::whereIn('employee_id', $employeeIds)
-            ->get()
-            ->groupBy('employee_id');
-
-        $histories = \App\Models\EmployeeShiftHistory::whereIn('employee_id', $employeeIds)
-            ->get()
-            ->groupBy('employee_id');
-
-        return compact('overrides', 'relayMappings', 'latestRelayMappings', 'assignments', 'histories');
+        return app(\App\Services\ShiftRosterResolver::class)->preload($employees, $startDate, $endDate);
     }
 
-    /**
-     * In-memory twin of Employee::getShiftIdForDate(). Kept in step with that
-     * method — if the precedence there changes, change it here too.
-     */
     private function resolveRosterShiftId($employee, string $dateStr, array $ctx)
     {
-        $asDate = function ($value) {
-            if (!$value) {
-                return null;
-            }
-            return $value instanceof \DateTimeInterface
-                ? Carbon::instance($value)->format('Y-m-d')
-                : (string) $value;
-        };
-
-        // 1. An individual override outranks everything.
-        $override = ($ctx['overrides'][$employee->id] ?? collect())
-            ->first(function ($o) use ($dateStr, $asDate) {
-                $start = $asDate($o->effective_from);
-                $end = $asDate($o->effective_until);
-                return $start && $start <= $dateStr && (is_null($end) || $end >= $dateStr);
-            });
-        if ($override) {
-            return $override->shift_id;
-        }
-
-        // 2. Rotating relays get their shift from the week's mapping.
-        if ($employee->relay_id && $employee->relay && $employee->relay->is_rotating) {
-            $mapping = ($ctx['relayMappings'][$employee->relay_id] ?? collect())
-                ->first(function ($m) use ($dateStr, $asDate) {
-                    return $asDate($m->week_start_date) <= $dateStr
-                        && $asDate($m->week_end_date) >= $dateStr;
-                });
-            if ($mapping) {
-                return $mapping->shift_id;
-            }
-
-            if ($dateStr === now()->toDateString()) {
-                $latest = $ctx['latestRelayMappings'][$employee->relay_id] ?? null;
-                if ($latest) {
-                    return $latest->shift_id;
-                }
-            }
-        }
-
-        // 3. Legacy assignments, for months predating the relay mappings.
-        $assignments = $ctx['assignments'][$employee->id] ?? collect();
-
-        $assignment = $assignments->first(function ($assign) use ($dateStr, $asDate) {
-            $start = $asDate($assign->from_date) ?: $asDate($assign->created_at) ?: now()->toDateString();
-            $end = $asDate($assign->to_date);
-            return $start && $dateStr >= $start && (is_null($end) || $dateStr <= $end);
-        });
-        if ($assignment) {
-            return $assignment->shift_id;
-        }
-
-        $history = ($ctx['histories'][$employee->id] ?? collect())
-            ->sortBy(function ($h) use ($asDate) {
-                return $asDate($h->change_date) . '|' . str_pad((string) $h->id, 12, '0', STR_PAD_LEFT);
-            })
-            ->values();
-
-        $nextChange = $history->first(function ($h) use ($dateStr, $asDate) {
-            return $asDate($h->change_date) > $dateStr;
-        });
-        if ($nextChange) {
-            return $nextChange->old_shift_id ?: null;
-        }
-
-        $latestChange = $history->last(function ($h) use ($dateStr, $asDate) {
-            return $asDate($h->change_date) <= $dateStr;
-        });
-        if ($latestChange) {
-            return $latestChange->new_shift_id;
-        }
-
-        $firstAssignment = $assignments->sortBy('id')->first();
-        if ($firstAssignment) {
-            $start = $asDate($firstAssignment->from_date) ?: $asDate($firstAssignment->created_at) ?: now()->toDateString();
-            if ($dateStr < $start) {
-                return null;
-            }
-        }
-
-        $latestAssignment = $assignments->sortByDesc('id')->first();
-        return $latestAssignment ? $latestAssignment->shift_id : null;
+        return app(\App\Services\ShiftRosterResolver::class)->resolve($employee, $dateStr, $ctx);
     }
 
     public function bulkUpload(Request $request)
@@ -1253,7 +1281,7 @@ class AttendanceController extends Controller
     public function show(int $id)
     {
         try {
-            $employee = AttendanceProcessed::find($id);
+            $employee = AttendanceProcessed::with(['employee.site', 'employee.relay', 'shift'])->find($id);
             if (!$employee) {
                 return response()->json(['status' => 404, 'message' => 'Employee not found']);
             }
@@ -1266,6 +1294,7 @@ class AttendanceController extends Controller
     {
         $request->validate([
             'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
+            'leave_type_id' => 'required_if:attendance_status,leave|nullable|integer|exists:leave_types,id',
             'remarks' => 'nullable|string'
         ]);
 
@@ -1278,10 +1307,80 @@ class AttendanceController extends Controller
             ]);
         }
 
-        $attendance->update([
-            'attendance_status' => $request->attendance_status,
-            'remarks' => $request->remarks
-        ]);
+        $attendanceDate = Carbon::parse($attendance->date)->format('Y-m-d');
+        $leaveTypeId = $request->filled('leave_type_id') ? (int) $request->input('leave_type_id') : null;
+        // 'leave' + a Compensatory Rest type folds to a rest day.
+        [$status, $leaveTypeId] = \App\Services\AttendanceLeaveSync::normalize($request->attendance_status, $leaveTypeId);
+
+        // A month gives only so many rest days; past that the next one waits for
+        // the following month. Excludes this row so re-saving a day that is
+        // already a rest day is not read as a new one.
+        if ($status === 'rest_day') {
+            $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
+                $attendance->employee_id,
+                $attendanceDate,
+                [$attendance->id]
+            );
+
+            if ($capMessage) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $capMessage
+                ], 422);
+            }
+        }
+
+        // Keep attendance and Leave Management in step: a leave/rest_day needs a
+        // backing Leave row (on the block the caller named, or Compensatory Rest
+        // for a rest day); a worked status cancels the leave covering the day,
+        // and 'absent' must not overwrite a hand-filed leave.
+        if (in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+            try {
+                $syncLeaveType = \App\Services\AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json(['status' => 422, 'message' => $e->getMessage()], 422);
+            }
+
+            $blockMessage = \App\Services\AttendanceLeaveSync::blockMessage(
+                $attendance->employee_id,
+                $attendanceDate,
+                $syncLeaveType
+            );
+
+            if ($blockMessage) {
+                return response()->json(['status' => 422, 'message' => $blockMessage], 422);
+            }
+        } elseif (! in_array($status, \App\Services\AttendanceLeaveSync::WORKED_STATUSES, true)) {
+            $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($attendance->employee_id, $attendanceDate);
+
+            if ($manualLeave) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => 'An approved leave in Leave Management covers ' . $attendanceDate
+                        . '. Cancel it there before changing this day.',
+                ], 422);
+            }
+        }
+
+        DB::transaction(function () use ($attendance, $request, $status, $attendanceDate, $leaveTypeId) {
+            $payload = [
+                'attendance_status' => $status,
+                'remarks' => $request->remarks
+            ];
+
+            // A day on leave was not worked: drop the punches too.
+            if (in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                $payload += \App\Services\AttendanceLeaveSync::CLEARED_PUNCHES;
+            }
+
+            $attendance->update($payload);
+
+            if (in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                \App\Services\AttendanceLeaveSync::sync($attendance->employee_id, $attendanceDate, $status, $leaveTypeId);
+            } else {
+                \App\Services\AttendanceLeaveSync::dayLeftLeave($attendance->employee_id, $attendanceDate, $status);
+            }
+        });
 
         return response()->json([
             'status' => 200,
@@ -1291,10 +1390,20 @@ class AttendanceController extends Controller
     }
     public function bulkUpdateStatus(Request $request)
     {
+        // Rows are addressed by employee_id + date only. Attendance ids and
+        // employee ids share the same small range (ids restart on a fresh
+        // table), so guessing which one was sent marked the wrong employee.
+        // The deployed frontend still posts the key as attendance_ids[], but
+        // its values are employee ids, so it is read as an alias.
+        if (! $request->has('employee_ids') && $request->has('attendance_ids')) {
+            $request->merge(['employee_ids' => $request->input('attendance_ids')]);
+        }
+
         $request->validate([
-            'attendance_ids' => 'required|array|min:1',
-            'attendance_ids.*' => 'integer',
+            'employee_ids' => 'required|array|min:1',
+            'employee_ids.*' => 'integer|exists:employees,id',
             'attendance_status' => 'required|in:present,absent,half_day,leave,rest_day',
+            'leave_type_id' => 'required_if:attendance_status,leave|nullable|integer|exists:leave_types,id',
             'remarks' => 'nullable|string',
             'date' => 'nullable|date_format:Y-m-d',
             'from_date' => 'nullable|date_format:Y-m-d',
@@ -1302,80 +1411,134 @@ class AttendanceController extends Controller
 
         $date = $request->input('date') ?: $request->input('from_date') ?: today()->format('Y-m-d');
         $dateStr = \Carbon\Carbon::parse($date)->format('Y-m-d');
+        $leaveTypeId = $request->filled('leave_type_id') ? (int) $request->input('leave_type_id') : null;
+        // 'leave' + a Compensatory Rest type folds to a rest day for the batch.
+        [$status, $leaveTypeId] = \App\Services\AttendanceLeaveSync::normalize($request->attendance_status, $leaveTypeId);
+        $isLeaveStatus = in_array($status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true);
+
+        // Same block for every row in the batch; resolve it once.
+        if ($isLeaveStatus) {
+            try {
+                \App\Services\AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
+            } catch (\InvalidArgumentException $e) {
+                return response()->json(['status' => 422, 'message' => $e->getMessage()], 422);
+            }
+        }
 
         try {
             $resolvedAttendanceIds = [];
 
-            DB::transaction(function () use ($request, $dateStr, &$resolvedAttendanceIds) {
-                foreach ($request->attendance_ids as $id) {
-                    $recordByAttendanceId = AttendanceProcessed::where('id', $id)
-                        ->whereDate('date', $dateStr)
-                        ->first();
+            DB::transaction(function () use ($request, $dateStr, $status, $leaveTypeId, $isLeaveStatus, &$resolvedAttendanceIds) {
+                // Update the employee's row for the day, or create it if missing.
+                foreach ($request->input('employee_ids') as $employeeId) {
+                    $employee = \App\Models\Employee::findOrFail($employeeId);
 
-                    $employee = \App\Models\Employee::find($id);
+                    $resolvedAttendanceIds[] = AttendanceProcessed::firstOrCreate([
+                        'employee_id' => $employee->id,
+                        'date' => $dateStr
+                    ], [
+                        'shift_id' => $employee->getShiftIdForDate($dateStr),
+                        'place_of_work' => $employee->place_of_employment,
+                        'attendance_status' => 'absent',
+                        'working_hours' => 0.00,
+                        'late_minutes' => 0,
+                        'early_exit_minutes' => 0,
+                    ])->id;
+                }
 
-                    $record = null;
+                // Same monthly rest-day cap as the single update, checked per
+                // employee. Days already marked rest_day are skipped, and days
+                // accepted earlier in this same batch are carried forward so one
+                // request cannot push an employee past the cap.
+                if ($status === 'rest_day') {
+                    $records = AttendanceProcessed::with('employee')
+                        ->whereIn('id', $resolvedAttendanceIds)
+                        ->get();
 
-                    if ($recordByAttendanceId && $employee) {
-                        // Collision check
-                        if ($recordByAttendanceId->employee_id != $employee->id) {
-                            // Collision! Prioritize finding records by specific date context
-                            $record = $recordByAttendanceId;
-                        } else {
-                            // No collision
-                            $record = $recordByAttendanceId;
+                    $pendingByEmployee = [];
+
+                    foreach ($records as $record) {
+                        if ($record->attendance_status === 'rest_day') {
+                            continue;
                         }
-                    } else {
-                        // No collision
-                        if ($recordByAttendanceId) {
-                            $record = $recordByAttendanceId;
-                        } else if ($employee) {
-                            // Fall back to Employee ID lookup
-                            $record = AttendanceProcessed::firstOrCreate([
-                                'employee_id' => $employee->id,
-                                'date' => $dateStr
-                            ], [
-                                'shift_id' => $employee->shift_id,
-                                'attendance_status' => 'absent',
-                                'working_hours' => 0.00,
-                                'late_minutes' => 0,
-                                'early_exit_minutes' => 0,
-                            ]);
-                        }
-                    }
 
-                    if ($record) {
-                        $resolvedAttendanceIds[] = $record->id;
-                    } else {
-                        throw new \Exception("The selected ID {$id} is invalid.");
+                        $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
+                            $record->employee_id,
+                            $dateStr,
+                            [$record->id],
+                            $pendingByEmployee[$record->employee_id] ?? 0
+                        );
+
+                        if ($capMessage) {
+                            $code = optional($record->employee)->employee_code;
+
+                            throw new \Exception($code ? "{$code}: {$capMessage}" : $capMessage);
+                        }
+
+                        $pendingByEmployee[$record->employee_id] =
+                            ($pendingByEmployee[$record->employee_id] ?? 0) + 1;
                     }
                 }
 
-                if ($request->attendance_status === 'present') {
-                    $attendances = AttendanceProcessed::whereIn('id', $resolvedAttendanceIds)->get();
-                    foreach ($attendances as $attendance) {
-                        $hasLeave = Leave::where('employee_id', $attendance->employee_id)
-                            ->where('status', 'approved')
-                            ->whereDate('from_date', '<=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
-                            ->whereDate('to_date', '>=', \Carbon\Carbon::parse($attendance->date)->format('Y-m-d'))
-                            ->exists();
+                $records = AttendanceProcessed::with('employee')
+                    ->whereIn('id', $resolvedAttendanceIds)
+                    ->get();
 
-                        if ($hasLeave) {
-                            throw new \Exception("Cannot mark attendance as Present. Approved leave exists for employee on " . \Carbon\Carbon::parse($attendance->date)->format('Y-m-d') . ".");
+                foreach ($records as $record) {
+                    $recordDate = \Carbon\Carbon::parse($record->date)->format('Y-m-d');
+                    $code = optional($record->employee)->employee_code;
+
+                    if ($isLeaveStatus) {
+                        // Quota / cap / clash gates — the same ones the Leave
+                        // apply form enforces, so a leave entered from attendance
+                        // cannot push a block past its entitlement.
+                        $syncType = \App\Services\AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
+                        $blockMessage = \App\Services\AttendanceLeaveSync::blockMessage(
+                            $record->employee_id,
+                            $recordDate,
+                            $syncType
+                        );
+
+                        if ($blockMessage) {
+                            throw new \Exception($code ? "{$code}: {$blockMessage}" : $blockMessage);
+                        }
+                    } elseif (! in_array($status, \App\Services\AttendanceLeaveSync::WORKED_STATUSES, true)) {
+                        // 'absent' must not silently bury a leave someone filed
+                        // by hand in Leave Management. A worked status cancels
+                        // the leave for that day instead (see below).
+                        $manualLeave = \App\Services\AttendanceLeaveSync::manualLeaveOn($record->employee_id, $recordDate);
+
+                        if ($manualLeave) {
+                            throw new \Exception(
+                                ($code ? "{$code}: " : '')
+                                . "An approved leave in Leave Management covers {$recordDate}. Cancel it there first."
+                            );
                         }
                     }
                 }
 
+                // A day on leave was not worked: drop the punches too.
                 AttendanceProcessed::whereIn('id', $resolvedAttendanceIds)->update([
-                    'attendance_status' => $request->attendance_status,
+                    'attendance_status' => $status,
                     'remarks' => $request->remarks,
                     'updated_at' => now()
-                ]);
+                ] + ($isLeaveStatus ? \App\Services\AttendanceLeaveSync::CLEARED_PUNCHES : []));
+
+                // Keep each day's backing Leave row in step with the new status.
+                foreach ($records as $record) {
+                    $recordDate = \Carbon\Carbon::parse($record->date)->format('Y-m-d');
+
+                    if ($isLeaveStatus) {
+                        \App\Services\AttendanceLeaveSync::sync($record->employee_id, $recordDate, $status, $leaveTypeId);
+                    } else {
+                        \App\Services\AttendanceLeaveSync::dayLeftLeave($record->employee_id, $recordDate, $status);
+                    }
+                }
             });
 
             return response()->json([
                 'status' => 200,
-                'message' => 'Attendance statuses updated successfully'
+                'message' => 'Attendance status updated successfully'
             ]);
         } catch (\Throwable $th) {
             return response()->json([
@@ -2646,13 +2809,22 @@ class AttendanceController extends Controller
 
                 foreach ($leaves as $leave) {
                     $empId = $leave->employee_id;
-                    if (!isset($leaveSummary[$empId])) {
-                        $leaveSummary[$empId] = ['paid' => 0, 'unpaid' => 0];
+
+                    // Compensatory Rest leave (applied through Leave Management) gets
+                    // its own attendance_processeds row on approval and is counted as
+                    // rest_day from there — skip it here so it is not double counted
+                    // as a generic leave day too.
+                    if (optional($leave->leaveType)->register_group === 'compensatory_rest') {
+                        continue;
                     }
 
                     $from = Carbon::parse($leave->from_date)->max($monthStart);
                     $to = Carbon::parse($leave->to_date)->min($monthEnd);
                     $days = $from->diffInDays($to) + 1;
+
+                    if (!isset($leaveSummary[$empId])) {
+                        $leaveSummary[$empId] = ['paid' => 0, 'unpaid' => 0];
+                    }
 
                     $category = optional($leave->leaveType)->leave_category ?? 'unpaid';
                     if ($category === 'paid') {
@@ -2669,6 +2841,9 @@ class AttendanceController extends Controller
                     $present = $att ? (int) $att->present_days : 0;
                     $absent = $att ? (int) $att->absent_days : 0;
                     $halfDay = $att ? (int) $att->half_days : 0;
+                    // An approved Compensatory Rest leave gets its own
+                    // attendance_processeds row (see LeaveController::syncAttendanceForLeave),
+                    // so rest_day reads from attendance alone — no separate add-on here.
                     $restDay = $att ? (int) $att->rest_days : 0;
                     $restDaysSetting = \App\Services\LeaveBalanceService::monthlyPaidRestDays();
 
@@ -2685,6 +2860,7 @@ class AttendanceController extends Controller
                         'employee_id' => $employee->id,
                         'employee_name' => $employee->name,
                         'employee_code' => $employee->employee_code,
+                        'site_id' => $employee->site_id,
                         'site_name' => $employee->site ? $employee->site->site_name : null,
                         'total_days' => $daysInMonth,
                         'present' => $present,
@@ -2723,13 +2899,15 @@ class AttendanceController extends Controller
             // Build Employee Query to paginate all employees
             $employeeQuery = \App\Models\Employee::with([
                 'site',
+                'relay',
                 'currentShiftAssignment.shift',
                 'attendanceProcesseds' => function ($q) use ($startDate, $endDate) {
                     $q->whereBetween('date', [
                         $startDate->format('Y-m-d'),
                         $endDate->format('Y-m-d')
                     ]);
-                }
+                },
+                'attendanceProcesseds.shift',
             ]);
 
             // Filter out employees registered after the start date
@@ -2839,6 +3017,13 @@ class AttendanceController extends Controller
 
             $employees = $employeeQuery->orderBy('name')->paginate($isLimitNull ? max(1, (clone $employeeQuery)->count()) : (int)$limit);
 
+            // A processed row only carries shift_id when the import supplied one.
+            // Where it is null the shift still exists on the roster, so resolve it
+            // the same way the register does: override -> relay mapping -> assignment.
+            $pageEmployees = collect($employees->items());
+            $rosterContext = $this->buildShiftRosterContext($pageEmployees, $startDate, $endDate);
+            $shiftNames = \App\Models\Shift::pluck('shift_name', 'id');
+
             $dates = [];
             $currentDate = $startDate->copy();
             while ($currentDate->lte($endDate)) {
@@ -2864,14 +3049,24 @@ class AttendanceController extends Controller
 
                     if ($item) {
                         // Use existing processed record
+                        $shiftId = $item->shift_id
+                            ?: $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
+
+                        $leaveType = in_array($item->attendance_status, \App\Services\AttendanceLeaveSync::LEAVE_STATUSES, true)
+                            ? \App\Services\AttendanceLeaveSync::leaveTypeForDay($employee->id, $dateStr)
+                            : ['leave_type_id' => null, 'leave_type_name' => null];
+
                         $data[] = [
                             'id' => $item->id,
                             'employee_id' => $employee->id,
-                            'shift_id' => $item->shift_id,
+                            'shift_id' => $shiftId,
                             'employee_name' => $employee->name,
                             'employee_code' => $employee->employee_code,
+                            'site_id' => $employee->site_id,
                             'site_name' => $employee->site->site_name ?? null,
-                            'shift_name' => $item->shift ? $item->shift->shift_name : null,
+                            'relay_id' => $employee->relay_id,
+                            'relay_name' => optional($employee->relay)->name,
+                            'shift_name' => $shiftId ? ($shiftNames[$shiftId] ?? null) : null,
                             'date' => $carbonDate->format('d M Y'),
                             'check_in' => $item->check_in ? \Carbon\Carbon::parse($item->check_in)->format('H:i') :
                                 null,
@@ -2884,6 +3079,8 @@ class AttendanceController extends Controller
                             'attendance_status_label' => $item->attendance_status
                                 ? ucwords(str_replace('_', ' ', $item->attendance_status))
                                 : null,
+                            'leave_type_id' => $leaveType['leave_type_id'],
+                            'leave_type_name' => $leaveType['leave_type_name'],
                             'remarks' => $item->remarks,
                             'created_at' => $item->created_at,
                             'updated_at' => $item->updated_at,
@@ -2910,8 +3107,13 @@ class AttendanceController extends Controller
                             $status = 'holiday';
                         }
 
-                        $shiftId = $employee->shift_id;
-                        $shiftName = $shiftId ? optional(\App\Models\Shift::find($shiftId))->shift_name : null;
+                        // shift_id on the model resolves against today; this row is
+                        // for $dateStr, so use the date-aware resolver instead.
+                        $shiftId = $this->resolveRosterShiftId($employee, $dateStr, $rosterContext);
+
+                        $leaveType = $status === 'leave'
+                            ? \App\Services\AttendanceLeaveSync::leaveTypeForDay($employee->id, $dateStr)
+                            : ['leave_type_id' => null, 'leave_type_name' => null];
 
                         $data[] = [
                             'id' => null,
@@ -2919,8 +3121,11 @@ class AttendanceController extends Controller
                             'shift_id' => $shiftId,
                             'employee_name' => $employee->name,
                             'employee_code' => $employee->employee_code,
+                            'site_id' => $employee->site_id,
                             'site_name' => $employee->site->site_name ?? null,
-                            'shift_name' => $shiftName,
+                            'relay_id' => $employee->relay_id,
+                            'relay_name' => optional($employee->relay)->name,
+                            'shift_name' => $shiftId ? ($shiftNames[$shiftId] ?? null) : null,
                             'date' => $carbonDate->format('d M Y'),
                             'check_in' => null,
                             'check_out' => null,
@@ -2929,6 +3134,8 @@ class AttendanceController extends Controller
                             'early_exit_minutes' => 0,
                             'attendance_status' => $status,
                             'attendance_status_label' => ucwords(str_replace('_', ' ', $status)),
+                            'leave_type_id' => $leaveType['leave_type_id'],
+                            'leave_type_name' => $leaveType['leave_type_name'],
                             'remarks' => null,
                             'created_at' => null,
                             'updated_at' => null,

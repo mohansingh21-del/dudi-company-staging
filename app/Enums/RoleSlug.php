@@ -1,0 +1,89 @@
+<?php
+
+namespace App\Enums;
+
+use Illuminate\Support\Arr;
+use Illuminate\Support\Str;
+
+/**
+ * Role slugs the code depends on, and the groups they fall into.
+ *
+ * Roles double as employee designations (employees.designation_id points at
+ * roles), so one "kind" of person is often several roles — a driver may be
+ * Driver, Driver HMV or Driver LMV. Check membership of a group here rather
+ * than comparing against a single slug.
+ */
+class RoleSlug
+{
+    public const SUPER_ADMIN = 'super-admin';
+    public const SUPERVISOR = 'supervisor';
+    public const SITE_INCHARGE = 'site-incharge';
+    public const SHIFT_INCHARGE = 'shift-incharge';
+    public const PRODUCTION_INCHARGE = 'production-incharge';
+    public const DRIVER = 'driver';
+
+    // Designations treated as a supervisor: same route access, and offered
+    // by the shift-plan supervisor picker.
+    public const SUPERVISORS = [
+        'supervisor',
+        'supervisor-camp-incharge',
+        'diesel-supervisor',
+    ];
+
+    // Designations treated as a site incharge: same route access, and offered
+    // by ?role=site-incharge.
+    public const SITE_INCHARGES = [
+        'site-incharge',
+        'shift-incharge',
+        'production-incharge',
+    ];
+
+    // Designations offered by the shift-plan shift incharge picker
+    // (?role=shift-incharge). The plan's shift_incharge_id is one of these.
+    public const SHIFT_INCHARGES = [
+        'shift-incharge',
+    ];
+
+    // Designations offered by the shift-plan production incharge picker
+    // (?role=production-incharge). The plan's production_incharge_id is one of these.
+    public const PRODUCTION_INCHARGES = [
+        'production-incharge',
+    ];
+
+    public const DRIVERS = [
+        'driver',
+        'driver-hmv',
+        'driver-lmv',
+    ];
+
+    /**
+     * Build a role middleware string from slugs and/or slug groups, e.g.
+     * RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS).
+     */
+    public static function middleware(...$slugs): string
+    {
+        return 'role:' . implode(',', array_unique(Arr::flatten($slugs)));
+    }
+
+    public static function isDriver($slug): bool
+    {
+        return in_array($slug, self::DRIVERS, true);
+    }
+
+    /**
+     * The slug group a picker value names, or null when it names no group.
+     * Accepts a slug or a display name ("Shift Incharge", "shift_incharge").
+     */
+    public static function pickerGroup($value)
+    {
+        $groups = [
+            self::SUPERVISOR => self::SUPERVISORS,
+            self::SITE_INCHARGE => self::SITE_INCHARGES,
+            self::SHIFT_INCHARGE => self::SHIFT_INCHARGES,
+            self::PRODUCTION_INCHARGE => self::PRODUCTION_INCHARGES,
+            self::DRIVER => self::DRIVERS,
+        ];
+
+        return $groups[Str::slug((string) $value)] ?? null;
+    }
+}

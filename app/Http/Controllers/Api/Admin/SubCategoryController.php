@@ -203,10 +203,20 @@ class SubCategoryController extends Controller
         }
     }
 
-    public function getPublicSubCategories()
+    /**
+     * Dropdown feed. category_id narrows it so a Category picker can cascade
+     * into the Sub Category one next to it.
+     */
+    public function getPublicSubCategories(Request $request)
     {
         try {
-            $subCategories = SubCategory::with('category')->where('is_active', 1)->get();
+            $query = SubCategory::with('category')->where('is_active', 1);
+
+            if ($request->filled('category_id')) {
+                $query->where('category_id', (int) $request->category_id);
+            }
+
+            $subCategories = $query->get();
 
             return response()->json([
                 'status' => 200,

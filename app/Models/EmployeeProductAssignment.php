@@ -12,6 +12,7 @@ class EmployeeProductAssignment extends Model
     protected $fillable = [
         'employee_id',
         'product_id',
+        'store_id',
         'issued_date',
         'site_id',
         'department_id',
@@ -32,6 +33,14 @@ class EmployeeProductAssignment extends Model
     public function product()
     {
         return $this->belongsTo(Product::class, 'product_id');
+    }
+
+    /**
+     * The store the issued stock came out of.
+     */
+    public function store()
+    {
+        return $this->belongsTo(Store::class, 'store_id');
     }
 
     public function site()

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Console\Commands\RemoveExpiredBorrowedEmployeesCommand;
 use App\Models\ShiftPlan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -21,8 +22,8 @@ class ShiftPlanService
         $query = ShiftPlan::with([
             'shift',
             'site',
-            'supervisor.employee',
-            'siteIncharge.employee',
+            'shiftIncharge.employee',
+            'productionIncharge.employee',
             'creator.employee'
         ]);
 
@@ -86,7 +87,7 @@ class ShiftPlanService
         // Filter by Supervisor ID
         if (!empty($filters['supervisor_id'])) {
             $supervisorUserId = $this->resolveEmployeeToUserId($filters['supervisor_id'], 'supervisor');
-            $query->where('supervisor_id', $supervisorUserId);
+            $query->supervisedBy($supervisorUserId);
         }
 
         // Search Query
@@ -100,11 +101,14 @@ class ShiftPlanService
                     ->orWhereHas('site', function ($si) use ($search) {
                         $si->where('site_name', 'LIKE', "%{$search}%");
                     })
-                    ->orWhereHas('supervisor.employee', function ($emp) use ($search) {
+                    ->orWhere(function ($sup) use ($search) {
+                        $this->whereSupervisorMatches($sup, $search);
+                    })
+                    ->orWhereHas('shiftIncharge.employee', function ($emp) use ($search) {
                         $emp->where('name', 'LIKE', "%{$search}%")
                             ->orWhere('employee_code', 'LIKE', "%{$search}%");
                     })
-                    ->orWhereHas('siteIncharge.employee', function ($emp) use ($search) {
+                    ->orWhereHas('productionIncharge.employee', function ($emp) use ($search) {
                         $emp->where('name', 'LIKE', "%{$search}%")
                             ->orWhere('employee_code', 'LIKE', "%{$search}%");
                     });
@@ -119,24 +123,10 @@ class ShiftPlanService
             ? round(($totalActualBcm / $totalTargetBcm) * 100)
             : 0;
 
-        $shiftIds = $statsQuery->pluck('shift_id')->unique()->toArray();
-        $activePersonnel = 0;
-        if (!empty($shiftIds)) {
-            $activePersonnel = \App\Models\EmployeeShiftAssignment::whereIn('shift_id', $shiftIds)
-                ->where(function ($q) use ($startDate, $endDate) {
-                    $startStr = $startDate->format('Y-m-d');
-                    $endStr = $endDate->format('Y-m-d');
-                    $q->where('from_date', '<=', $endStr)
-                        ->where(function ($sub) use ($startStr) {
-                            $sub->whereNull('to_date')
-                                ->orWhere('to_date', '>=', $startStr);
-                        });
-                })
-                ->distinct('employee_id')
-                ->count('employee_id');
-        }
+        $activePersonnel = $this->countActivePersonnel($statsQuery);
 
         $paginated = $query->latest('planning_date')->paginate($limit);
+        ShiftPlan::loadSupervisors($paginated->items());
 
         return [
             'status' => 200,
@@ -177,12 +167,33 @@ class ShiftPlanService
         $planningDate = $data['planning_date'] ?? ($shiftPlan ? $shiftPlan->planning_date->format('Y-m-d') : null);
         $shiftId = $data['shift_id'] ?? ($shiftPlan ? $shiftPlan->shift_id : null);
 
-        // Map employee IDs to user IDs
-        if (isset($data['supervisor_id'])) {
-            $data['supervisor_id'] = $this->resolveEmployeeToUserId($data['supervisor_id'], 'supervisor');
+        // Map employee IDs to user IDs, stored comma-separated in supervisor_id
+        // (primary first).
+        if (array_key_exists('supervisor_ids', $data)) {
+            $supervisorUserIds = [];
+            foreach ($data['supervisor_ids'] as $employeeId) {
+                $userId = $this->resolveEmployeeToUserId($employeeId, 'supervisor');
+                if ($userId && !in_array($userId, $supervisorUserIds)) {
+                    $supervisorUserIds[] = $userId;
+                }
+            }
+            unset($data['supervisor_ids']);
+
+            if (empty($supervisorUserIds)) {
+                return [
+                    'status' => 422,
+                    'message' => 'Selected supervisors are invalid.',
+                    'data' => null,
+                ];
+            }
+
+            $data['supervisor_id'] = implode(',', $supervisorUserIds);
         }
-        if (isset($data['site_incharge_id'])) {
-            $data['site_incharge_id'] = $this->resolveEmployeeToUserId($data['site_incharge_id'], 'site-incharge');
+        if (isset($data['shift_incharge_id'])) {
+            $data['shift_incharge_id'] = $this->resolveEmployeeToUserId($data['shift_incharge_id'], 'shift-incharge');
+        }
+        if (isset($data['production_incharge_id'])) {
+            $data['production_incharge_id'] = $this->resolveEmployeeToUserId($data['production_incharge_id'], 'production-incharge');
         }
 
         if ($id) {
@@ -243,8 +254,8 @@ class ShiftPlanService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'supervisor.employee',
-            'siteIncharge.employee',
+            'shiftIncharge.employee',
+            'productionIncharge.employee',
             'creator.employee',
             'equipmentAllocations.equipmentName.equipment'
         ])->find($id);
@@ -276,13 +287,22 @@ class ShiftPlanService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'supervisor.employee',
-            'siteIncharge.employee',
+            'shiftIncharge.employee',
+            'productionIncharge.employee',
             'creator.employee',
             'publisher.employee',
             'equipmentAllocations.equipmentName.equipment',
+            // A borrowed employee is released once the shift's time is up, but
+            // they still worked it, so they stay on the plan's record.
             'workforceDeployments' => function ($q) {
-                $q->where('status', 'active');
+                $q->where(function ($shown) {
+                    $shown->where('status', 'active')
+                        ->orWhere(function ($released) {
+                            $released->where('is_borrowed', true)
+                                ->where('status', 'removed')
+                                ->where('removed_reason', RemoveExpiredBorrowedEmployeesCommand::AUTO_REMOVED_REASON);
+                        });
+                });
             },
             'workforceDeployments.employee.designation',
             'workforceDeployments.employee.shiftAssignments.shift',
@@ -298,8 +318,9 @@ class ShiftPlanService
         }
 
         // ── Shift Plan Details ────────────────────────────────────
-        $supervisorEmployee = optional($shiftPlan->supervisor)->employee;
-        $siteInchargeEmployee = optional($shiftPlan->siteIncharge)->employee;
+        $supervisors = $shiftPlan->supervisorList();
+        $shiftInchargeEmployee = optional($shiftPlan->shiftIncharge)->employee;
+        $productionInchargeEmployee = optional($shiftPlan->productionIncharge)->employee;
         $creatorEmployee = optional($shiftPlan->creator)->employee;
         $publisherEmployee = optional($shiftPlan->publisher)->employee;
 
@@ -313,12 +334,13 @@ class ShiftPlanService
             'site_name' => optional($shiftPlan->site)->site_name,
             'target_bcm' => !is_null($shiftPlan->target_bcm) ? (string) round((float) $shiftPlan->target_bcm, 2) : null,
             'actual_bcm' => !is_null($shiftPlan->actual_bcm) ? (string) round((float) $shiftPlan->actual_bcm, 2) : null,
-            'supervisor_id' => $supervisorEmployee ? $supervisorEmployee->id : $shiftPlan->supervisor_id,
-            'supervisor_name' => $supervisorEmployee ? $supervisorEmployee->name : optional($shiftPlan->supervisor)->email,
-            'supervisor_code' => $supervisorEmployee ? $supervisorEmployee->employee_code : null,
-            'site_incharge_id' => $siteInchargeEmployee ? $siteInchargeEmployee->id : $shiftPlan->site_incharge_id,
-            'site_incharge_name' => $siteInchargeEmployee ? $siteInchargeEmployee->name : optional($shiftPlan->siteIncharge)->email,
-            'site_incharge_code' => $siteInchargeEmployee ? $siteInchargeEmployee->employee_code : null,
+            'supervisors' => $supervisors,
+            'shift_incharge_id' => $shiftInchargeEmployee ? $shiftInchargeEmployee->id : $shiftPlan->shift_incharge_id,
+            'shift_incharge_name' => $shiftInchargeEmployee ? $shiftInchargeEmployee->name : optional($shiftPlan->shiftIncharge)->email,
+            'shift_incharge_code' => $shiftInchargeEmployee ? $shiftInchargeEmployee->employee_code : null,
+            'production_incharge_id' => $productionInchargeEmployee ? $productionInchargeEmployee->id : $shiftPlan->production_incharge_id,
+            'production_incharge_name' => $productionInchargeEmployee ? $productionInchargeEmployee->name : optional($shiftPlan->productionIncharge)->email,
+            'production_incharge_code' => $productionInchargeEmployee ? $productionInchargeEmployee->employee_code : null,
             'equipment_count' => (int) $shiftPlan->equipment_count,
             'status' => $shiftPlan->status,
             'created_by' => $shiftPlan->created_by,
@@ -349,6 +371,8 @@ class ShiftPlanService
                     'allocation_id' => $child->id,
                     'machine_id' => $childMachine ? $childMachine->id : null,
                     'machine_number' => $childMachine ? $childMachine->equipment_name : null,
+                    'model_number' => $childMachine ? optional($childMachine->modelNumber)->model_number : null,
+                    'chassis_number' => $childMachine ? $childMachine->chassis_number : null,
                 ];
             });
 
@@ -356,6 +380,8 @@ class ShiftPlanService
                 'allocation_id' => $allocation->id,
                 'machine_id' => $machine ? $machine->id : null,
                 'machine_number' => $machine ? $machine->equipment_name : null,
+                'model_number' => $machine ? optional($machine->modelNumber)->model_number : null,
+                'chassis_number' => $machine ? $machine->chassis_number : null,
                 'category_id' => $category ? $category->id : null,
                 'category_name' => $category ? $category->name : null,
                 'dumpers' => $dumpers->toArray(),
@@ -380,10 +406,18 @@ class ShiftPlanService
 
         $excludeEmployeeIds = array_unique(array_merge($onLeaveEmployeeIds, $absentEmployeeIds));
 
+        // One row per employee: an active deployment wins, else the latest release
+        // (someone borrowed again after a release has several rows).
         $deployments = $shiftPlan->workforceDeployments
             ->filter(function ($dep) use ($excludeEmployeeIds) {
                 return !in_array($dep->employee_id, $excludeEmployeeIds);
             })
+            ->sortByDesc('id')
+            ->sortByDesc(function ($dep) {
+                return $dep->status === 'active';
+            })
+            ->unique('employee_id')
+            ->sortBy('id')
             ->values();
 
         $workforce = $deployments->map(function ($dep) use ($planningDate, $shiftName) {
@@ -396,8 +430,14 @@ class ShiftPlanService
             }
 
             $machineName = null;
+
+            $machineModelNumber = null;
+
+            $machineChassis = null;
             if ($machine && $machine->equipmentName) {
-                $machineName = $machine->equipmentName->name;
+                $machineName = $machine->equipmentName->equipment_name;
+                $machineModelNumber = optional($machine->equipmentName->modelNumber)->model_number;
+                $machineChassis = $machine->equipmentName->chassis_number;
             }
 
             $homeShiftName = null;
@@ -417,17 +457,25 @@ class ShiftPlanService
                 'shift_name' => $shiftName,
                 'home_shift_name' => $homeShiftName,
                 'assigned_machine' => $machineName,
+                'assigned_machine_model_number' => $machineModelNumber,
+                'assigned_machine_chassis_number' => $machineChassis,
                 'is_borrowed' => (bool) $dep->is_borrowed,
                 'home_relay_id' => $dep->home_relay_id,
                 'home_relay_shift' => $dep->homeRelay ? $dep->homeRelay->name : null,
                 'borrowing_reason' => $dep->borrowing_reason,
                 'status' => $dep->status,
+                'is_released' => $dep->status !== 'active',
             ];
         })->values()->toArray();
 
         // Keep summary counts aligned with the workforce load/list APIs.
         $workforceListResult = app(WorkforceDeploymentService::class)->getWorkforceList($shiftPlan->id);
         $summary = $workforceListResult['stats'];
+        // The list counts released borrowed employees as removed; here they are
+        // still on the record, so count what the workforce above shows.
+        $summary['borrowed'] = count(array_filter($workforce, function ($row) {
+            return $row['is_borrowed'];
+        }));
 
         return [
             'status' => 200,
@@ -496,7 +544,7 @@ class ShiftPlanService
 
         if (!empty($filters['supervisor_id'])) {
             $supervisorUserId = $this->resolveEmployeeToUserId($filters['supervisor_id'], 'supervisor');
-            $query->where('supervisor_id', $supervisorUserId);
+            $query->supervisedBy($supervisorUserId);
         }
 
         if (!empty($filters['search'])) {
@@ -520,28 +568,13 @@ class ShiftPlanService
             ? round(($totalActualBcm / $totalTargetBcm) * 100)
             : 0;
 
-        // Get unique shifts in this query to calculate active personnel
-        $shiftIds = $query->pluck('shift_id')->unique()->toArray();
-        $activePersonnel = 0;
-        if (!empty($shiftIds)) {
-            $activePersonnel = \App\Models\EmployeeShiftAssignment::whereIn('shift_id', $shiftIds)
-                ->where(function ($q) use ($startDate, $endDate) {
-                    $startStr = $startDate->format('Y-m-d');
-                    $endStr = $endDate->format('Y-m-d');
-                    $q->where('from_date', '<=', $endStr)
-                        ->where(function ($sub) use ($startStr) {
-                            $sub->whereNull('to_date')
-                                ->orWhere('to_date', '>=', $startStr);
-                        });
-                })
-                ->distinct('employee_id')
-                ->count('employee_id');
-        }
+        $activePersonnel = $this->countActivePersonnel($query);
 
         $limit = $filters['limit'] ?? 10;
-        $shiftPlans = $query->with(['shift', 'site', 'supervisor', 'siteIncharge', 'creator'])
+        $shiftPlans = $query->with(['shift', 'site', 'shiftIncharge.employee', 'productionIncharge.employee', 'creator'])
             ->latest('planning_date')
             ->paginate($limit);
+        ShiftPlan::loadSupervisors($shiftPlans->items());
 
         return [
             'stats' => [
@@ -553,6 +586,50 @@ class ShiftPlanService
             ],
             'shift_plans' => $shiftPlans,
         ];
+    }
+
+    /**
+     * Count distinct employees actively deployed (regular + borrowed) on the given shift plans.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return int
+     */
+    protected function countActivePersonnel($query)
+    {
+        $planIds = (clone $query)->pluck('id');
+
+        if ($planIds->isEmpty()) {
+            return 0;
+        }
+
+        return \App\Models\ShiftWorkforceDeployment::whereIn('shift_plan_id', $planIds)
+            ->active()
+            ->distinct()
+            ->count('employee_id');
+    }
+
+    /**
+     * Match plans having any supervisor whose employee name/code contains $search.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @param  string  $search
+     * @return void
+     */
+    protected function whereSupervisorMatches($query, $search)
+    {
+        $userIds = \App\Models\User::whereHas('employee', function ($emp) use ($search) {
+            $emp->where('name', 'LIKE', "%{$search}%")
+                ->orWhere('employee_code', 'LIKE', "%{$search}%");
+        })->pluck('id');
+
+        if ($userIds->isEmpty()) {
+            $query->whereRaw('1 = 0');
+            return;
+        }
+
+        foreach ($userIds as $userId) {
+            $query->orWhereRaw('FIND_IN_SET(?, shift_plans.supervisor_id)', [$userId]);
+        }
     }
 
     /**
@@ -670,6 +747,17 @@ class ShiftPlanService
             ];
         }
 
+        // Closing or dropping back to draft is always fine; putting a plan live on
+        // a deactivated shift is not.
+        if (in_array($status, ['published', 'in_progress', 'planned', 'active'], true)
+            && $inactiveError = \App\Rules\ActiveShift::check($shiftPlan->shift_id)) {
+            return [
+                'status' => 422,
+                'message' => $inactiveError,
+                'data' => null,
+            ];
+        }
+
         $shiftPlan->update(['status' => $status]);
 
         return [
@@ -703,17 +791,35 @@ class ShiftPlanService
             $q->whereRaw('LOWER(name) = ?', ['excavator']);
         })->exists();
 
+        $hasDumper = $shiftPlan->equipmentAllocations()->whereHas('equipmentName.equipment', function ($q) {
+            $q->whereRaw('LOWER(name) = ?', ['dumper']);
+        })->exists();
+
+        $equipmentAllocated = $hasExcavator && $hasDumper;
+
+        if ($equipmentAllocated) {
+            $equipmentMessage = 'At least one Excavator and one Dumper allocated.';
+        } elseif (!$hasExcavator && !$hasDumper) {
+            $equipmentMessage = 'At Least One Excavator And One Dumper Must Be Allocated.';
+        } elseif (!$hasExcavator) {
+            $equipmentMessage = 'At Least One Excavator Must Be Allocated.';
+        } else {
+            $equipmentMessage = 'At Least One Dumper Must Be Allocated.';
+        }
+
         $hasWorkforce = $shiftPlan->workforceDeployments()->active()->exists();
-        $supervisorAssigned = !is_null($shiftPlan->supervisor_id);
-        $siteInchargeAssigned = !is_null($shiftPlan->site_incharge_id);
+        $supervisorAssigned = !empty($shiftPlan->supervisorIds());
+        $shiftInchargeAssigned = !is_null($shiftPlan->shift_incharge_id);
+        $productionInchargeAssigned = !is_null($shiftPlan->production_incharge_id);
         $targetBcmAvailable = !is_null($shiftPlan->target_bcm) && $shiftPlan->target_bcm > 0;
         $planningDateReached = $shiftPlan->planning_date->lte(\Carbon\Carbon::today());
 
         $canPublish = $preconditionPassed
-            && $hasExcavator
+            && $equipmentAllocated
             && $hasWorkforce
             && $supervisorAssigned
-            && $siteInchargeAssigned
+            && $shiftInchargeAssigned
+            && $productionInchargeAssigned
             && $targetBcmAvailable
             && $planningDateReached;
 
@@ -730,8 +836,8 @@ class ShiftPlanService
                         'message' => $preconditionPassed ? 'Shift is in Draft status.' : 'Shift plan must be in Draft status to be published.'
                     ],
                     'equipment_allocated' => [
-                        'status' => $hasExcavator,
-                        'message' => $hasExcavator ? 'At least one Excavator allocated.' : 'At Least One Excavator Must Be Allocated.'
+                        'status' => $equipmentAllocated,
+                        'message' => $equipmentMessage
                     ],
                     'workforce_deployed' => [
                         'status' => $hasWorkforce,
@@ -741,9 +847,13 @@ class ShiftPlanService
                         'status' => $supervisorAssigned,
                         'message' => $supervisorAssigned ? 'Supervisor assigned.' : 'Supervisor must be assigned to the shift.'
                     ],
-                    'site_incharge_assigned' => [
-                        'status' => $siteInchargeAssigned,
-                        'message' => $siteInchargeAssigned ? 'Site Incharge assigned.' : 'Site Incharge must be assigned to the shift.'
+                    'shift_incharge_assigned' => [
+                        'status' => $shiftInchargeAssigned,
+                        'message' => $shiftInchargeAssigned ? 'Shift Incharge assigned.' : 'Shift Incharge must be assigned to the shift.'
+                    ],
+                    'production_incharge_assigned' => [
+                        'status' => $productionInchargeAssigned,
+                        'message' => $productionInchargeAssigned ? 'Production Incharge assigned.' : 'Production Incharge must be assigned to the shift.'
                     ],
                     'target_bcm_defined' => [
                         'status' => $targetBcmAvailable,
@@ -773,6 +883,14 @@ class ShiftPlanService
             return [
                 'status' => 404,
                 'message' => 'Shift Plan not found.',
+                'data' => null,
+            ];
+        }
+
+        if ($inactiveError = \App\Rules\ActiveShift::check($shiftPlan->shift_id)) {
+            return [
+                'status' => 422,
+                'message' => $inactiveError,
                 'data' => null,
             ];
         }

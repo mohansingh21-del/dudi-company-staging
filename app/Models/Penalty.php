@@ -23,6 +23,7 @@ class Penalty extends Model
         'show_cause_issued',
         'explanation_heard_in_presence',
         'number_of_installments',
+        'installment_amount',
         'first_month',
         'first_year',
         'last_month',
@@ -57,6 +58,7 @@ class Penalty extends Model
         'show_cause_issued' => 'boolean',
 
         'number_of_installments' => 'integer',
+        'installment_amount' => 'decimal:2',
 
         'first_month' => 'integer',
         'first_year' => 'integer',

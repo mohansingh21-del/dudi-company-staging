@@ -18,6 +18,11 @@ use Illuminate\Support\Facades\Log;
 class VecvClient
 {
     /**
+     * Cache key prefix for per-feed last-successful-fetch timestamps.
+     */
+    const SYNC_CACHE_PREFIX = 'vecv.last_sync.';
+
+    /**
      * Fetch a bearer token, reusing the cached one until it is close to expiry.
      *
      * @param  bool  $forceRefresh
@@ -117,7 +122,67 @@ class VecvClient
             throw new VecvApiException('VECV returned a non-JSON body.', $response->status());
         }
 
+        // Only a genuinely successful exchange counts. The gateway reports
+        // service failures inside a 200 - the alert log does exactly this - so
+        // recording every 2xx would show a feed as freshly synced on the
+        // strength of an error body.
+        if (! (array_key_exists('success', $body) && ! $body['success'])) {
+            $this->recordSync($endpoint);
+        }
+
         return $body;
+    }
+
+    /**
+     * Remember when a feed last came back with real data.
+     *
+     * Written here rather than in the sync services because this is the one
+     * place every call passes through, so a fetch is recorded whether it came
+     * from the refresh button, the artisan command or a manual run.
+     *
+     * Distinct from "when did new readings arrive": a feed can be fetched
+     * successfully and store nothing, because no vehicle has reported since
+     * last time. This answers "how old is what we are looking at", which is the
+     * question a dashboard needs.
+     *
+     * @param  string  $endpoint
+     * @return void
+     */
+    protected function recordSync($endpoint)
+    {
+        Cache::forever(self::SYNC_CACHE_PREFIX . $endpoint, Carbon::now()->toDateTimeString());
+    }
+
+    /**
+     * When a feed was last fetched successfully, or null if never.
+     *
+     * @param  string  $endpoint
+     * @return string|null
+     */
+    public static function lastSyncedAt($endpoint)
+    {
+        return Cache::get(self::SYNC_CACHE_PREFIX . $endpoint);
+    }
+
+    /**
+     * Last successful fetch for every configured feed.
+     *
+     * @return array
+     */
+    public static function lastSyncedMap()
+    {
+        $map = [];
+
+        foreach (array_keys((array) config('vecv.endpoints')) as $endpoint) {
+            // The token endpoint is plumbing, not a feed.
+            if ($endpoint === 'token') {
+                continue;
+            }
+
+            $map[$endpoint] = static::lastSyncedAt($endpoint);
+        }
+
+        return $map;
     }
 
     /**
@@ -141,14 +206,92 @@ class VecvClient
             $headers['X-IBM-Client-Id'] = $clientId;
         }
 
+        $startedAt = microtime(true);
+
         try {
-            return Http::withHeaders($headers)
+            $response = Http::withHeaders($headers)
                 ->timeout(config('vecv.timeout'))
                 ->asJson()
                 ->post($url, $payload);
         } catch (\Throwable $e) {
+            $this->logCall($endpoint, $url, null, $startedAt, $e->getMessage());
+
             throw new VecvApiException('Could not reach VECV: ' . $e->getMessage(), null, $e);
         }
+
+        $this->logCall($endpoint, $url, $response->status(), $startedAt, $this->outcome($response));
+
+        return $response;
+    }
+
+
+    /**
+     * Record one outbound call to the vecv log channel.
+     *
+     * Written for every call, successful or not, because the question this log
+     * answers - "did pressing refresh actually reach VECV, and which endpoints
+     * did it hit?" - cannot be answered from a log that only records failures.
+     *
+     * @param  string      $endpoint  Config key, e.g. "fuel"
+     * @param  string      $url
+     * @param  int|null    $status    Null when the request never completed
+     * @param  float       $startedAt microtime(true) before the call
+     * @param  string|null $outcome
+     * @return void
+     */
+    protected function logCall($endpoint, $url, $status, $startedAt, $outcome = null)
+    {
+        Log::channel('vecv')->info('VECV call', [
+            'endpoint' => $endpoint,
+            'path'     => parse_url($url, PHP_URL_PATH),
+            'http'     => $status,
+            'ms'       => (int) round((microtime(true) - $startedAt) * 1000),
+
+            // Redacted: the API echoes the submitted key back inside its error
+            // bodies, and this file is read by people who should not see it.
+            'outcome'  => $outcome === null ? null : $this->redact($outcome),
+        ]);
+    }
+
+    /**
+     * A short description of what came back.
+     *
+     * A 2xx is not proof of success here - the gateway reports service failures
+     * inside a 200 body - so the body is inspected rather than the status alone.
+     *
+     * @param  \Illuminate\Http\Client\Response  $response
+     * @return string
+     */
+    protected function outcome($response)
+    {
+        if ($response->status() === 409 || $response->status() === 429) {
+            return 'rate limited';
+        }
+
+        $body = $response->json();
+
+        if (! is_array($body)) {
+            return $response->successful() ? 'ok (non-array body)' : 'http error';
+        }
+
+        if (array_key_exists('success', $body) && ! $body['success']) {
+            return 'rejected: ' . (string) ($body['message'] ?? 'no message');
+        }
+
+        if (! $response->successful()) {
+            return 'http error: ' . $this->errorMessage($body, $response->body());
+        }
+
+        // Row counts make it obvious at a glance whether a call returned data.
+        $counts = [];
+
+        foreach ($body as $key => $value) {
+            if (is_array($value)) {
+                $counts[] = $key . '=' . count($value);
+            }
+        }
+
+        return 'ok' . (empty($counts) ? '' : ' (' . implode(', ', $counts) . ')');
     }
 
     /**

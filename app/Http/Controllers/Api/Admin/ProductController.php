@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Product;
+use App\Models\ServiceSparePart;
 use App\Http\Requests\StoreProductRequest;
 use App\Http\Requests\UpdateProductRequest;
 use App\Http\Resources\ProductResource;
@@ -135,11 +136,20 @@ class ProductController extends Controller
                 ], 404);
             }
 
+            $oldMinStock = (int) $product->min_stock;
+
             $product->update([
                 'sub_category_id' => $request->sub_category_id,
                 'name' => $request->name,
                 'min_stock' => $request->min_stock
             ]);
+
+            // Moving the line can put stocked rows under it, or lift them over,
+            // without a unit moving — the alerts are re-checked either way.
+            if ((int) $product->min_stock !== $oldMinStock) {
+                app(\App\Services\InventoryAlertService::class)
+                    ->minStockChanged($product, $oldMinStock, (int) $product->min_stock, auth()->id());
+            }
 
             return response()->json([
                 'status' => 200,
@@ -192,6 +202,30 @@ class ProductController extends Controller
                 ], 404);
             }
 
+            // A product can only be switched off once nothing depends on it:
+            // no stock left at any store, never issued to an employee and never
+            // used as a spare part on a service record.
+            if ($product->is_active) {
+                $blockedBy = null;
+
+                if ($product->inventories()->where('left_quantity', '>', 0)->exists()) {
+                    $blockedBy = 'it still has stock in inventory';
+                } elseif ($product->assignments()->exists()) {
+                    $blockedBy = 'it is assigned to an employee';
+                } elseif (ServiceSparePart::whereHas('inventory', function ($q) use ($product) {
+                    $q->where('product_id', $product->id);
+                })->exists()) {
+                    $blockedBy = 'it is used in a service record';
+                }
+
+                if ($blockedBy) {
+                    return response()->json([
+                        'status' => 422,
+                        'message' => "This product cannot be deactivated because {$blockedBy}."
+                    ], 422);
+                }
+            }
+
             $product->is_active = $product->is_active ? 0 : 1;
             $product->save();
 
@@ -208,10 +242,27 @@ class ProductController extends Controller
         }
     }
 
-    public function getPublicProducts()
+    /**
+     * Dropdown feed. The two filters let a Category / Sub Category pair of
+     * pickers cascade into the Product one beside them.
+     */
+    public function getPublicProducts(Request $request)
     {
         try {
-            $products = Product::with('subCategory.category')->where('is_active', 1)->get();
+            $query = Product::with('subCategory.category')->where('is_active', 1);
+
+            if ($request->filled('sub_category_id')) {
+                $query->where('sub_category_id', (int) $request->sub_category_id);
+            }
+
+            if ($request->filled('category_id')) {
+                $categoryId = (int) $request->category_id;
+                $query->whereHas('subCategory', function ($q) use ($categoryId) {
+                    $q->where('category_id', $categoryId);
+                });
+            }
+
+            $products = $query->get();
 
             return response()->json([
                 'status' => 200,

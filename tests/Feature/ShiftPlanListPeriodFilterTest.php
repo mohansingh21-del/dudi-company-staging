@@ -133,7 +133,7 @@ class ShiftPlanListPeriodFilterTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TODAY'
@@ -148,7 +148,7 @@ class ShiftPlanListPeriodFilterTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-NEXT-MONTH'
@@ -162,7 +162,7 @@ class ShiftPlanListPeriodFilterTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-NEXT-YEAR'
@@ -226,7 +226,7 @@ class ShiftPlanListPeriodFilterTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TODAY'
@@ -240,7 +240,7 @@ class ShiftPlanListPeriodFilterTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-YESTERDAY'
@@ -268,7 +268,7 @@ class ShiftPlanListPeriodFilterTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TODAY-SUP'
@@ -287,7 +287,7 @@ class ShiftPlanListPeriodFilterTest extends TestCase
             'site_id' => $site2->id,
             'target_bcm' => 45000,
             'supervisor_id' => $this->adminUser->id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TODAY-ADMIN-SUP'

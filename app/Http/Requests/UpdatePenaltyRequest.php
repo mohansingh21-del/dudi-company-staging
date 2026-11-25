@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Enums\RecoveryType;
+use App\Rules\HasActivePayroll;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
@@ -22,6 +23,7 @@ class UpdatePenaltyRequest extends FormRequest
                 'sometimes',
                 'required',
                 'exists:employees,id',
+                new HasActivePayroll(),
             ],
 
             'penalty_date' => [

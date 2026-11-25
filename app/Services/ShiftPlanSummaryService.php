@@ -24,8 +24,8 @@ class ShiftPlanSummaryService
         $shiftPlan = ShiftPlan::with([
             'shift',
             'site',
-            'supervisor.employee',
-            'siteIncharge.employee'
+            'shiftIncharge.employee',
+            'productionIncharge.employee'
         ])->find($shiftId);
 
         if (!$shiftPlan) {
@@ -67,16 +67,17 @@ class ShiftPlanSummaryService
      */
     private function buildShiftPlan(ShiftPlan $shift): array
     {
-        $supervisorName = null;
-        if ($shift->supervisor) {
-            $emp = $shift->supervisor->employee;
-            $supervisorName = $emp ? $emp->name : $shift->supervisor->email;
+
+        $shiftInchargeName = null;
+        if ($shift->shiftIncharge) {
+            $emp = $shift->shiftIncharge->employee;
+            $shiftInchargeName = $emp ? $emp->name : $shift->shiftIncharge->email;
         }
 
-        $siteInchargeName = null;
-        if ($shift->siteIncharge) {
-            $emp = $shift->siteIncharge->employee;
-            $siteInchargeName = $emp ? $emp->name : $shift->siteIncharge->email;
+        $productionInchargeName = null;
+        if ($shift->productionIncharge) {
+            $emp = $shift->productionIncharge->employee;
+            $productionInchargeName = $emp ? $emp->name : $shift->productionIncharge->email;
         }
 
         return [
@@ -87,8 +88,10 @@ class ShiftPlanSummaryService
             'location_id' => $shift->site_id,
             'location_name' => optional($shift->site)->site_name,
             'target_bcm' => !is_null($shift->target_bcm) ? round((float) $shift->target_bcm, 2) : 0.00,
-            'supervisor_name' => $supervisorName,
-            'site_incharge_name' => $siteInchargeName,
+            'supervisor_name' => $shift->supervisorNames(),
+            'supervisors' => $shift->supervisorList(),
+            'shift_incharge_name' => $shiftInchargeName,
+            'production_incharge_name' => $productionInchargeName,
             'status' => $shift->status,
             'shift' => $shift->shift ? [
                 'id' => $shift->shift->id,
@@ -174,12 +177,13 @@ class ShiftPlanSummaryService
 
         // Calculate top performing equipment
         $dumperSummaryData = DispatchTrip::where('shift_plan_id', $shift->id)
-            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number')
-            ->selectRaw('COUNT(dispatch_trips.id) as total_trips')
+            ->select('dumper_equipment_id', 'equipment_names.equipment_name as dumper_number', 'equipment_model_numbers.model_number as dumper_model_number', 'equipment_names.chassis_number as dumper_chassis_number')
+            ->selectRaw('COALESCE(SUM(dispatch_trips.total_cycles), 0) as total_trips')
             ->selectRaw('SUM(quantity_bcm) as total_quantity_bcm')
             ->selectRaw('AVG(cycle_time_minutes) as average_cycle_time_minutes')
             ->join('equipment_names', 'equipment_names.id', '=', 'dispatch_trips.dumper_equipment_id')
-            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name')
+            ->leftJoin('equipment_model_numbers', 'equipment_model_numbers.id', '=', 'equipment_names.equipment_model_number_id')
+            ->groupBy('dumper_equipment_id', 'equipment_names.equipment_name', 'equipment_model_numbers.model_number', 'equipment_names.chassis_number')
             ->get();
 
         $maxQuantity = 0.0001; // Avoid division by zero
@@ -218,6 +222,8 @@ class ShiftPlanSummaryService
             $formattedDumpers[] = [
                 'equipment_id' => $row->dumper_equipment_id,
                 'equipment_name' => $row->dumper_number,
+                'model_number' => $row->dumper_model_number,
+                'chassis_number' => $row->dumper_chassis_number,
                 'score' => round($compositeScore, 2)
             ];
         }
@@ -278,6 +284,8 @@ class ShiftPlanSummaryService
 
             $excavatorPerformance[] = [
                 'asset_id' => $allocation->equipmentName->equipment_name ?? 'Unknown',
+                'model_number' => optional(optional($allocation->equipmentName)->modelNumber)->model_number,
+                'chassis_number' => optional($allocation->equipmentName)->chassis_number,
                 'operator' => $operatorName,
                 'target_bcm' => $targetBcmPerExcavator,
                 'actual_bcm' => $actualBcm,
@@ -296,9 +304,9 @@ class ShiftPlanSummaryService
         })->values();
 
         foreach ($dumperAllocations as $allocation) {
-            $tripsCount = DispatchTrip::where('shift_plan_id', $shift->id)
+            $tripsCount = (int) DispatchTrip::where('shift_plan_id', $shift->id)
                 ->where('dumper_equipment_id', $allocation->equipment_name_id)
-                ->count();
+                ->sum('total_cycles');
 
             $avgCycleTime = round((float) DispatchTrip::where('shift_plan_id', $shift->id)
                 ->where('dumper_equipment_id', $allocation->equipment_name_id)
@@ -327,6 +335,8 @@ class ShiftPlanSummaryService
 
             $dumperPerformance[] = [
                 'dumper_id' => $allocation->equipmentName->equipment_name ?? 'Unknown',
+                'model_number' => optional(optional($allocation->equipmentName)->modelNumber)->model_number,
+                'chassis_number' => optional($allocation->equipmentName)->chassis_number,
                 'cycles_trips' => $tripsCount,
                 'avg_cycle_time_minutes' => $avgCycleTime,
                 'total_quantity_bcm' => $totalQty,
@@ -411,11 +421,10 @@ class ShiftPlanSummaryService
      */
     private function buildBreakdownSummary(ShiftPlan $shift): array
     {
-        $allocationIds = ShiftEquipmentAllocation::where('shift_plan_id', $shift->id)
-            ->pluck('id')
-            ->toArray();
+        $allocations = ShiftEquipmentAllocation::where('shift_plan_id', $shift->id)
+            ->get(['id', 'equipment_name_id']);
 
-        if (empty($allocationIds)) {
+        if ($allocations->isEmpty()) {
             return [
                 'breakdown_count' => 0,
                 'total_downtime_minutes' => 0,
@@ -423,9 +432,24 @@ class ShiftPlanSummaryService
             ];
         }
 
-        $breakdownCount = BreakdownTicket::whereIn('equipment_allocation_id', $allocationIds)->count();
-        $totalDowntimeMinutes = (int) BreakdownTicket::whereIn('equipment_allocation_id', $allocationIds)
-            ->sum('downtime_minutes');
+        $allocationIds = $allocations->pluck('id')->toArray();
+        $equipmentNameIds = $allocations->pluck('equipment_name_id')->filter()->unique()->toArray();
+        $planningDate = \Carbon\Carbon::parse($shift->planning_date)->toDateString();
+
+        // Tickets raised without an equipment_allocation_id are matched to the
+        // plan by shift + date + machine instead.
+        $query = BreakdownTicket::where(function ($q) use ($allocationIds, $equipmentNameIds, $shift, $planningDate) {
+            $q->whereIn('equipment_allocation_id', $allocationIds)
+                ->orWhere(function ($q) use ($equipmentNameIds, $shift, $planningDate) {
+                    $q->whereNull('equipment_allocation_id')
+                        ->where('shift_id', $shift->shift_id)
+                        ->whereDate('date', $planningDate)
+                        ->whereIn('equipment_name_id', $equipmentNameIds);
+                });
+        });
+
+        $breakdownCount = (clone $query)->count();
+        $totalDowntimeMinutes = (int) (clone $query)->sum('downtime_minutes');
 
         return [
             'breakdown_count' => $breakdownCount,
@@ -465,7 +489,11 @@ class ShiftPlanSummaryService
 
         $avgCycleTime = round((float) DispatchTrip::where('shift_plan_id', $shift->id)->avg('cycle_time_minutes'), 1);
 
-        $avgPayloadBcm = round((float) DispatchTrip::where('shift_plan_id', $shift->id)->avg('quantity_bcm'), 2);
+        $payloadTotals = DispatchTrip::where('shift_plan_id', $shift->id)
+            ->selectRaw('COALESCE(SUM(quantity_bcm), 0) as total_bcm, COALESCE(SUM(total_cycles), 0) as total_trips')
+            ->first();
+        $payloadTrips = (int) $payloadTotals->total_trips;
+        $avgPayloadBcm = $payloadTrips > 0 ? round((float) $payloadTotals->total_bcm / $payloadTrips, 2) : 0.00;
 
         return [
             'active_dumpers_count' => $activeDumpersCount,

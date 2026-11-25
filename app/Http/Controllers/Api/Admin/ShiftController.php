@@ -61,21 +61,32 @@ class ShiftController extends Controller
 
     public function store(StoreShiftRequest $request)
     {
-        if ($this->isShiftOverlapping($request->start_time, $request->end_time)) {
+        $conflict = $this->findOverlappingShift($request->start_time, $request->end_time);
+
+        if ($conflict) {
             return response()->json([
                 'status' => 422,
-                'message' => 'Shift timings overlap with an existing shift.'
+                'message' => $this->overlapMessage($conflict),
+                'conflicting_shift' => [
+                    'id' => $conflict->id,
+                    'shift_name' => $conflict->shift_name,
+                    'start_time' => $conflict->start_time,
+                    'end_time' => $conflict->end_time,
+                    'is_active' => (int) $conflict->is_active,
+                ]
             ], 422);
         }
 
-        $dept = Shift::create([
+        // Optional fields are left out when not sent so the column defaults
+        // (8 hours / not night shift) apply instead of an explicit NULL.
+        $dept = Shift::create(array_merge([
             'shift_name' => $request->name,
             'start_time' => $request->start_time,
             'end_time' => $request->end_time,
-            'minimum_working_hours' => $request->minimum_working_hours,
-            'is_night_shift' => $request->is_night_shift,
-            'status' => 1
-        ]);
+        ], array_filter($request->only(['minimum_working_hours', 'is_night_shift']), fn ($v) => $v !== null && $v !== '')));
+
+        $dept->is_active = 1;
+        $dept->save();
 
         return response()->json([
             'status' => 200,
@@ -111,20 +122,28 @@ class ShiftController extends Controller
             ]);
         }
 
-        if ($this->isShiftOverlapping($request->start_time, $request->end_time, $id)) {
+        $conflict = $this->findOverlappingShift($request->start_time, $request->end_time, $id);
+
+        if ($conflict) {
             return response()->json([
                 'status' => 422,
-                'message' => 'Shift timings overlap with an existing shift.'
+                'message' => $this->overlapMessage($conflict),
+                'conflicting_shift' => [
+                    'id' => $conflict->id,
+                    'shift_name' => $conflict->shift_name,
+                    'start_time' => $conflict->start_time,
+                    'end_time' => $conflict->end_time,
+                    'is_active' => (int) $conflict->is_active,
+                ]
             ], 422);
         }
 
-        $dept->update([
+        // Optional fields not sent keep their current value rather than being nulled.
+        $dept->update(array_merge([
             'shift_name' => $request->name,
             'start_time' => $request->start_time,
             'end_time' => $request->end_time,
-            'minimum_working_hours' => $request->minimum_working_hours,
-            'is_night_shift' => $request->is_night_shift
-        ]);
+        ], array_filter($request->only(['minimum_working_hours', 'is_night_shift']), fn ($v) => $v !== null && $v !== '')));
 
         return response()->json([
             'status' => 200,
@@ -143,15 +162,40 @@ class ShiftController extends Controller
             ]);
         }
 
-        $dept->delete();
+        // Deleting cascades into assignments, overrides and relay mappings, so an
+        // in-use shift would silently wipe those employees' rosters.
+        $blocked = $this->blockedByDependencies($dept, 'delete');
+
+        if ($blocked) {
+            return $blocked;
+        }
+
+        try {
+            $dept->delete();
+        } catch (\Illuminate\Database\QueryException $e) {
+            // Shift plans, breakdowns, delays, fuel entries and dispatch trips keep
+            // their shift with ON DELETE RESTRICT, so historical records block this.
+            if (($e->errorInfo[1] ?? null) === 1451) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Cannot delete shift '{$dept->shift_name}' because it is referenced by existing records (shift plans, breakdowns, delays, fuel entries or dispatch trips). Deactivate the shift instead."
+                ], 422);
+            }
+
+            throw $e;
+        }
 
         return response()->json([
             'status' => 200,
-            'message' => 'Department deleted successfully'
+            'message' => 'Shift deleted successfully'
         ]);
     }
     public function toggleStatus(Request $request, int $id)
     {
+        $request->validate([
+            'status' => 'required|in:0,1'
+        ]);
+
         $dept = Shift::find($id);
 
         if (!$dept) {
@@ -160,11 +204,41 @@ class ShiftController extends Controller
                 'message' => 'Shift not found'
             ]);
         }
-        $request->validate([
-            'status' => 'required|in:0,1'
-        ]);
 
-        $dept->is_active = $request->status ? 1 : 0;
+        $activate = (int) $request->status === 1;
+
+        // Deactivating a shift that people are still rostered on would leave them
+        // pointing at a shift the rest of the app no longer offers, so the admin
+        // has to move them to another shift first.
+        if (!$activate && $dept->is_active) {
+            $blocked = $this->blockedByDependencies($dept, 'deactivate');
+
+            if ($blocked) {
+                return $blocked;
+            }
+        }
+
+        // Re-activating a shift re-occupies its time slot, so the slot must be
+        // re-validated here: while this shift was inactive another shift may
+        // have been created over the same timings.
+        if ($activate && !$dept->is_active) {
+            $conflict = $this->findOverlappingShift($dept->start_time, $dept->end_time, $dept->id, true);
+
+            if ($conflict) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => "Cannot activate this shift: its timings overlap with the active shift '{$conflict->shift_name}' ({$conflict->start_time} - {$conflict->end_time}). Deactivate or re-time that shift first.",
+                    'conflicting_shift' => [
+                        'id' => $conflict->id,
+                        'shift_name' => $conflict->shift_name,
+                        'start_time' => $conflict->start_time,
+                        'end_time' => $conflict->end_time,
+                    ]
+                ], 422);
+            }
+        }
+
+        $dept->is_active = $activate ? 1 : 0;
         $dept->save();
 
 
@@ -312,9 +386,13 @@ class ShiftController extends Controller
                     }
                 }
 
+                // Closed / completed plans must still be resolvable: the shift that
+                // covers a given datetime does not stop existing once it is closed.
+                // Open plans win when both exist for the same shift + date.
                 $shiftPlan = ShiftPlan::with('site')->where('shift_id', $matchedShift->id)
                     ->whereDate('planning_date', $planningDate)
-                    ->whereIn('status', ['published', 'in_progress', 'active', 'planned'])
+                    ->whereIn('status', ['published', 'in_progress', 'active', 'planned', 'completed', 'closed'])
+                    ->orderByRaw("CASE WHEN status IN ('completed', 'closed') THEN 1 ELSE 0 END")
                     ->first();
 
                 if (!$shiftPlan) {
@@ -360,6 +438,8 @@ class ShiftController extends Controller
                         $machines[] = [
                             'machine_id' => $machine->id,
                             'machine_name' => $machine->equipment_name,
+                            'model_number' => optional($machine->modelNumber)->model_number,
+                            'chassis_number' => $machine->chassis_number,
                             'category_id' => $category ? $category->id : null,
                             'category_name' => $category ? $category->name : null,
                             'parent_machine_id' => $allocation->parent_equipment_id,
@@ -397,7 +477,7 @@ class ShiftController extends Controller
                         'designation' => $designationName,
                     ];
 
-                    if ($deployment->designation === 'Driver' || $deployment->designation === 'driver' || $slug === 'driver') {
+                    if (\App\Enums\RoleSlug::isDriver($slug) || \App\Enums\RoleSlug::isDriver(\Illuminate\Support\Str::slug((string) $deployment->designation))) {
                         $drivers[] = $item;
                     } else {
                         $workforce[] = $item;
@@ -413,6 +493,8 @@ class ShiftController extends Controller
                         'start_time' => $matchedShift->start_time,
                         'end_time' => $matchedShift->end_time,
                         'shift_plan_id' => $shiftPlan ? $shiftPlan->id : null,
+                        'shift_plan_status' => $shiftPlan ? $shiftPlan->status : null,
+                        'is_closed' => $shiftPlan ? in_array($shiftPlan->status, ['completed', 'closed']) : false,
                         'site' => $siteData,
                         'drivers' => $drivers,
                         'workforce' => $workforce,
@@ -439,7 +521,7 @@ class ShiftController extends Controller
 
                 $shiftPlans = ShiftPlan::with(['shift', 'site', 'equipmentAllocations.equipmentName.equipment'])
                     ->whereDate('planning_date', $targetDate)
-                    ->whereIn('status', ['published', 'in_progress', 'active', 'planned'])
+                    ->whereIn('status', ['published', 'in_progress', 'active', 'planned', 'completed', 'closed'])
                     ->get();
 
                 $data = [];
@@ -480,6 +562,8 @@ class ShiftController extends Controller
                             $machines[] = [
                                 'machine_id' => $machine->id,
                                 'machine_name' => $machine->equipment_name,
+                                'model_number' => optional($machine->modelNumber)->model_number,
+                                'chassis_number' => $machine->chassis_number,
                                 'category_id' => $category ? $category->id : null,
                                 'category_name' => $category ? $category->name : null,
                                 'parent_machine_id' => $allocation->parent_equipment_id,
@@ -517,7 +601,7 @@ class ShiftController extends Controller
                             'designation' => $designationName,
                         ];
 
-                        if ($deployment->designation === 'Driver' || $deployment->designation === 'driver' || $slug === 'driver') {
+                        if (\App\Enums\RoleSlug::isDriver($slug) || \App\Enums\RoleSlug::isDriver(\Illuminate\Support\Str::slug((string) $deployment->designation))) {
                             $drivers[] = $item;
                         } else {
                             $workforce[] = $item;
@@ -530,6 +614,8 @@ class ShiftController extends Controller
                         'start_time' => $matchedShift->start_time,
                         'end_time' => $matchedShift->end_time,
                         'shift_plan_id' => $shiftPlan->id,
+                        'shift_plan_status' => $shiftPlan->status,
+                        'is_closed' => in_array($shiftPlan->status, ['completed', 'closed']),
                         'site' => $siteData,
                         'drivers' => $drivers,
                         'workforce' => $workforce,
@@ -553,7 +639,141 @@ class ShiftController extends Controller
         }
     }
 
+    /**
+     * A 422 response listing what still uses the shift, or null when it is free.
+     */
+    private function blockedByDependencies(Shift $shift, string $action)
+    {
+        $dependencies = $this->getActiveShiftDependencies($shift);
+
+        $labels = [
+            'employees' => 'active employee(s) rostered on it',
+            'relays' => 'relay(s) mapped to it for the current or upcoming weeks',
+            'shift_plans' => 'upcoming or running shift plan(s)',
+            'open_attendance' => 'open attendance record(s) not yet checked out',
+        ];
+
+        $parts = [];
+        foreach ($labels as $key => $label) {
+            if ($dependencies[$key] > 0) {
+                $parts[] = "{$dependencies[$key]} {$label}";
+            }
+        }
+
+        if (empty($parts)) {
+            return null;
+        }
+
+        return response()->json([
+            'status' => 422,
+            'message' => "Cannot {$action} shift '{$shift->shift_name}': it has " . implode(', ', $parts) . '. Reassign them to another shift first.',
+            'dependencies' => $dependencies,
+        ], 422);
+    }
+
+    /**
+     * Count what is still using a shift today or later.
+     */
+    private function getActiveShiftDependencies(Shift $shift): array
+    {
+        $today = \Carbon\Carbon::today();
+        $todayStr = $today->toDateString();
+
+        // Employees rostered on this shift today, resolved with the same
+        // precedence as attendance and payroll (override > relay > assignment).
+        $employees = \App\Models\Employee::with('relay')->where('is_active', 1)->get();
+        $resolver = app(\App\Services\ShiftRosterResolver::class);
+        $ctx = $resolver->preload($employees, $today, $today);
+
+        $employeeIds = $employees
+            ->filter(function ($employee) use ($resolver, $todayStr, $ctx, $shift) {
+                return (int) $resolver->resolve($employee, $todayStr, $ctx) === (int) $shift->id;
+            })
+            ->pluck('id');
+
+        // Plus employees moving onto this shift on a later date.
+        $activeEmployeeIds = $employees->pluck('id');
+
+        $futureOverrideIds = \App\Models\EmployeeShiftOverride::where('shift_id', $shift->id)
+            ->whereIn('employee_id', $activeEmployeeIds)
+            ->whereDate('effective_from', '>', $todayStr)
+            ->pluck('employee_id');
+
+        $futureAssignmentIds = \App\Models\EmployeeShiftAssignment::where('shift_id', $shift->id)
+            ->whereIn('employee_id', $activeEmployeeIds)
+            ->whereDate('from_date', '>', $todayStr)
+            ->pluck('employee_id');
+
+        $employeeCount = $employeeIds
+            ->merge($futureOverrideIds)
+            ->merge($futureAssignmentIds)
+            ->unique()
+            ->count();
+
+        // Active relays holding this shift this week or later. A relay with no
+        // mapping for this week falls back to its latest one (see
+        // RelayShiftMapping::getLatestForRelay), so that counts as current too.
+        $relayCount = 0;
+        foreach (\App\Models\Relay::where('is_active', 1)->pluck('id') as $relayId) {
+            $current = \App\Models\RelayShiftMapping::getForDate($relayId, $todayStr)
+                ?? \App\Models\RelayShiftMapping::getLatestForRelay($relayId);
+
+            $holdsShift = ($current && (int) $current->shift_id === (int) $shift->id)
+                || \App\Models\RelayShiftMapping::where('relay_id', $relayId)
+                    ->where('shift_id', $shift->id)
+                    ->whereDate('week_start_date', '>', $todayStr)
+                    ->exists();
+
+            if ($holdsShift) {
+                $relayCount++;
+            }
+        }
+
+        // Plans not yet closed that are dated today or later, or still running.
+        $planCount = ShiftPlan::where('shift_id', $shift->id)
+            ->notClosed()
+            ->where(function ($q) use ($todayStr) {
+                $q->whereDate('planning_date', '>=', $todayStr)
+                    ->orWhere('status', 'in_progress');
+            })
+            ->count();
+
+        // Checked in but not out; yesterday included for night shifts past midnight.
+        $openAttendanceCount = \App\Models\AttendanceProcessed::where('shift_id', $shift->id)
+            ->whereDate('date', '>=', $today->copy()->subDay()->toDateString())
+            ->whereNotNull('check_in')
+            ->whereNull('check_out')
+            ->count();
+
+        return [
+            'employees' => $employeeCount,
+            'relays' => $relayCount,
+            'shift_plans' => $planCount,
+            'open_attendance' => $openAttendanceCount,
+        ];
+    }
+
     private function isShiftOverlapping($startTime, $endTime, $excludeId = null)
+    {
+        return $this->findOverlappingShift($startTime, $endTime, $excludeId) !== null;
+    }
+
+    private function overlapMessage(Shift $conflict): string
+    {
+        if (!$conflict->is_active) {
+            return "Shift timings overlap with the deactivated shift '{$conflict->shift_name}' ({$conflict->start_time} - {$conflict->end_time}). Re-activate that shift instead of creating a duplicate.";
+        }
+
+        return 'Shift timings overlap with an existing shift.';
+    }
+
+    /**
+     * Return the first shift whose timings overlap the given window, or null
+     * when the window is free. Deactivated shifts still hold their slot, so a
+     * duplicate can't be created while the original sits inactive. Pass
+     * $activeOnly when re-activating, where only live shifts can clash.
+     */
+    private function findOverlappingShift($startTime, $endTime, $excludeId = null, bool $activeOnly = false)
     {
         $newStart = \Carbon\Carbon::parse($startTime)->format('H:i:s');
         $newEnd = \Carbon\Carbon::parse($endTime)->format('H:i:s');
@@ -575,7 +795,11 @@ class ShiftController extends Controller
 
         $newIntervals = $getIntervals($newStart, $newEnd);
 
-        $query = Shift::where('is_active', 1);
+        $query = Shift::query();
+
+        if ($activeOnly) {
+            $query->where('is_active', 1);
+        }
 
         if ($excludeId !== null) {
             $query->where('id', '!=', $excludeId);
@@ -595,12 +819,12 @@ class ShiftController extends Controller
                     $minEnd = min($newInt['end'], $existInt['end']);
 
                     if ($maxStart < $minEnd) {
-                        return true;
+                        return $existingShift;
                     }
                 }
             }
         }
 
-        return false;
+        return null;
     }
 }

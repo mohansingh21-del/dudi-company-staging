@@ -12,6 +12,8 @@ class InventoryLogResource extends JsonResource
             'id' => $this->id,
             'product_id' => $this->product_id,
             'product_name' => optional($this->product)->name,
+            'store_id' => $this->store_id,
+            'store_name' => optional($this->store)->name,
             'user_id' => $this->user_id,
             'user_name' => optional($this->user)->name ?? 'System',
             'done_by' => $this->user

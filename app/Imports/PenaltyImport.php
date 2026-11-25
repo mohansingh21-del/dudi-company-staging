@@ -2,243 +2,154 @@
 
 namespace App\Imports;
 
+use App\Enums\RecoveryType;
 use App\Models\Penalty;
 use App\Models\Employee;
+use App\Rules\HasActivePayroll;
+use App\Services\LoanRecoveryService;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\Rule;
-use Maatwebsite\Excel\Concerns\OnEachRow;
+use Illuminate\Support\Collection;
+use Maatwebsite\Excel\Concerns\ToCollection;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Maatwebsite\Excel\Concerns\WithValidation;
-use Maatwebsite\Excel\Row;
-use Maatwebsite\Excel\Concerns\SkipsEmptyRows;
-use App\Enums\RecoveryType;
 
-class PenaltyImport implements
-    OnEachRow,
-    WithHeadingRow,
-    WithValidation,
-    SkipsEmptyRows
+class PenaltyImport implements ToCollection, WithHeadingRow, WithValidation
 {
-    public function onRow(Row $row)
+    /**
+     * The sheet has no recovery_type column, so imported rows all get
+     * the same type.
+     */
+    public const DEFAULT_RECOVERY_TYPE = RecoveryType::FINE;
+
+    private LoanRecoveryService $recoveryService;
+
+    public function __construct(?LoanRecoveryService $recoveryService = null)
     {
-        $data = $row->toArray();
+        $this->recoveryService = $recoveryService ?? app(LoanRecoveryService::class);
+    }
 
-        DB::transaction(function () use ($data) {
-
-            $penalty = Penalty::find($data['penalty_id']);
-
-            if (!$penalty) {
-                throw new \Exception(
-                    'Penalty ID ' .
-                        $data['penalty_id'] .
-                        ' not found.'
-                );
+    public function collection(Collection $rows)
+    {
+        foreach ($rows as $row) {
+            if (empty($row['employee_code'])) {
+                continue;
             }
 
-            $penaltyDate = Carbon::parse(
-                $data['date_of_damage_loss']
-            );
+            $employee = Employee::with('activePayroll')
+                ->where('employee_code', trim((string) $row['employee_code']))
+                ->first();
+            if (!$employee) {
+                continue;
+            }
 
-            $penalty->update([
-                /*
-                 * Editable register data
-                 */
-                'employee_id' => $this->resolveEmployeeId(
-                    $data['employee_code']
-                ),
+            // Parse date: handle Excel serial format or standard formats
+            $parsedDate = $this->parseDate($row['penalty_date'] ?? null) ?? Carbon::now();
 
-                'penalty_date' =>
-                $penaltyDate->toDateString(),
-
-                'month' =>
-                $penaltyDate->month,
-
-                'year' =>
-                $penaltyDate->year,
-
-                'recovery_type' =>
-                strtolower(trim($data['recovery_type'])),
-
-                'particulars' =>
-                $data['particulars'] ?? null,
-
-                'reason' =>
-                $data['particulars'] ?? null,
-
-                'amount' =>
-                $data['amount'],
-
-                'show_cause_issued' =>
-                $this->parseBoolean(
-                    $data['show_cause_issued']
-                ),
-
-                'explanation_heard_in_presence' =>
-                $data['explanation_heard_in_presence'] ?? null,
-
-                'number_of_installments' =>
-                $data['number_of_installments'] ?? null,
-
-                'first_month' =>
-                $data['first_month'] ?? null,
-
-                'first_year' =>
-                $data['first_year'] ?? null,
-
-                'last_month' =>
-                $data['last_month'] ?? null,
-
-                'last_year' =>
-                $data['last_year'] ?? null,
-
-                'date_of_complete_recovery' =>
-                !empty($data['date_of_complete_recovery'])
-                    ? Carbon::parse(
-                        $data['date_of_complete_recovery']
-                    )->toDateString()
-                    : null,
-
-                'remarks' =>
-                $data['remarks'] ?? null,
-            ]);
+            $amount = (float) $row['amount'];
 
             /*
-             * NOTICE:
+             * The same 25%-cap schedule the single-penalty form computes,
+             * so imported and manually created penalties carry identical
+             * installment fields instead of leaving them null.
              *
-             * There is intentionally NO update here for:
-             *
-             * calculation_amount
-             * calculation_recovery_type
-             * calculation_particulars
-             * calculation_date
-             * calculation_number_of_installments
-             * calculation_first_month
-             * calculation_first_year
-             * calculation_last_month
-             * calculation_last_year
+             * Computed per row rather than per file, so an earlier row for
+             * the same employee already counts against the monthly budget.
              */
-        });
+            $plan = $this->recoveryService->scheduleFor(
+                $employee,
+                $amount,
+                $parsedDate
+            );
+
+            Penalty::create([
+                'employee_id' => $employee->id,
+                'penalty_date' => $parsedDate->toDateString(),
+                'month' => $parsedDate->month,
+                'year' => $parsedDate->year,
+                'recovery_type' => self::DEFAULT_RECOVERY_TYPE,
+                'reason' => $row['reason'],
+                'amount' => $amount,
+
+                'number_of_installments' => $plan['number_of_installments'],
+                'installment_amount' => $plan['installment_amount'],
+                'first_month' => $plan['first_month'],
+                'first_year' => $plan['first_year'],
+                'last_month' => $plan['last_month'],
+                'last_year' => $plan['last_year'],
+                'date_of_complete_recovery' => $plan['date_of_complete_recovery'],
+
+                // Snapshot: required for LoanRecoveryService to pick this up
+                'calculation_amount' => $amount,
+                'calculation_recovery_type' => self::DEFAULT_RECOVERY_TYPE,
+                'calculation_date' => $parsedDate->toDateString(),
+                'calculation_number_of_installments' => $plan['number_of_installments'],
+                'calculation_first_month' => $plan['first_month'],
+                'calculation_first_year' => $plan['first_year'],
+                'calculation_last_month' => $plan['last_month'],
+                'calculation_last_year' => $plan['last_year'],
+            ]);
+        }
     }
 
-    private function resolveEmployeeId($employeeCode): int
+    private function parseDate($value): ?Carbon
     {
-        $employee = Employee::where(
-            'employee_code',
-            trim($employeeCode)
-        )->first();
-
-        if (!$employee) {
-            throw new \Exception(
-                'Employee with code ' .
-                    $employeeCode .
-                    ' not found.'
-            );
+        if (empty($value)) {
+            return null;
         }
 
-        return $employee->id;
-    }
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value)->startOfDay();
+        }
 
-    private function parseBoolean($value): bool
-    {
-        return in_array(
-            strtolower(trim((string) $value)),
-            ['yes', 'true', '1'],
-            true
-        );
+        if (is_numeric($value)) {
+            return Carbon::instance(\PhpOffice\PhpSpreadsheet\Shared\Date::excelToDateTimeObject($value))->startOfDay();
+        }
+
+        $value = trim((string) $value);
+
+        $formats = [
+            'd/m/Y',
+            'd/m/Y H:i:s',
+            'd/m/Y H:i',
+            'Y-m-d',
+            'Y-m-d H:i:s',
+            'Y-m-d H:i',
+            'd-m-Y',
+            'd-m-Y H:i:s',
+            'd-m-Y H:i',
+            'm/d/Y',
+            'm/d/Y H:i:s',
+        ];
+
+        foreach ($formats as $format) {
+            try {
+                $parsed = Carbon::createFromFormat($format, $value);
+                if ($parsed !== false) {
+                    return $parsed->startOfDay();
+                }
+            } catch (\Throwable $ex) {
+                continue;
+            }
+        }
+
+        try {
+            return Carbon::parse($value)->startOfDay();
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     public function rules(): array
     {
         return [
-            'penalty_id' => [
+            '*.employee_code' => [
                 'required',
-                'integer',
-                'exists:penalties,id',
-            ],
-
-            'employee_code' => [
-                'required',
-                'string',
                 'exists:employees,employee_code',
+                new HasActivePayroll('employee_code'),
             ],
-
-            'employee_name' => [
-                'nullable',
-                'string',
-            ],
-
-            'recovery_type' => [
-                'required',
-                Rule::in(
-                    RecoveryType::values()
-                ),
-            ],
-
-            'particulars' => [
-                'required',
-                'string',
-            ],
-
-            'date_of_damage_loss' => [
-                'required',
-                'date',
-            ],
-
-            'amount' => [
-                'required',
-                'numeric',
-                'min:0.01',
-            ],
-
-            'show_cause_issued' => [
-                'required',
-            ],
-
-            'explanation_heard_in_presence' => [
-                'nullable',
-                'string',
-            ],
-
-            'number_of_installments' => [
-                'nullable',
-                'integer',
-                'min:1',
-            ],
-
-            'first_month' => [
-                'nullable',
-                'integer',
-                'between:1,12',
-            ],
-
-            'first_year' => [
-                'nullable',
-                'integer',
-                'between:1900,2200',
-            ],
-
-            'last_month' => [
-                'nullable',
-                'integer',
-                'between:1,12',
-            ],
-
-            'last_year' => [
-                'nullable',
-                'integer',
-                'between:1900,2200',
-            ],
-
-            'date_of_complete_recovery' => [
-                'nullable',
-                'date',
-            ],
-
-            'remarks' => [
-                'nullable',
-                'string',
-            ],
+            '*.penalty_date' => 'required',
+            '*.reason' => 'required|string',
+            '*.amount' => 'required|numeric|min:0.01',
         ];
     }
 }

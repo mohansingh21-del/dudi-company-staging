@@ -123,7 +123,7 @@ class PublicAPIsTest extends TestCase
             'target_bcm' => 45000,
             'actual_bcm' => 42200,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-001'
@@ -211,7 +211,7 @@ class PublicAPIsTest extends TestCase
             'target_bcm' => 45000,
             'actual_bcm' => 42200,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-002'
@@ -253,7 +253,7 @@ class PublicAPIsTest extends TestCase
             'target_bcm' => 45000,
             'actual_bcm' => 42200,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-TEST-003'
@@ -341,7 +341,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 10000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-REGULAR-123'
@@ -406,7 +406,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 10000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-NESTED-123'
@@ -483,7 +483,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 12000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-NIGHT-123'
@@ -532,7 +532,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 10000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-SPACE-123'
@@ -597,7 +597,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 10000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-A-123'
@@ -610,7 +610,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 12000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-B-123'
@@ -683,7 +683,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 10000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'draft',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-DRAFT-123'
@@ -711,7 +711,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 10000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-BREAKDOWN-123'
@@ -785,7 +785,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 10000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-DRIVERS-TEST-123'
@@ -956,7 +956,7 @@ class PublicAPIsTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 10000,
             'supervisor_id' => $this->supervisorEmployee->roleUser->user_id,
-            'site_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
+            'shift_incharge_id' => $this->siteInchargeEmployee->roleUser->user_id,
             'status' => 'active',
             'created_by' => $this->adminUser->id,
             'reference_no' => 'SP-ALLOC-TEST-99'

@@ -16,7 +16,16 @@ class StoreTrainingTypeRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => 'required|unique:training_types,name'
+            'name' => 'required|string|max:255|unique:training_types,name'
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'name.required' => 'Training Type is required.',
+            'name.unique' => 'Training Type already exists.',
+            'name.max' => 'Training Type cannot be longer than 255 characters.',
         ];
     }
 

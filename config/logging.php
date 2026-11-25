@@ -54,6 +54,27 @@ return [
             'ignore_exceptions' => false,
         ],
 
+        /*
+        |----------------------------------------------------------------------
+        | VECV telematics
+        |----------------------------------------------------------------------
+        |
+        | Every outbound VECV call and every dashboard refresh, in its own file
+        | so an integration question can be answered without reading around the
+        | rest of the application. Kept longer than the default 14 days because
+        | the questions asked of it - "why was this reading missing", "did the
+        | button actually fetch anything" - are usually asked well after the
+        | fact.
+        |
+        */
+
+        'vecv' => [
+            'driver' => 'daily',
+            'path'   => storage_path('logs/vecv.log'),
+            'level'  => env('VECV_LOG_LEVEL', 'debug'),
+            'days'   => env('VECV_LOG_DAYS', 30),
+        ],
+
         'single' => [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),

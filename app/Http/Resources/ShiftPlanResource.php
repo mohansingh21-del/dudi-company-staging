@@ -14,8 +14,10 @@ class ShiftPlanResource extends JsonResource
      */
     public function toArray($request)
     {
-        $supervisorEmployee = optional($this->supervisor)->employee;
-        $siteInchargeEmployee = optional($this->siteIncharge)->employee;
+        $supervisors = $this->resource->supervisorList();
+        $primarySupervisor = $supervisors[0] ?? null;
+        $shiftInchargeEmployee = optional($this->shiftIncharge)->employee;
+        $productionInchargeEmployee = optional($this->productionIncharge)->employee;
         $creatorEmployee = optional($this->creator)->employee;
         $publisherEmployee = optional($this->publisher)->employee;
 
@@ -29,12 +31,16 @@ class ShiftPlanResource extends JsonResource
             'site_name' => optional($this->site)->site_name,
             'target_bcm' => !is_null($this->target_bcm) ? (string) round((float) $this->target_bcm, 2) : null,
             'actual_bcm' => !is_null($this->actual_bcm) ? (string) round((float) $this->actual_bcm, 2) : null,
-            'supervisor_id' => $supervisorEmployee ? $supervisorEmployee->id : $this->supervisor_id,
-            'supervisor_name' => $supervisorEmployee ? $supervisorEmployee->name : optional($this->supervisor)->email,
-            'supervisor_code' => $supervisorEmployee ? $supervisorEmployee->employee_code : null,
-            'site_incharge_id' => $siteInchargeEmployee ? $siteInchargeEmployee->id : $this->site_incharge_id,
-            'site_incharge_name' => $siteInchargeEmployee ? $siteInchargeEmployee->name : optional($this->siteIncharge)->email,
-            'site_incharge_code' => $siteInchargeEmployee ? $siteInchargeEmployee->employee_code : null,
+            'supervisor_id' => $primarySupervisor ? $primarySupervisor['id'] : null,
+            'supervisor_name' => $primarySupervisor ? $primarySupervisor['name'] : null,
+            'supervisor_code' => $primarySupervisor ? $primarySupervisor['code'] : null,
+            'supervisors' => $supervisors,
+            'shift_incharge_id' => $shiftInchargeEmployee ? $shiftInchargeEmployee->id : $this->shift_incharge_id,
+            'shift_incharge_name' => $shiftInchargeEmployee ? $shiftInchargeEmployee->name : optional($this->shiftIncharge)->email,
+            'shift_incharge_code' => $shiftInchargeEmployee ? $shiftInchargeEmployee->employee_code : null,
+            'production_incharge_id' => $productionInchargeEmployee ? $productionInchargeEmployee->id : $this->production_incharge_id,
+            'production_incharge_name' => $productionInchargeEmployee ? $productionInchargeEmployee->name : optional($this->productionIncharge)->email,
+            'production_incharge_code' => $productionInchargeEmployee ? $productionInchargeEmployee->employee_code : null,
             'equipment_count' => (int) $this->equipment_count,
             'status' => $this->status,
             'created_by' => $this->created_by,
@@ -71,6 +77,8 @@ class ShiftPlanResource extends JsonResource
                         'allocation_id' => $child->id,
                         'machine_id' => $childMachine ? $childMachine->id : null,
                         'machine_number' => $childMachine ? $childMachine->equipment_name : null,
+                        'model_number' => $childMachine ? optional($childMachine->modelNumber)->model_number : null,
+                        'chassis_number' => $childMachine ? $childMachine->chassis_number : null,
                     ];
                 });
 
@@ -78,6 +86,8 @@ class ShiftPlanResource extends JsonResource
                     'allocation_id' => $allocation->id,
                     'machine_id' => $machine ? $machine->id : null,
                     'machine_number' => $machine ? $machine->equipment_name : null,
+                    'model_number' => $machine ? optional($machine->modelNumber)->model_number : null,
+                    'chassis_number' => $machine ? $machine->chassis_number : null,
                     'category_id' => $thisCategoryId,
                     'category_name' => $category ? $category->name : null,
                     'dumpers' => $dumpers->toArray(),

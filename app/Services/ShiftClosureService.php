@@ -36,7 +36,7 @@ class ShiftClosureService
      */
     public function getClosureSummary(ShiftPlan $shift)
     {
-        $shift->load(['shift', 'site', 'supervisor.employee', 'siteIncharge.employee', 'equipmentAllocations']);
+        $shift->load(['shift', 'site', 'shiftIncharge.employee', 'productionIncharge.employee', 'equipmentAllocations']);
 
         $shiftDetails = $this->buildShiftDetails($shift);
         $productionSummary = $this->buildProductionSummary($shift);
@@ -113,17 +113,13 @@ class ShiftClosureService
 
             // ── 2e. Attendance submitted (EF-04) ──────────────────
             if (!$this->hasAttendanceSubmitted($shift)) {
-                $msg = 'Attendance Records Pending.';
+                $msg = $this->attendancePendingMessage($shift);
                 $this->logAudit($shift->id, $user->id, 'failure', $msg);
                 throw new ShiftClosureValidationException($msg);
             }
 
-            // ── 2f. Fuel logs complete (EF-05) ────────────────────
-            if (!$this->hasFuelLogsCompleted($shift)) {
-                $msg = 'Fuel Logs Missing For Assigned Equipment.';
-                $this->logAudit($shift->id, $user->id, 'failure', $msg);
-                throw new ShiftClosureValidationException($msg);
-            }
+            // ── 2f. Fuel logs (EF-05) are optional — missing entries only
+            //        raise a warning in the closure summary.
 
             // ── 2g. Delay records reviewed (EF-06) ────────────────
             if (!$this->hasDelayRecordsReviewed($shift)) {
@@ -133,7 +129,7 @@ class ShiftClosureService
             }
 
             // ── 3. Build & freeze snapshot (BR-SHFT-030) ──────────
-            $shift->load(['shift', 'site', 'supervisor.employee', 'siteIncharge.employee', 'equipmentAllocations']);
+            $shift->load(['shift', 'site', 'shiftIncharge.employee', 'productionIncharge.employee', 'equipmentAllocations']);
             $snapshot = $this->getClosureSummary($shift);
 
             // ── 4. Update shift row ───────────────────────────────
@@ -150,6 +146,11 @@ class ShiftClosureService
                 'breakdown_justification' => isset($validated['breakdown_justification']) ? $validated['breakdown_justification'] : null,
                 'shift_summary_snapshot' => json_encode($snapshot),
             ]);
+
+            // ── 4a. Free holds for a week that has not started yet ─
+            app(RotationHoldService::class)->releaseUnstartedHolds(
+                ShiftWorkforceDeployment::where('shift_plan_id', $shift->id)->active()->pluck('employee_id')->all()
+            );
 
             // ── 5. Log audit SUCCESS ──────────────────────────────
             $this->logAudit($shift->id, $user->id, 'success');
@@ -195,18 +196,18 @@ class ShiftClosureService
      */
     private function buildShiftDetails(ShiftPlan $shift)
     {
-        $supervisorName = null;
-        $supervisor = $shift->supervisor;
-        if ($supervisor) {
-            $emp = $supervisor->employee;
-            $supervisorName = $emp ? $emp->name : $supervisor->email;
+        $shiftInchargeName = null;
+        $shiftIncharge = $shift->shiftIncharge;
+        if ($shiftIncharge) {
+            $emp = $shiftIncharge->employee;
+            $shiftInchargeName = $emp ? $emp->name : $shiftIncharge->email;
         }
 
-        $siteInchargeName = null;
-        $siteIncharge = $shift->siteIncharge;
-        if ($siteIncharge) {
-            $emp = $siteIncharge->employee;
-            $siteInchargeName = $emp ? $emp->name : $siteIncharge->email;
+        $productionInchargeName = null;
+        $productionIncharge = $shift->productionIncharge;
+        if ($productionIncharge) {
+            $emp = $productionIncharge->employee;
+            $productionInchargeName = $emp ? $emp->name : $productionIncharge->email;
         }
 
         return [
@@ -214,8 +215,10 @@ class ShiftClosureService
             'shift_date' => $shift->planning_date ? $shift->planning_date->format('Y-m-d') : null,
             'shift' => optional($shift->shift)->shift_name,
             'location' => optional($shift->site)->site_name,
-            'supervisor' => $supervisorName,
-            'site_incharge' => $siteInchargeName,
+            'supervisor' => $shift->supervisorNames(),
+            'supervisors' => $shift->supervisorList(),
+            'shift_incharge' => $shiftInchargeName,
+            'production_incharge' => $productionInchargeName,
         ];
     }
 
@@ -403,6 +406,7 @@ class ShiftClosureService
         return [
             'active_breakdown' => $this->hasActiveBreakdown($shift),
             'zero_production' => ((float) $productionSummary['actual_bcm']) == 0,
+            'fuel_logs_missing' => !$this->hasFuelLogsCompleted($shift),
         ];
     }
 
@@ -440,14 +444,82 @@ class ShiftClosureService
     {
         $planningDate = $shift->planning_date ? $shift->planning_date->format('Y-m-d') : null;
 
-        if (!$planningDate) {
+        if (!$planningDate || !$this->hasWorkforceDeployment($shift)) {
             return false;
         }
 
-        // At least one processed attendance record for this shift on the planning date
-        return AttendanceProcessed::where('shift_id', $shift->shift_id)
+        return $this->employeesPendingAttendance($shift)->isEmpty();
+    }
+
+    /**
+     * Actively deployed employees with no processed attendance on the planning date.
+     *
+     * Every deployed employee has to be accounted for before the shift closes —
+     * one row for the shift is not enough, since the rest would be left with no
+     * attendance on a day the plan says they worked. The row is matched on
+     * employee and date only: a borrowed employee's attendance may be processed
+     * against their home shift. Any status counts (an absent row is still marked
+     * attendance), and an approved leave covers the day on its own.
+     *
+     * @param  ShiftPlan  $shift
+     * @return \Illuminate\Support\Collection  of Employee
+     */
+    private function employeesPendingAttendance(ShiftPlan $shift)
+    {
+        $planningDate = $shift->planning_date->format('Y-m-d');
+
+        $deployments = ShiftWorkforceDeployment::where('shift_plan_id', $shift->id)
+            ->active()
+            ->with('employee')
+            ->get();
+
+        $employeeIds = $deployments->pluck('employee_id')->unique()->all();
+
+        $markedIds = AttendanceProcessed::whereIn('employee_id', $employeeIds)
             ->whereDate('date', $planningDate)
-            ->exists();
+            ->pluck('employee_id')
+            ->all();
+
+        $onLeaveIds = Leave::where('status', 'approved')
+            ->whereIn('employee_id', $employeeIds)
+            ->whereDate('from_date', '<=', $planningDate)
+            ->whereDate('to_date', '>=', $planningDate)
+            ->pluck('employee_id')
+            ->all();
+
+        $accountedIds = array_merge($markedIds, $onLeaveIds);
+
+        return $deployments
+            ->filter(function ($dep) use ($accountedIds) {
+                return $dep->employee && !in_array($dep->employee_id, $accountedIds);
+            })
+            ->map(function ($dep) {
+                return $dep->employee;
+            })
+            ->unique('id')
+            ->values();
+    }
+
+    /**
+     * Closure error naming the deployed employees whose attendance is missing.
+     *
+     * @param  ShiftPlan  $shift
+     * @return string
+     */
+    private function attendancePendingMessage(ShiftPlan $shift)
+    {
+        $pending = $shift->planning_date ? $this->employeesPendingAttendance($shift) : collect();
+
+        if ($pending->isEmpty()) {
+            return 'Attendance Records Pending.';
+        }
+
+        $names = $pending->take(5)->pluck('name')->implode(', ');
+        if ($pending->count() > 5) {
+            $names .= ' and ' . ($pending->count() - 5) . ' more';
+        }
+
+        return 'Attendance Records Pending For ' . $pending->count() . ' Deployed Employee(s): ' . $names . '.';
     }
 
     /**

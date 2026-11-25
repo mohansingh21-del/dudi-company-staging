@@ -172,6 +172,9 @@ class DispatchImport implements ToCollection, WithHeadingRow
                 $shift = Shift::where('shift_name', $shiftName)->first();
                 if (!$shift) {
                     $rowErrors[] = "Shift with name '{$shiftName}' not found.";
+                } elseif (!$shift->is_active) {
+                    $rowErrors[] = "Shift '{$shiftName}' is inactive and cannot be used.";
+                    $shift = null;
                 }
             }
 
@@ -286,6 +289,13 @@ class DispatchImport implements ToCollection, WithHeadingRow
                     
                     if (Carbon::parse($resolvedEnd)->lte(Carbon::parse($resolvedStart))) {
                         $rowErrors[] = "The end time must be after the start time.";
+                    }
+
+                    if (!DispatchTripService::isTimeWithinShift($startTimeCarbon->format('H:i:s'), $shiftPlan)) {
+                        $rowErrors[] = DispatchTripService::outsideShiftMessage('start time', $shiftPlan);
+                    }
+                    if (!DispatchTripService::isTimeWithinShift($endTimeCarbon->format('H:i:s'), $shiftPlan)) {
+                        $rowErrors[] = DispatchTripService::outsideShiftMessage('end time', $shiftPlan);
                     }
                 }
             }

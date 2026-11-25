@@ -11,6 +11,7 @@ use App\Http\Resources\LeaveResource;
 use App\Http\Requests\ApproveLeaveRequest;
 use Illuminate\Support\Facades\Auth;
 use App\Imports\LeaveImport;
+use Carbon\Carbon;
 use Maatwebsite\Excel\Facades\Excel;
 class LeaveController extends Controller
 {
@@ -132,6 +133,12 @@ class LeaveController extends Controller
             'approved_by' => $request->approved_by,
         ]);
 
+        // A leave filed already approved never passes through approveReject,
+        // so its attendance rows are written here.
+        if ($leave->status === 'approved') {
+            $this->syncAttendanceForLeave($leave);
+        }
+
         return response()->json([
             'status' => 200,
             'message' => 'Leave created successfully',
@@ -186,10 +193,73 @@ class LeaveController extends Controller
             ]);
         }
 
+        // Backstop for the joining-date rule: leaves filed before it existed can
+        // still be sitting pending, and approving one would write attendance for
+        // days the employee was not yet on the rolls.
+        if ($request->status === 'approved') {
+
+            $joiningMessage = \App\Services\LeaveBalanceService::beforeJoiningMessage(
+                $leave->employee_id,
+                Carbon::parse($leave->from_date)->format('Y-m-d')
+            );
+
+            if ($joiningMessage) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $joiningMessage
+                ], 422);
+            }
+        }
+
+        // The employee may have been marked present and deployed on a shift
+        // after the leave was filed; approving would wipe that worked day.
+        if ($request->status === 'approved') {
+
+            $deployedMessage = \App\Services\AttendanceLeaveSync::deployedPresentMessage(
+                $leave->employee_id,
+                Carbon::parse($leave->from_date)->format('Y-m-d'),
+                Carbon::parse($leave->to_date)->format('Y-m-d')
+            );
+
+            if ($deployedMessage) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $deployedMessage
+                ], 422);
+            }
+        }
+
+        // Backstop for the monthly Compensatory Rest cap. Applying already
+        // enforces it, but leaves that predate the rule or came in through the
+        // bulk sheet can still be sitting pending, and approving them should not
+        // put the month over. Excludes this leave so its own days are counted
+        // once, as the ones being added.
+        if ($request->status === 'approved'
+            && optional($leave->leaveType)->register_group === 'compensatory_rest') {
+
+            $capMessage = \App\Services\LeaveBalanceService::compRestLeaveCapMessage(
+                $leave->employee_id,
+                Carbon::parse($leave->from_date)->format('Y-m-d'),
+                Carbon::parse($leave->to_date)->format('Y-m-d'),
+                $leave->id
+            );
+
+            if ($capMessage) {
+                return response()->json([
+                    'status' => 422,
+                    'message' => $capMessage
+                ], 422);
+            }
+        }
+
         $leave->update([
             'status' => $request->status,
             'approved_by' => Auth::id(),
         ]);
+
+        if ($request->status === 'approved') {
+            $this->syncAttendanceForLeave($leave);
+        }
 
         return response()->json([
             'status' => 200,
@@ -197,6 +267,43 @@ class LeaveController extends Controller
             'data' => new LeaveResource($leave)
         ]);
     }
+
+    /**
+     * Give an approved leave a same-day row in attendance_processeds so the
+     * attendance views and payroll read one source instead of two.
+     * Compensatory Rest leave lands as 'rest_day', every other leave type as
+     * 'leave'. The leave wins over whatever the day held before, including
+     * present/half_day, and the punches recorded for the day are cleared.
+     * (The reverse — marking the day present afterwards — cancels the leave
+     * for that day, see AttendanceLeaveSync::releaseDay.)
+     */
+    private function syncAttendanceForLeave(Leave $leave): void
+    {
+        $leave->loadMissing('leaveType');
+
+        $status = optional($leave->leaveType)->register_group === 'compensatory_rest'
+            ? 'rest_day'
+            : 'leave';
+
+        $from = Carbon::parse($leave->from_date)->startOfDay();
+        $to = Carbon::parse($leave->to_date)->startOfDay();
+
+        for ($day = $from->copy(); $day->lte($to); $day->addDay()) {
+            $record = \App\Models\AttendanceProcessed::firstOrNew([
+                'employee_id' => $leave->employee_id,
+                'date' => $day->format('Y-m-d'),
+            ]);
+
+            $record->fill([
+                'shift_id' => $record->shift_id ?: optional($leave->employee)->shift_id,
+                'attendance_status' => $status,
+                // A day on leave was not worked: drop the punches and
+                // everything derived from them.
+            ] + \App\Services\AttendanceLeaveSync::CLEARED_PUNCHES);
+            $record->save();
+        }
+    }
+
     public function show(int $id)
     {
        $leave = Leave::with(['employee', 'leaveType', 'approver'])->find($id);
@@ -234,6 +341,10 @@ class LeaveController extends Controller
             'status' => $request->status,
             'approved_by' => $request->approved_by,
         ]);
+
+        if ($request->status === 'approved') {
+            $this->syncAttendanceForLeave($leave);
+        }
 
         return response()->json([
             'status' => 200,

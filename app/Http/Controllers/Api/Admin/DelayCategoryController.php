@@ -75,7 +75,7 @@ class DelayCategoryController extends Controller
 
         return response()->json([
             'status' => 200,
-            'message' => 'Delay category created successfully'
+            'message' => 'Delay type created successfully'
         ], 200);
     }
 

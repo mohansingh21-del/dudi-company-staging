@@ -16,11 +16,20 @@ class StoreShiftRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => 'required|unique:shifts,shift_name',
+            'name' => 'required|string|max:255|unique:shifts,shift_name',
             'start_time' => 'required',
             'end_time' => 'required',
             'minimum_working_hours' => 'nullable|numeric|min:0|max:24',
             'is_night_shift' => 'nullable|boolean',
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'name.required' => 'Shift name is required.',
+            'name.unique' => 'Shift name already exists.',
+            'name.max' => 'Shift name cannot be longer than 255 characters.',
         ];
     }
 

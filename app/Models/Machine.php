@@ -14,4 +14,9 @@ class Machine extends Model
     {
         return $this->belongsTo(Equipment::class, 'equipment_id');
     }
+
+    public function modelNumber()
+    {
+        return $this->belongsTo(EquipmentModelNumber::class, 'equipment_model_number_id');
+    }
 }

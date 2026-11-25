@@ -63,7 +63,15 @@ abstract class VecvSyncService
     /**
      * Map chassis number to machine id.
      *
-     * This project stores the chassis number in equipment_names.equipment_name.
+     * Reads equipment_names.chassis_number, added 2026-09-02. Before that this
+     * matched against equipment_names.equipment_name - the column holding the
+     * label an operator reads ("Dump-3") - so it resolved only while somebody
+     * kept typing chassis numbers into the name field, and every reading landed
+     * with a null equipment_name_id the moment anyone gave a machine a readable
+     * name. Do not point this back at equipment_name.
+     *
+     * Machines with no chassis (dozers, pumps, anything off the telematics
+     * feed) are skipped rather than mapped to an empty key.
      *
      * @return array
      */
@@ -72,12 +80,13 @@ abstract class VecvSyncService
         $map = [];
 
         EquipmentName::query()
-            ->select('id', 'equipment_name')
+            ->select('id', 'chassis_number')
+            ->whereNotNull('chassis_number')
             ->get()
             ->each(function ($machine) use (&$map) {
-                $name = strtoupper(trim((string) $machine->equipment_name));
-                if ($name !== '') {
-                    $map[$name] = $machine->id;
+                $chassis = strtoupper(trim((string) $machine->chassis_number));
+                if ($chassis !== '') {
+                    $map[$chassis] = $machine->id;
                 }
             });
 

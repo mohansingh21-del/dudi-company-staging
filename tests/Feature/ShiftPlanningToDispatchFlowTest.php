@@ -200,7 +200,8 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'site_id' => $this->site->id,
             'target_bcm' => 1500.00,
             'supervisor_id' => $this->supervisorEmp->id,
-            'site_incharge_id' => $this->inchargeEmp->id,
+            'shift_incharge_id' => $this->inchargeEmp->id,
+            'production_incharge_id' => $this->inchargeEmp->id,
         ]);
 
         $response->assertStatus(201);
@@ -476,6 +477,7 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'is_breakdown_service' => true,
             'breakdown_id' => $ticket1Id,
             'service_date' => $planningDate,
+            'job_card_number' => 'JC-2026-0001',
             'downtime_start' => '09:30',
             'downtime_end' => '11:30',
             'remarks' => 'Coolant refilled',
@@ -503,6 +505,7 @@ class ShiftPlanningToDispatchFlowTest extends TestCase
             'is_breakdown_service' => true,
             'breakdown_id' => $ticket2Id,
             'service_date' => $planningDate,
+            'job_card_number' => 'JC-2026-0002',
             'downtime_start' => '12:00',
             'downtime_end' => '15:00',
             'remarks' => 'Seal replaced',

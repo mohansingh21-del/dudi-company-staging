@@ -7,6 +7,7 @@ use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
 use App\Models\Leave;
+use App\Models\LeaveType;
 class UpdateLeaveRequest extends FormRequest
 {
     public function authorize(): bool
@@ -46,11 +47,69 @@ public function withValidator($validator)
 {
     $validator->after(function ($validator) {
 
+        // A paid block with no annual quota configured has nothing to draw
+        // against, so moving a leave onto one is refused rather than saved
+        // against an entitlement of zero that the register would silently floor
+        // away. Unpaid leave is uncapped and never gated.
+        //
+        // Only a *change* of block counts as applying against it. Leaves already
+        // filed under a block whose quota is still 0 stay editable, so their
+        // status, reason and dates can be corrected without the master having to
+        // be configured first.
+        if ($this->leave_type_id) {
+
+            $current = Leave::find(
+                $this->route('leave')?->id ?? $this->route('leave')
+            );
+
+            $blockChanged = ! $current
+                || (int) $current->leave_type_id !== (int) $this->leave_type_id;
+
+            $leaveType = LeaveType::find($this->leave_type_id);
+
+            if ($blockChanged && $leaveType && ! $leaveType->canApply()) {
+
+                $validator->errors()->add(
+                    'leave_type_id',
+                    $leaveType->quotaMissingMessage()
+                );
+            }
+        }
+
         if (
             !$this->employee_id ||
             !$this->from_date ||
             !$this->to_date
         ) {
+            return;
+        }
+
+        // A leave cannot start before the employee joined. Rejecting a leave that
+        // predates the rule stays possible, so a bad entry can still be closed out.
+        $joiningMessage = $this->status === 'rejected' ? null : \App\Services\LeaveBalanceService::beforeJoiningMessage(
+            (int) $this->employee_id,
+            $this->from_date
+        );
+
+        if ($joiningMessage) {
+
+            $validator->errors()->add('from_date', $joiningMessage);
+
+            return;
+        }
+
+        // A day the employee was present on and deployed in a shift's workforce
+        // cannot be taken as leave. Rejecting stays possible.
+        $deployedMessage = $this->status === 'rejected' ? null : \App\Services\AttendanceLeaveSync::deployedPresentMessage(
+            (int) $this->employee_id,
+            $this->from_date,
+            $this->to_date
+        );
+
+        if ($deployedMessage) {
+
+            $validator->errors()->add('from_date', $deployedMessage);
+
             return;
         }
 
@@ -86,6 +145,47 @@ public function withValidator($validator)
                 'from_date',
                 'Leave already exists or overlaps with another leave for this employee.'
             );
+
+            return;
+        }
+
+        // Same monthly Compensatory Rest cap as applying. This leave is excluded
+        // from the count so its own days are not read as somebody else's.
+        if ($this->leave_type_id) {
+
+            $leaveType = LeaveType::find($this->leave_type_id);
+
+            if ($leaveType && $leaveType->register_group === 'compensatory_rest') {
+
+                $capMessage = \App\Services\LeaveBalanceService::compRestLeaveCapMessage(
+                    (int) $this->employee_id,
+                    $this->from_date,
+                    $this->to_date,
+                    $leaveId ? (int) $leaveId : null
+                );
+
+                if ($capMessage) {
+                    $validator->errors()->add('leave_type_id', $capMessage);
+                }
+            }
+
+            // The annual entitlement, this leave excluded for the same reason:
+            // editing a leave that already fits its quota must not read its own
+            // days as somebody else's and refuse the edit.
+            if ($leaveType) {
+
+                $quotaMessage = \App\Services\LeaveBalanceService::annualQuotaMessage(
+                    $leaveType,
+                    (int) $this->employee_id,
+                    $this->from_date,
+                    $this->to_date,
+                    $leaveId ? (int) $leaveId : null
+                );
+
+                if ($quotaMessage) {
+                    $validator->errors()->add('leave_type_id', $quotaMessage);
+                }
+            }
         }
     });
 }

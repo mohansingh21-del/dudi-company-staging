@@ -16,7 +16,16 @@ class StoreEquipmentRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => 'required|unique:equipments,name'
+            'name' => 'required|string|max:255|unique:equipments,name'
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'name.required' => 'Equipment is required.',
+            'name.unique' => 'Equipment already exists.',
+            'name.max' => 'Equipment name cannot be longer than 255 characters.',
         ];
     }
 

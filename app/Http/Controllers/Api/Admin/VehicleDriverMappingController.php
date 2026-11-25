@@ -105,7 +105,7 @@ class VehicleDriverMappingController extends Controller
             // Verify if the employee actually has the 'driver' designation/role
             $driver = Employee::where('id', $driverId)
                 ->whereHas('designation', function ($q) {
-                    $q->where('slug', 'driver');
+                    $q->whereIn('slug', \App\Enums\RoleSlug::DRIVERS);
                 })->first();
 
             if (!$driver) {
@@ -266,7 +266,7 @@ class VehicleDriverMappingController extends Controller
 
             $query = Employee::where('is_active', 1)
                 ->whereHas('designation', function ($q) {
-                    $q->where('slug', 'driver');
+                    $q->whereIn('slug', \App\Enums\RoleSlug::DRIVERS);
                 });
 
             if ($search) {

@@ -74,7 +74,7 @@ class UpdateDelayRequest extends FormRequest
             'remarks' => 'nullable|string',
             'delay_ref_no' => 'sometimes|string',
             'shift_plan_id' => 'sometimes|integer',
-            'shift_id' => 'sometimes|integer|exists:shifts,id',
+            'shift_id' => ['sometimes', 'integer', 'exists:shifts,id', new \App\Rules\ActiveShift($this->currentShiftId())],
             'delay_log_date' => 'sometimes|date',
             'shift_date' => 'sometimes|date_format:Y-m-d',
             'shift_name' => 'sometimes|string',
@@ -172,5 +172,19 @@ class UpdateDelayRequest extends FormRequest
                 'errors' => $validator->errors()
             ], 422)
         );
+    }
+
+    /**
+     * The shift the record is saved on now, which may stay even if inactive.
+     */
+    private function currentShiftId()
+    {
+        $record = $this->route('delay') ?: $this->route('id');
+
+        if (!is_object($record)) {
+            $record = \App\Models\Delay::find($record);
+        }
+
+        return $record ? $record->shift_id : null;
     }
 }

@@ -2,6 +2,7 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use App\Enums\RoleSlug;
 
 /*
 |--------------------------------------------------------------------------
@@ -24,11 +25,10 @@ use App\Http\Controllers\Api\Admin\LeaveBalanceController;
 use App\Http\Controllers\Api\Admin\HolidayController;
 
 use App\Http\Controllers\Api\Admin\TrainingTypeController;
+use App\Http\Controllers\Api\Admin\TrainingController;
 
 use App\Http\Controllers\Api\Admin\AttendanceController;
 use App\Http\Controllers\Api\Admin\AttendanceController as AdminAttendanceController;
-use App\Http\Controllers\RecoveryUploadController;
-use App\Http\Controllers\RecoveryController;
 
 use App\Http\Controllers\Api\StateController;
 use App\Http\Controllers\Api\CityController;
@@ -38,11 +38,16 @@ use App\Http\Controllers\Api\Admin\CategoryController;
 use App\Http\Controllers\Api\Admin\SubCategoryController;
 use App\Http\Controllers\Api\Admin\ProductController;
 use App\Http\Controllers\Api\Admin\InventoryController;
+use App\Http\Controllers\Api\Admin\InventoryAlertController;
+use App\Http\Controllers\Api\Admin\StoreController;
 use App\Http\Controllers\Api\Admin\PenaltyController;
 use App\Http\Controllers\Api\Admin\PayrollController;
 use App\Http\Controllers\Api\Admin\EmployeePayrollController;
+use App\Http\Controllers\Api\Admin\EmployeeWageController;
+use App\Http\Controllers\Api\Admin\WageRegisterController;
 use App\Http\Controllers\Api\Admin\EquipmentController;
 use App\Http\Controllers\Api\Admin\EquipmentNameController;
+use App\Http\Controllers\Api\Admin\EquipmentModelNumberController;
 use App\Http\Controllers\Api\Admin\IncidentTypeController;
 use App\Http\Controllers\Api\Admin\IncidentController;
 use App\Http\Controllers\Api\Admin\EquipmentAllocationController;
@@ -57,7 +62,11 @@ use App\Http\Controllers\Api\Admin\SitePointController;
 use App\Http\Controllers\Api\Admin\DispatchTripController;
 use App\Http\Controllers\Api\Admin\ShiftClosureController;
 use App\Http\Controllers\Api\Admin\DashboardController;
+use App\Http\Controllers\Api\Admin\FleetTelematicsDashboardController;
 use App\Http\Controllers\Api\Admin\ServiceRecordController;
+
+use App\Http\Controllers\RecoveryUploadController;
+use App\Http\Controllers\RecoveryController;
 
 /*
 |--------------------------------------------------------------------------
@@ -157,12 +166,47 @@ Route::prefix('v1')->group(function () {
             Route::get('delay/critical-delays', [DashboardController::class, 'criticalDelays']);
             Route::get('delay/recent-delays', [DashboardController::class, 'recentDelays']);
             Route::get('dispatch/recent-trips', [DashboardController::class, 'recentTrips']);
+            Route::get('inventory/below-min-level', [DashboardController::class, 'belowMinLevelProducts']);
+            Route::get('inventory/out-of-stock', [DashboardController::class, 'outOfStockProducts']);
+
+            /*
+            | Live fleet telematics (VECV rFMS).
+            |
+            | The three GETs read stored readings only and never call VECV, so
+            | they are cheap to poll. refresh() is the button: it calls the
+            | vendor, stores the snapshot and returns the rebuilt summary.
+            | Throttled because VECV allows one request per minute per key -
+            | the sync itself degrades to a 429 beyond that, this just keeps
+            | pointless calls off the wire.
+            */
+            Route::prefix('fleet')->group(function () {
+                Route::get('summary', [FleetTelematicsDashboardController::class, 'summary']);
+                Route::get('vehicles', [FleetTelematicsDashboardController::class, 'vehicles']);
+                // The whole fuel panel - donut plus lowest-fuel list - from one
+                // snapshot, so the two halves cannot disagree.
+                Route::get('fuel', [FleetTelematicsDashboardController::class, 'fuel']);
+
+                // The operations row - operational split plus safety events.
+                Route::get('operations', [FleetTelematicsDashboardController::class, 'operations']);
+
+                // Alerts panel - severity tiles, breakdowns and the Recent
+                // Alerts list, from the VECV alert log.
+                Route::get('alerts', [FleetTelematicsDashboardController::class, 'alerts']);
+                Route::get('lowest-fuel', [FleetTelematicsDashboardController::class, 'lowestFuel']);
+                // One feed per call - the caller loops until data.complete is
+                // true, waiting data.next_in_seconds between calls. See the
+                // controller for why it cannot be done in a single request.
+                Route::post('refresh', [FleetTelematicsDashboardController::class, 'refresh'])
+                    ->middleware('throttle:20,1');
+                Route::get('refresh-status', [FleetTelematicsDashboardController::class, 'refreshStatus']);
+            });
         });
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/change-password', [AuthController::class, 'changePassword']);
         Route::get('incident-types', [IncidentTypeController::class, 'publicIndex']);
         Route::get('breakdown-types', [BreakdownTypeController::class, 'publicIndex']);
         Route::get('delay-categories', [DelayCategoryController::class, 'publicIndex']);
+        Route::get('training-types', [TrainingTypeController::class, 'publicIndex']);
         Route::get('shifts', [ShiftController::class, 'getPublicShifts']);
         Route::get('relays', [RelayController::class, 'getPublicRelays']);
         Route::get('employees', [EmployeeController::class, 'getPublicEmployees']);
@@ -177,8 +221,17 @@ Route::prefix('v1')->group(function () {
         Route::get('machine-categories', [EquipmentController::class, 'listCategories']);
         Route::get('active-machines', [EquipmentNameController::class, 'getActiveMachines']);
         Route::get('available-products', [InventoryController::class, 'getAvailableProducts']);
+        // Every product in inventory regardless of stock level, for filter dropdowns.
+        Route::get('inventory-products', [InventoryController::class, 'getInventoryProducts']);
+        Route::get('stores', [StoreController::class, 'publicIndex']);
+        // What a chosen store carries, low stock included — the picker shows
+        // those greyed out rather than pretending the store has no such
+        // product. ?only_available=true drops them.
+        Route::get('stores/{store_id}/products', [InventoryController::class, 'getStoreProducts']);
         Route::get('open-breakdowns', [BreakdownController::class, 'getOpenBreakdowns']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
+        // Model dropdown on the equipment name form; ?equipment_id= narrows to a category.
+        Route::get('equipment-model-numbers', [EquipmentModelNumberController::class, 'publicIndex']);
         Route::get('shift-plans/{shift_id}/machines', [EquipmentAllocationController::class, 'getPublicMachines']);
         Route::get('search-employee/search={search}', [EmployeeController::class, 'searchEmployeeByName']);
 
@@ -193,7 +246,7 @@ Route::prefix('v1')->group(function () {
         Route::get('dispatch/dumper-summary', [DispatchTripController::class, 'dumperSummary']);
         Route::get('dispatch/fleet-performance', [DispatchTripController::class, 'fleetPerformance']);
 
-        Route::middleware(['role:super-admin,supervisor,site-incharge'])->group(function () {
+        Route::middleware([RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS, RoleSlug::SITE_INCHARGES)])->group(function () {
             Route::post('dispatch/trips/import', [DispatchTripController::class, 'import']);
             Route::post('dispatch/trips', [DispatchTripController::class, 'store']);
             Route::put('dispatch/trips/{id}', [DispatchTripController::class, 'update']);
@@ -201,6 +254,11 @@ Route::prefix('v1')->group(function () {
 
         // ADMIN ONLY
         Route::middleware(['role:super-admin'])->prefix('admin')->group(function () {
+
+            // Employee record joined with its employee_payrolls configuration.
+            // Registered before the resource so it is not read as employees/{id}.
+            Route::get('employees/details', [EmployeeController::class, 'detailIndex']);
+            Route::get('employees/details/{id}', [EmployeeController::class, 'detailShow']);
 
             Route::apiResource('employees', EmployeeController::class);
 
@@ -237,6 +295,7 @@ Route::prefix('v1')->group(function () {
             // Generated Form E registers — frozen snapshots, never recomputed.
             // Declared before the {id} route so "reports" is not read as an id.
             Route::post('leave-register/generate', [LeaveBalanceController::class, 'generate']);
+            Route::get('leave-register/export', [LeaveBalanceController::class, 'export']);
             Route::get('leave-register/reports', [LeaveBalanceController::class, 'reports']);
             Route::get('leave-register/reports/{id}', [LeaveBalanceController::class, 'reportShow']);
             Route::delete('leave-register/reports/{id}', [LeaveBalanceController::class, 'reportDestroy']);
@@ -246,10 +305,16 @@ Route::prefix('v1')->group(function () {
             Route::apiResource('trainingtype', TrainingTypeController::class);
 
             Route::patch('trainingtype/{id}/status', [TrainingTypeController::class, 'toggleStatus']);
+
+            // Scheduled trainings. The status route is declared before the
+            // resource so it is not read as trainings/{id}.
+            Route::patch('trainings/{id}/status', [TrainingController::class, 'toggleStatus']);
+            Route::apiResource('trainings', TrainingController::class);
             Route::post('attendance/bulk-upload', [AttendanceController::class, 'bulkUpload']);
             Route::patch('attendance/bulk-status', [AttendanceController::class, 'bulkUpdateStatus']);
             Route::get('attendance/employee/{employee_id}', [AttendanceController::class, 'getEmployeeAttendanceDetails']);
             Route::get('attendance/register', [AttendanceController::class, 'attendanceRegister']);
+            Route::get('attendance/register/export', [AttendanceController::class, 'exportAttendanceRegister']);
             Route::post('attendance/correction', [AttendanceController::class, 'update']);
 
             Route::apiResource('attendance', AttendanceController::class);
@@ -260,12 +325,63 @@ Route::prefix('v1')->group(function () {
             Route::post('leaves/{id}/approve-reject', [LeaveController::class, 'approveReject']);
             Route::apiResource('leaves', LeaveController::class);
 
+            /*
+            |--------------------------------------------------------------------------
+            | Form B wage rate master (minimum basic / DA / OT per skill category)
+            |--------------------------------------------------------------------------
+            | The named routes come first so "matrix" and "employee" are not read
+            | as an id by the resource routes below.
+            */
+            Route::get('employee-wages/matrix', [EmployeeWageController::class, 'matrix']);
+            Route::get('employee-wages/employee/{employee_id}', [EmployeeWageController::class, 'forEmployee']);
+            // All four categories for one revision date, in one transaction.
+            Route::post('employee-wages/bulk', [EmployeeWageController::class, 'bulkStore']);
+            Route::patch('employee-wages/{id}/status', [EmployeeWageController::class, 'toggleStatus']);
+            Route::apiResource('employee-wages', EmployeeWageController::class);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Form B wage register — frozen monthly snapshots, never recomputed
+            |--------------------------------------------------------------------------
+            | "preview" and "generate" are declared before {id} so they are not
+            | read as a report id.
+            */
+            Route::get('wage-register/reports', [WageRegisterController::class, 'index']);
+            Route::get('wage-register/check', [WageRegisterController::class, 'check']);
+            Route::get('wage-register/preview', [WageRegisterController::class, 'preview']);
+            Route::post('wage-register/generate', [WageRegisterController::class, 'generate']);
+            Route::get('wage-register/export', [WageRegisterController::class, 'export']);
+
+            // The Salary Overview listing itself as a sheet — month totals for a
+            // year, no employee rows. Declared before {id} so "export" is not
+            // read as a report id.
+            Route::get('wage-register/reports/export', [WageRegisterController::class, 'exportSummary']);
+
+            // Edited sheets are staged and validated only — nothing here writes
+            // back to employee_payrolls, payrolls or the wage master.
+            Route::post('wage-register/import', [WageRegisterController::class, 'import']);
+            Route::get('wage-register/import', [WageRegisterController::class, 'importIndex']);
+            Route::patch('wage-register/import/{uploadId}/rows/{excelRow}', [WageRegisterController::class, 'updateImportRow']);
+            Route::delete('wage-register/import/{uploadId}/rows/{excelRow}', [WageRegisterController::class, 'deleteImportRow']);
+            Route::post('wage-register/import/{uploadId}/submit', [WageRegisterController::class, 'submitImport']);
+            Route::get('wage-register/import/{id}', [WageRegisterController::class, 'stagedImport']);
+            Route::delete('wage-register/import/{id}', [WageRegisterController::class, 'discardImport']);
+            // The month detail screen's two downloads: its employee rows, and
+            // the month summarised on a page.
+            Route::get('wage-register/reports/{id}/export', [WageRegisterController::class, 'exportReport']);
+            Route::get('wage-register/reports/{id}/export-summary', [WageRegisterController::class, 'exportReportSummary']);
+
+            Route::get('wage-register/reports/{id}', [WageRegisterController::class, 'show']);
+            Route::delete('wage-register/reports/{id}', [WageRegisterController::class, 'destroy']);
+
             Route::apiResource('employee-payrolls', EmployeePayrollController::class);
             Route::apiResource('equipments', EquipmentController::class);
 
             Route::patch('equipments/{id}/status', [EquipmentController::class, 'toggleStatus']);
             Route::apiResource('equipment-names', EquipmentNameController::class);
             Route::patch('equipment-names/{id}/status', [EquipmentNameController::class, 'toggleStatus']);
+            Route::apiResource('equipment-model-numbers', EquipmentModelNumberController::class);
+            Route::patch('equipment-model-numbers/{id}/status', [EquipmentModelNumberController::class, 'toggleStatus']);
             Route::apiResource('breakdown-types', BreakdownTypeController::class);
             Route::patch('breakdown-types/{id}/status', [BreakdownTypeController::class, 'toggleStatus']);
             Route::apiResource('delay-categories', DelayCategoryController::class);
@@ -297,7 +413,7 @@ Route::prefix('v1')->group(function () {
 
     });
 
-    Route::middleware(['auth:sanctum', 'role:super-admin,supervisor'])->prefix('admin')
+    Route::middleware(['auth:sanctum', RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS)])->prefix('admin')
         ->group(function () {
 
 
@@ -320,152 +436,6 @@ Route::prefix('v1')->group(function () {
 
                 Route::delete('{id}', [DepartmentsController::class, 'destroy']);
             });
-            Route::prefix('recoveries1')->group(function () {
-
-                // Upload Excel
-                Route::post(
-                    '/bulk-upload',
-                    [RecoveryUploadController::class, 'upload']
-                );
-
-                // Upload list - Screenshot 1 / Register
-                Route::get(
-                    '/uploads',
-                    [RecoveryUploadController::class, 'uploads']
-                );
-
-                // Preview uploaded Excel
-                Route::get(
-                    '/uploads/{upload}/preview',
-                    [RecoveryUploadController::class, 'preview']
-                );
-                // Edit one field of one row
-                Route::put(
-                    '/uploads/rows/{row}',
-                    [RecoveryUploadController::class, 'updateRow']
-                );
-
-                // Delete invalid row
-                Route::delete(
-                    '/uploads/rows/{row}',
-                    [RecoveryUploadController::class, 'deleteRow']
-                );
-
-                // Submit final data
-                Route::post(
-                    '/uploads/{upload}/submit',
-                    [RecoveryUploadController::class, 'submit']
-                );
-
-
-                // Final Recovery Register
-                Route::get(
-                    '/',
-                    [RecoveryController::class, 'index']
-                );
-
-                // Employee recovery list
-                Route::get(
-                    '/{recovery}/details',
-                    [RecoveryController::class, 'details']
-                );
-            });
-            Route::prefix('recoveries')->group(function () {
-
-                /*
-     * =====================================================
-     * UPLOAD / STAGING
-     * =====================================================
-     */
-
-                // Upload Excel
-                Route::post(
-                    '/bulk-upload',
-                    [RecoveryUploadController::class, 'upload']
-                );
-
-                // Upload history
-
-
-                // Preview staging upload
-                Route::get(
-                    '/uploads/{upload}/preview',
-                    [RecoveryUploadController::class, 'preview']
-                );
-
-                // Edit staging row
-                Route::put(
-                    '/uploads/rows/{row}',
-                    [RecoveryUploadController::class, 'updateRow']
-                );
-
-                // Delete staging row
-                Route::delete(
-                    '/uploads/rows/{row}',
-                    [RecoveryUploadController::class, 'deleteRow']
-                );
-
-                // FINAL SUBMIT
-                Route::post(
-                    '/uploads/{upload}/submit',
-                    [RecoveryUploadController::class, 'submit']
-                );
-
-
-                /*
-     * =====================================================
-     * FINAL RECOVERIES
-     * =====================================================
-     */
-
-                // Final recovery register
-                /*
-     * =====================================================
-     * LEVEL 1
-     * Successful recovery documents
-     * =====================================================
-     *
-     * GET /api/v1/admin/recoveries
-     */
-                Route::get(
-                    '/',
-                    [RecoveryController::class, 'index']
-                );
-
-
-                /*
-     * =====================================================
-     * LEVEL 2
-     * Recovery rows belonging to one document
-     * =====================================================
-     *
-     * GET /api/v1/admin/recoveries/uploads/1/rows
-     */
-                Route::get(
-                    '/uploads/{upload}/rows',
-                    [RecoveryController::class, 'uploadRows']
-                );
-
-
-                /*
-     * =====================================================
-     * LEVEL 3
-     * Individual recovery details
-     * =====================================================
-     *
-     * GET /api/v1/admin/recoveries/15/details
-     */
-                Route::get(
-                    '/{recovery}/details',
-                    [RecoveryController::class, 'details']
-                );
-                Route::get(
-                    '/recovery-uploads',
-                    [RecoveryUploadController::class, 'uploads']
-                );
-            });
-
-
 
             /*
             |--------------------------------------------------------------------------
@@ -503,18 +473,58 @@ Route::prefix('v1')->group(function () {
             |--------------------------------------------------------------------------
             | Inventory Management
             |--------------------------------------------------------------------------
+            | Stock, scoped to a store. Every row belongs to one, so store_id is
+            | required to add or assign; on the reads it is an optional filter
+            | and leaving it off spans every store. Bulk upload names the store
+            | per sheet row instead, so one file can stock several stores, and
+            | only falls back to the request field for rows that name none.
+            |
+            | Literal segments must stay above {id} or they resolve as one.
             */
 
             Route::prefix('inventories')->group(function () {
                 Route::get('/', [InventoryController::class, 'index']);
                 Route::post('add', [InventoryController::class, 'store']);
                 Route::post('assign', [InventoryController::class, 'assign']);
-                Route::post('update-quantity/{id}', [InventoryController::class, 'updateQuantity']);
                 Route::post('bulk-upload', [InventoryController::class, 'bulkUpload']);
-                Route::get('{productId}/logs', [InventoryController::class, 'logs']);
                 Route::get('assignments', [InventoryController::class, 'assignments']);
+                Route::get('export', [InventoryController::class, 'export']);
+                Route::get('{id}/logs', [InventoryController::class, 'logs']);
                 Route::get('{id}', [InventoryController::class, 'show']);
+                Route::delete('{id}', [InventoryController::class, 'destroy']);
             });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Inventory Alerts
+            |--------------------------------------------------------------------------
+            | Low stock, out of stock, back in stock, stock added/replenished
+            | and min stock changes. Written as stock moves; these routes only
+            | read them and track read state. Each alert carries a `redirect`
+            | naming the inventory filters (product_id, store_id) to open.
+            |
+            | Literal segments must stay above {id} or they resolve as one.
+            */
+
+            Route::prefix('inventory-alerts')->group(function () {
+                Route::get('/', [InventoryAlertController::class, 'index']);
+                Route::get('summary', [InventoryAlertController::class, 'summary']);
+                Route::post('read-all', [InventoryAlertController::class, 'markAllRead']);
+                Route::post('{id}/read', [InventoryAlertController::class, 'markRead']);
+                Route::get('{id}', [InventoryAlertController::class, 'show']);
+            });
+
+            /*
+            |--------------------------------------------------------------------------
+            | Stores
+            |--------------------------------------------------------------------------
+            | Every store stock is held at, this mine's own included. The stock
+            | itself lives in the inventories group above; this is the master only.
+            */
+
+            Route::apiResource('stores', StoreController::class);
+            Route::post('stores/{id}', [StoreController::class, 'update']);
+            Route::patch('stores/{id}/status', [StoreController::class, 'toggleStatus']);
 
             /*
             |--------------------------------------------------------------------------
@@ -555,13 +565,14 @@ Route::prefix('v1')->group(function () {
             | Penalty Management
             |--------------------------------------------------------------------------
             */
+            // Static paths must stay above apiResource, or penalties/{penalty}
+            // captures them and tries to load a penalty named "export".
+            Route::post('penalties/preview-schedule', [PenaltyController::class, 'previewSchedule']);
+            Route::get('penalties/recovery-types', [PenaltyController::class, 'recoveryTypes']);
+            Route::get('penalties/export', [PenaltyController::class, 'export']);
             Route::post('penalties/bulk', [PenaltyController::class, 'storeBulk']);
             Route::post('penalties/bulk-upload', [PenaltyController::class, 'bulkUpload']);
             Route::apiResource('penalties', PenaltyController::class);
-            Route::get(
-                'penalties/export',
-                [PenaltyController::class, 'export']
-            );
 
             /*
             |--------------------------------------------------------------------------
@@ -587,7 +598,7 @@ Route::prefix('v1')->group(function () {
 
             // KEEP YOUR EXISTING VEHICLE ROUTES HERE
             // NO CHANGES REQUIRED
-
+    
             /*
             |--------------------------------------------------------------------------
             | Shift Plan/Equipment Allocation/Employee deployment
@@ -665,18 +676,112 @@ Route::prefix('v1')->group(function () {
             */
             Route::get('service-records/machine/{machine}/history', [ServiceRecordController::class, 'history']);
             Route::get('service-records/{serviceRecord}/audit-trail', [ServiceRecordController::class, 'auditTrail']);
+            // Images are added through the store/update payload but removed one
+            // at a time, so the edit form can free up a slot without resubmitting.
+            Route::delete('service-records/{serviceRecord}/attachments/{attachment}', [ServiceRecordController::class, 'destroyAttachment']);
             Route::apiResource('service-records', ServiceRecordController::class);
+
+
+            Route::prefix('recoveries')->group(function () {
+ 
+           
+ 
+                // Upload Excel
+                Route::post(
+                    '/bulk-upload',
+                    [RecoveryUploadController::class, 'upload']
+                );
+ 
+                // Upload history
+ 
+ 
+                // Preview staging upload
+                Route::get(
+                    '/uploads/{upload}/preview',
+                    [RecoveryUploadController::class, 'preview']
+                );
+ 
+                // Edit staging row
+                Route::put(
+                    '/uploads/rows/{row}',
+                    [RecoveryUploadController::class, 'updateRow']
+                );
+ 
+                // Delete staging row
+                Route::delete(
+                    '/uploads/rows/{row}',
+                    [RecoveryUploadController::class, 'deleteRow']
+                );
+ 
+                // FINAL SUBMIT
+                Route::post(
+                    '/uploads/{upload}/submit',
+                    [RecoveryUploadController::class, 'submit']
+                );
+ 
+ 
+                /*
+
+ 
+                // Final recovery register
+                /*
+     * =====================================================
+     * LEVEL 1
+     * Successful recovery documents
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries
+     */
+                Route::get(
+                    '/',
+                    [RecoveryController::class, 'index']
+                );
+ 
+ 
+                /*
+     * =====================================================
+     * LEVEL 2
+     * Recovery rows belonging to one document
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries/uploads/1/rows
+     */
+                Route::get(
+                    '/uploads/{upload}/rows',
+                    [RecoveryController::class, 'uploadRows']
+                );
+ 
+ 
+                /*
+     * =====================================================
+     * LEVEL 3
+     * Individual recovery details
+     * =====================================================
+     *
+     * GET /api/v1/admin/recoveries/15/details
+     */
+                Route::get(
+                    '/{recovery}/details',
+                    [RecoveryController::class, 'details']
+                );
+                Route::get(
+                    '/recovery-uploads',
+                    [RecoveryUploadController::class, 'uploads']
+                );
+            });
+
         });
     /*
     |--------------------------------------------------------------------------
     | Delay Analysis Management
     |--------------------------------------------------------------------------
     */
-    Route::middleware(['auth:sanctum', 'role:super-admin,supervisor,site_incharge'])->prefix('admin/delays')->group(function () {
+    Route::middleware(['auth:sanctum', RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS, RoleSlug::SITE_INCHARGES)])->prefix('admin/delays')->group(function () {
         Route::get('/', [DelayController::class, 'index']);
         Route::post('import', [DelayController::class, 'import']);
         Route::get('{id}', [DelayController::class, 'show']);
         Route::post('/', [DelayController::class, 'store']);
         Route::put('{id}', [DelayController::class, 'update']);
     });
+
 });

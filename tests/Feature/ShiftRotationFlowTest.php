@@ -59,6 +59,25 @@ class ShiftRotationFlowTest extends TestCase
         $relayA = \App\Models\Relay::create(['name' => 'Relay A', 'is_rotating' => true, 'is_active' => true]);
         $relayB = \App\Models\Relay::create(['name' => 'Relay B', 'is_rotating' => true, 'is_active' => true]);
 
+        // Each rotating relay owns one shift for the week. Moving an employee between
+        // shifts moves them between these relays, so both shifts need an owner.
+        $weekStart = now()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
+        $weekEnd = now()->startOfWeek(\Carbon\Carbon::MONDAY)->addDays(6)->toDateString();
+
+        \App\Models\RelayShiftMapping::create([
+            'week_start_date' => $weekStart,
+            'week_end_date' => $weekEnd,
+            'relay_id' => $relayA->id,
+            'shift_id' => $this->relayShift1->id,
+        ]);
+
+        \App\Models\RelayShiftMapping::create([
+            'week_start_date' => $weekStart,
+            'week_end_date' => $weekEnd,
+            'relay_id' => $relayB->id,
+            'shift_id' => $this->relayShift2->id,
+        ]);
+
         // 3. Create employees
         $this->generalEmployee = Employee::create([
             'employee_code' => 'EMPGEN01',

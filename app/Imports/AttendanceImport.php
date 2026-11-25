@@ -5,6 +5,8 @@ namespace App\Imports;
 use App\Models\AttendanceProcessed;
 use App\Models\Employee;
 use App\Models\EmployeePayroll;
+use App\Models\LeaveType;
+use App\Services\AttendanceLeaveSync;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
@@ -18,6 +20,12 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
     {
         $errors = [];
         $data = [];
+
+        // Rest days accepted so far in this sheet, keyed employee|YYYY-MM. The
+        // rows are not inserted until step 2, so the monthly cap has to count
+        // them itself or one upload could hand an employee a whole month of
+        // rest days.
+        $pendingRestDays = [];
 
         /*
         |--------------------------------------------------------------------------
@@ -65,21 +73,123 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
             | CLEAN STATUS + TIME
             |--------------------------------------------------------------------------
             */
-            $status = strtolower(trim((string) ($row['status'] ?? 'present')));
+            $statusRaw = trim((string) ($row['status'] ?? ''));
+
+            $status = strtolower($statusRaw);
             $status = str_replace(['-', '_'], ' ', $status);
             $status = preg_replace('/\s+/', ' ', $status);
 
+            // A blank status column still means an ordinary working day, as it
+            // always has.
+            if ($status === '') {
+                $status = 'present';
+            }
+
+            // Keys are matched after the normalisation above, which folds case
+            // and turns '-' and '_' into single spaces: 'Half-Day', 'half_day'
+            // and 'HALF DAY' all arrive here as 'half day'. The shorthands are
+            // the ones site clerks actually write into the sheet.
             $statusMap = [
-                'present'   => 'present',
-                'absent'    => 'absent',
-                'half day'  => 'half_day',
-                'half_day'  => 'half_day',
-                'leave'     => 'leave',
-                'rest day'  => 'rest_day',
-                'rest_day'  => 'rest_day',
+                'present'    => 'present',
+                'p'          => 'present',
+
+                'absent'     => 'absent',
+                'a'          => 'absent',
+
+                'half day'   => 'half_day',
+                'halfday'    => 'half_day',
+                'half'       => 'half_day',
+                'hd'         => 'half_day',
+
+                'leave'      => 'leave',
+                'l'          => 'leave',
+
+                'rest day'   => 'rest_day',
+                'restday'    => 'rest_day',
+                'rest'       => 'rest_day',
+                'weekly off' => 'rest_day',
+                'week off'   => 'rest_day',
+                'weekoff'    => 'rest_day',
+                'off'        => 'rest_day',
+                'wo'         => 'rest_day',
+                'w/o'        => 'rest_day',
             ];
 
-            $status = $statusMap[$status] ?? $status;
+            // An unrecognised status used to fall straight through to the
+            // 'present' default of the insert switch below, so a typo or an
+            // unknown shorthand became a paid working day with no check-in and
+            // no error. Reject the row instead.
+            if (!isset($statusMap[$status])) {
+                $errors["row_{$rowNumber}"][] =
+                    "Unknown status \"{$statusRaw}\". Use one of: Present, Absent, Half Day, Leave, Rest Day.";
+                continue;
+            }
+
+            $status = $statusMap[$status];
+
+            /*
+            |--------------------------------------------------------------------------
+            | LEAVE TYPE (only for 'Leave' rows)
+            |--------------------------------------------------------------------------
+            |
+            | A 'Leave' day has to be booked against a Form E block so the leave
+            | register and payroll can see it. The 'leave_type' column carries
+            | the block name; a blank or unknown value rejects the row rather
+            | than saving a day that counts toward nothing.
+            |
+            | 'Rest Day' as a status needs no column. 'Leave' + a Compensatory
+            | Rest type is accepted too and folded to a rest day — the two
+            | spellings mean the same thing.
+            */
+            $leaveTypeId = null;
+
+            if ($status === 'leave') {
+                $leaveTypeRaw = trim((string) ($row['leave_type'] ?? ''));
+
+                if ($leaveTypeRaw === '') {
+                    $errors["row_{$rowNumber}"][] =
+                        'Leave type is required for a Leave row. '
+                        . 'Use one of: ' . $this->leaveTypeNameList() . ', Compensatory Rest.';
+                    continue;
+                }
+
+                $leaveType = $this->resolveLeaveType($leaveTypeRaw);
+
+                if (!$leaveType) {
+                    $errors["row_{$rowNumber}"][] =
+                        "Unknown leave type \"{$leaveTypeRaw}\". Use one of: "
+                        . $this->leaveTypeNameList() . ', Compensatory Rest.';
+                    continue;
+                }
+
+                $leaveTypeId = $leaveType->id;
+            }
+
+            // 'Leave' + Compensatory Rest is really a rest day: store it as one,
+            // let it draw on the rest-day cap, and drop the leave type.
+            [$status, $leaveTypeId] = AttendanceLeaveSync::normalize($status, $leaveTypeId);
+
+            // Quota / cap / clash gates for anything that becomes a Leave row —
+            // the same checks the Leave apply form runs.
+            if (in_array($status, AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                try {
+                    $syncType = AttendanceLeaveSync::resolveLeaveType($status, $leaveTypeId);
+
+                    $blockMessage = AttendanceLeaveSync::blockMessage(
+                        $employee->id,
+                        $date->format('Y-m-d'),
+                        $syncType
+                    );
+
+                    if ($blockMessage) {
+                        $errors["row_{$rowNumber}"][] = $blockMessage;
+                        continue;
+                    }
+                } catch (\InvalidArgumentException $e) {
+                    $errors["row_{$rowNumber}"][] = $e->getMessage();
+                    continue;
+                }
+            }
 
             $checkInRaw = trim((string) ($row['check_in'] ?? ''));
             $checkOutRaw = trim((string) ($row['check_out'] ?? ''));
@@ -100,6 +210,29 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 $errors["row_{$rowNumber}"][] =
                     "Attendance already exists for {$employee->employee_code}.";
                 continue;
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | REST DAY MONTHLY CAP
+            |--------------------------------------------------------------------------
+            */
+            if ($status === 'rest_day') {
+                $monthKey = $employee->id . '|' . $date->format('Y-m');
+
+                $capMessage = \App\Services\LeaveBalanceService::restDayCapMessage(
+                    $employee->id,
+                    $date->format('Y-m-d'),
+                    [],
+                    $pendingRestDays[$monthKey] ?? 0
+                );
+
+                if ($capMessage) {
+                    $errors["row_{$rowNumber}"][] = $capMessage;
+                    continue;
+                }
+
+                $pendingRestDays[$monthKey] = ($pendingRestDays[$monthKey] ?? 0) + 1;
             }
 
             /*
@@ -151,9 +284,36 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 }
             }
 
-            if ($checkInTime && $checkOutTime && $checkOutTime->lessThanOrEqualTo($checkInTime)) {
-                $errors["row_{$rowNumber}"][] = "Check-out time must be after check-in time.";
-                continue;
+            /*
+            |--------------------------------------------------------------------------
+            | NIGHT SHIFT: ROLL CHECK-OUT PAST MIDNIGHT
+            |--------------------------------------------------------------------------
+            |
+            | The sheet carries one date per row, so parseTime() pins both times
+            | to it. A 22:00 to 06:00 night shift therefore arrives with a
+            | check-out that sits before its own check-in; the check-out really
+            | belongs to the next day.
+            */
+            if ($checkInTime && $checkOutTime) {
+
+                if ($checkOutTime->equalTo($checkInTime)) {
+                    $errors["row_{$rowNumber}"][] = "Check-out time cannot equal check-in time.";
+                    continue;
+                }
+
+                $checkOutTime = \App\Services\ShiftRosterResolver::resolveCheckOut(
+                    $checkInTime,
+                    $checkOutTime
+                );
+
+                $spanHours = $checkInTime->diffInMinutes($checkOutTime) / 60;
+
+                if ($spanHours > \App\Services\ShiftRosterResolver::MAX_ATTENDANCE_SPAN_HOURS) {
+                    $errors["row_{$rowNumber}"][] =
+                        "Check-in to check-out spans " . round($spanHours, 2) . " hours, which exceeds the "
+                        . \App\Services\ShiftRosterResolver::MAX_ATTENDANCE_SPAN_HOURS . " hour limit.";
+                    continue;
+                }
             }
 
             /*
@@ -167,6 +327,7 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 'payroll' => $payroll,
                 'date' => $date,
                 'status' => $status,
+                'leave_type_id' => $leaveTypeId,
                 'check_in' => $checkInTime,
                 'check_out' => $checkOutTime,
                 'remarks' => $row['remarks'] ?? null,
@@ -203,30 +364,16 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 );
             }
 
-            switch ($status) {
-                case 'present':
-                    $attendanceStatus = 'present';
-                    break;
-                case 'absent':
-                    $attendanceStatus = 'absent';
-                    break;
-                case 'half_day':
-                    $attendanceStatus = 'half_day';
-                    break;
-                case 'leave':
-                    $attendanceStatus = 'leave';
-                    break;
-                case 'rest_day':
-                    $attendanceStatus = 'rest_day';
-                    break;
-                default:
-                    $attendanceStatus = 'present';
-                    break;
-            }
+            // Already one of the attendance_status enum values: step 1 rejects
+            // every row whose status the map does not recognise.
+            $attendanceStatus = $status;
 
             AttendanceProcessed::create([
                 'employee_id' => $employee->id,
                 'date' => $date->format('Y-m-d'),
+                // Imported rows carry no location, so the day inherits the
+                // worker's standing assignment; a correction can override it.
+                'place_of_work' => $employee->place_of_employment,
                 'check_in' => $checkIn ? $checkIn->toDateTimeString() : null,
                 'check_out' => $checkOut ? $checkOut->toDateTimeString() : null,
                 'working_hours' => $workingHours,
@@ -235,7 +382,45 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
                 'attendance_status' => $attendanceStatus,
                 'remarks' => $item['remarks'],
             ]);
+
+            // A leave/rest_day row also gets its backing Leave record so the
+            // Form E register and payroll read one source.
+            if (in_array($attendanceStatus, AttendanceLeaveSync::LEAVE_STATUSES, true)) {
+                AttendanceLeaveSync::sync(
+                    $employee->id,
+                    $date->format('Y-m-d'),
+                    $attendanceStatus,
+                    $item['leave_type_id']
+                );
+            } else {
+                // A worked day cancels any leave that covered it.
+                AttendanceLeaveSync::dayLeftLeave($employee->id, $date->format('Y-m-d'), $attendanceStatus);
+            }
         }
+    }
+
+    /**
+     * Match a leave type named in the sheet to a Form E block. Accepts the block
+     * name ('Earned Leave'), the register_group key ('earned') or its label.
+     */
+    private function resolveLeaveType(string $raw): ?LeaveType
+    {
+        $needle = strtolower(trim($raw));
+
+        return LeaveType::onRegister()->get()->first(function (LeaveType $type) use ($needle) {
+            return $needle === strtolower((string) $type->name)
+                || $needle === strtolower((string) $type->register_group)
+                || $needle === strtolower((string) $type->register_group_label);
+        });
+    }
+
+    /** Human list of the leave blocks a sheet may name, for error messages. */
+    private function leaveTypeNameList(): string
+    {
+        return LeaveType::onRegister()
+            ->where('register_group', '!=', 'compensatory_rest')
+            ->pluck('name')
+            ->implode(', ');
     }
 
     public function rules(): array
@@ -246,6 +431,7 @@ class AttendanceImport implements ToCollection, WithHeadingRow, WithValidation
             '*.check_in' => ['nullable'],
             '*.check_out' => ['nullable'],
             '*.status' => ['nullable'],
+            '*.leave_type' => ['nullable'],
             '*.remarks' => ['nullable'],
         ];
     }

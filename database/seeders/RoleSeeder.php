@@ -10,6 +10,8 @@ class RoleSeeder extends Seeder
 {
     public function run()
     {
+        // Matched on slug only and never updated: existing rows (and their ids,
+        // which employees.designation_id points at) are left exactly as they are.
         $roles = [
             ['name' => 'System-Administrator', 'slug' => 'super-admin'],
             ['name' => 'Worker', 'slug' => 'worker'],
@@ -18,10 +20,57 @@ class RoleSeeder extends Seeder
             ['name' => 'Finance Admin', 'slug' => 'finance-admin'],
             ['name' => 'Site Incharge', 'slug' => 'site-incharge'],
             ['name' => 'Driver', 'slug' => 'driver'],
+
+            ['name' => 'Accountant', 'slug' => 'accountant'],
+            ['name' => 'Assistant Surveyor', 'slug' => 'assistant-surveyor'],
+            ['name' => 'Asst. Mechanic', 'slug' => 'asst-mechanic'],
+            ['name' => 'Contractor', 'slug' => 'contractor'],
+            ['name' => 'Diesel Supervisor', 'slug' => 'diesel-supervisor'],
+            ['name' => 'Driver HMV', 'slug' => 'driver-hmv'],
+            ['name' => 'Driver LMV', 'slug' => 'driver-lmv'],
+            ['name' => 'Electrician', 'slug' => 'electrician'],
+            ['name' => 'Fitter', 'slug' => 'fitter'],
+            ['name' => 'Head Accountant', 'slug' => 'head-accountant'],
+            ['name' => 'Helper', 'slug' => 'helper'],
+            ['name' => 'House Keeper', 'slug' => 'house-keeper'],
+            ['name' => 'HR Assistant', 'slug' => 'hr-assistant'],
+            ['name' => 'HR Manager', 'slug' => 'hr-manager'],
+            ['name' => 'Mechanic', 'slug' => 'mechanic'],
+            ['name' => 'Mechanical Manager', 'slug' => 'mechanical-manager'],
+            ['name' => 'Mining Dozer', 'slug' => 'mining-dozer'],
+            ['name' => 'Mining Excavator', 'slug' => 'mining-excavator'],
+            ['name' => 'Mining Grader', 'slug' => 'mining-grader'],
+            ['name' => 'Mining Loader', 'slug' => 'mining-loader'],
+            ['name' => 'Office Assistant', 'slug' => 'office-assistant'],
+            ['name' => 'Production Incharge', 'slug' => 'production-incharge'],
+            ['name' => 'Purchaser', 'slug' => 'purchaser'],
+            ['name' => 'Shift Incharge', 'slug' => 'shift-incharge'],
+            ['name' => 'Store Incharge', 'slug' => 'store-incharge'],
+            ['name' => 'Supervisor (Camp Incharge)', 'slug' => 'supervisor-camp-incharge'],
+            ['name' => 'Survey HOD', 'slug' => 'survey-hod'],
+            ['name' => 'Time Keeper', 'slug' => 'time-keeper'],
+            ['name' => 'Welder', 'slug' => 'welder'],
+
+            ['name' => 'Asst. Accountant', 'slug' => 'asst-accountant'],
+            ['name' => 'Asst. Manager', 'slug' => 'asst-manager'],
+            ['name' => 'Billing Manager', 'slug' => 'billing-manager'],
+            ['name' => 'Data Entry Operator', 'slug' => 'data-entry-operator'],
+            ['name' => 'Engineer', 'slug' => 'engineer'],
+            ['name' => 'Finance Head', 'slug' => 'finance-head'],
+            ['name' => 'Fleet Incharge', 'slug' => 'fleet-incharge'],
+            ['name' => 'Gate Pass Supervisor', 'slug' => 'gate-pass-supervisor'],
+            ['name' => 'HR & Time Office', 'slug' => 'hr-time-office'],
+            ['name' => 'Mechanical Incharge', 'slug' => 'mechanical-incharge'],
+            ['name' => 'MIS Executive', 'slug' => 'mis-executive'],
+            ['name' => 'Purchase Manager', 'slug' => 'purchase-manager'],
+            ['name' => 'Relationship Manager', 'slug' => 'relationship-manager'],
+            ['name' => 'Store Keeper', 'slug' => 'store-keeper'],
+            ['name' => 'Surveyor Assistant', 'slug' => 'surveyor-assistant'],
+            ['name' => 'VTC Assistant', 'slug' => 'vtc-assistant'],
         ];
 
         foreach ($roles as $role) {
-            Role::updateOrCreate(['slug' => $role['slug']], $role);
+            Role::firstOrCreate(['slug' => $role['slug']], $role);
         }
     }
 }

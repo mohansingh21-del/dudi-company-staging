@@ -35,6 +35,7 @@ class DashboardSummaryRequest extends FormRequest
             'machine_number_id' => 'nullable|integer|exists:equipment_names,id',
             'delay_category_id' => 'nullable|integer|exists:delay_categories,id',
             'delay_severity' => 'nullable|string',
+            'store_id' => 'nullable|integer|exists:stores,id',
         ];
     }
 
@@ -106,16 +107,19 @@ class DashboardSummaryRequest extends FormRequest
                 $to = $today->toDateString();
                 if (empty($shiftId)) {
                     $currentTime = Carbon::now()->toTimeString();
-                    $activeShift = \App\Models\Shift::where(function ($q) use ($currentTime) {
-                        $q->where('start_time', '<=', $currentTime)
-                          ->where('end_time', '>=', $currentTime);
-                    })->orWhere(function ($q) use ($currentTime) {
-                        $q->whereColumn('start_time', '>', 'end_time')
-                          ->where(function ($sub) use ($currentTime) {
-                              $sub->where('start_time', '<=', $currentTime)
-                                  ->orWhere('end_time', '>=', $currentTime);
-                          });
-                    })->first();
+                    $activeShift = \App\Models\Shift::where('is_active', 1)
+                        ->where(function ($query) use ($currentTime) {
+                            $query->where(function ($q) use ($currentTime) {
+                                $q->where('start_time', '<=', $currentTime)
+                                  ->where('end_time', '>=', $currentTime);
+                            })->orWhere(function ($q) use ($currentTime) {
+                                $q->whereColumn('start_time', '>', 'end_time')
+                                  ->where(function ($sub) use ($currentTime) {
+                                      $sub->where('start_time', '<=', $currentTime)
+                                          ->orWhere('end_time', '>=', $currentTime);
+                                  });
+                            });
+                        })->first();
 
                     if ($activeShift) {
                         $shiftId = $activeShift->id;
@@ -160,6 +164,7 @@ class DashboardSummaryRequest extends FormRequest
             'machine_number_id' => $this->input('machine_number_id') ? (int) $this->input('machine_number_id') : null,
             'delay_category_id' => $this->input('delay_category_id') ? (int) $this->input('delay_category_id') : null,
             'delay_severity'    => $this->input('delay_severity'),
+            'store_id'          => $this->input('store_id') ? (int) $this->input('store_id') : null,
         ];
     }
 }

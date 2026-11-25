@@ -56,4 +56,53 @@ class LeaveType extends Model
     {
         return in_array($group, self::PAID_GROUPS, true) ? 'paid' : 'unpaid';
     }
+
+    /**
+     * Paid/unpaid for this row, taken from the block rather than the stored
+     * column so the two cannot drift. Legacy rows carry no block, so those fall
+     * back to whatever category they were saved with.
+     */
+    public function effectiveCategory(): string
+    {
+        return $this->register_group
+            ? self::categoryForGroup($this->register_group)
+            : (string) $this->leave_category;
+    }
+
+    /**
+     * Is this block drawn from an entitlement that can run out?
+     *
+     * Only paid blocks are. Unpaid leave is not credited from a quota at all —
+     * a worker can take any number of unpaid days — so allowed_days is not a
+     * limit on it and a 0 there means nothing.
+     */
+    public function isMetered(): bool
+    {
+        return $this->effectiveCategory() !== 'unpaid';
+    }
+
+    /**
+     * Can leave be applied against this block yet?
+     *
+     * A paid block is credited from allowed_days alone, so one the admin has
+     * not given a quota to has nothing to give: the leave would be availed
+     * against an entitlement of zero and the closing balance would simply floor
+     * it away. Paid blocks ship at 0, so this is the normal state of one until
+     * someone configures it.
+     *
+     * Unpaid leave is never gated — see isMetered().
+     */
+    public function canApply(): bool
+    {
+        return ! $this->isMetered() || (int) $this->allowed_days > 0;
+    }
+
+    /**
+     * One wording for the refusal, shared by the apply form and the bulk sheet.
+     */
+    public function quotaMissingMessage(): string
+    {
+        return "No days are assigned for {$this->name} in the leave master. "
+            . 'Set its allowed days before applying this leave.';
+    }
 }

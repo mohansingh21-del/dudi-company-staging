@@ -29,6 +29,8 @@ class FuelRegisterResource extends JsonResource
             'equipment_id' => $this->equipment_id,
             'equipment_name_id' => $this->equipment_name_id,
             'machine_name' => optional($this->equipmentName)->equipment_name,
+            'model_number' => optional(optional($this->equipmentName)->modelNumber)->model_number,
+            'chassis_number' => optional($this->equipmentName)->chassis_number,
             'category_name' => optional($this->equipment)->name ?? optional(optional($this->equipmentName)->equipment)->name,
             'shift_name' => optional($this->shift)->shift_name,
         ];

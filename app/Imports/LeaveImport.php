@@ -57,6 +57,18 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
+            // Same rule as the apply form: a paid block the admin has not
+            // given a quota to has nothing to draw against, so the row is
+            // rejected rather than imported against an entitlement of zero.
+            // Unpaid leave is uncapped and never gated.
+            if (! $leaveType->canApply()) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Employee {$employee->employee_code}: " . $leaveType->quotaMissingMessage()
+                ];
+                continue;
+            }
+
             $fromDate = $this->parseDate($row['from_date'] ?? null);
             $toDate = $this->parseDate($row['to_date'] ?? null);
 
@@ -64,6 +76,20 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 $this->errors[] = [
                     'row' => $index + 2,
                     'message' => "Invalid date format for Employee {$employee->employee_code}."
+                ];
+                continue;
+            }
+
+            // Same rule as the apply form: no leave before the date of joining.
+            $joiningMessage = \App\Services\LeaveBalanceService::beforeJoiningMessage(
+                $employee->id,
+                $fromDate->toDateString()
+            );
+
+            if ($joiningMessage) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Employee {$employee->employee_code}: {$joiningMessage}"
                 ];
                 continue;
             }
@@ -87,9 +113,62 @@ class LeaveImport implements ToCollection, WithHeadingRow
                 continue;
             }
 
+            // Same present-and-deployed gate as the apply form.
+            $deployedMessage = \App\Services\AttendanceLeaveSync::deployedPresentMessage(
+                $employee->id,
+                $fromDate->toDateString(),
+                $toDate->toDateString()
+            );
+
+            if ($deployedMessage) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Employee {$employee->employee_code}: {$deployedMessage}"
+                ];
+                continue;
+            }
+
+            // Same monthly Compensatory Rest cap as the apply form. Rows are
+            // created as the sheet is walked, so an earlier row in this same
+            // upload is already counted by the time a later one is checked.
+            if ($leaveType->register_group === 'compensatory_rest') {
+
+                $capMessage = \App\Services\LeaveBalanceService::compRestLeaveCapMessage(
+                    $employee->id,
+                    $fromDate->toDateString(),
+                    $toDate->toDateString()
+                );
+
+                if ($capMessage) {
+                    $this->errors[] = [
+                        'row' => $index + 2,
+                        'message' => "Employee {$employee->employee_code}: {$capMessage}"
+                    ];
+                    continue;
+                }
+            }
+
+            // Same annual entitlement check as the apply form. Rows are created
+            // as the sheet is walked, so an earlier row in this same upload is
+            // already counted by the time a later one is checked.
+            $quotaMessage = \App\Services\LeaveBalanceService::annualQuotaMessage(
+                $leaveType,
+                $employee->id,
+                $fromDate->toDateString(),
+                $toDate->toDateString()
+            );
+
+            if ($quotaMessage) {
+                $this->errors[] = [
+                    'row' => $index + 2,
+                    'message' => "Employee {$employee->employee_code}: {$quotaMessage}"
+                ];
+                continue;
+            }
+
             Leave::create([
                 'employee_id'   => $employee->id,
-                'leave_type_id' => $leaveType ? $leaveType->id : null,
+                'leave_type_id' => $leaveType->id,
                 'from_date'     => $fromDate->toDateString(),
                 'to_date'       => $toDate->toDateString(),
                 'reason'        => $row['reason'] ?? null,

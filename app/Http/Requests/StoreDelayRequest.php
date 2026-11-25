@@ -36,7 +36,7 @@ class StoreDelayRequest extends FormRequest
 
         return [
             'shift_plan_id' => 'required|numeric|exists:shift_plans,id',
-            'shift_id' => 'nullable|integer|exists:shifts,id',
+            'shift_id' => ['nullable', 'integer', 'exists:shifts,id', new \App\Rules\ActiveShift()],
             'delay_log_date' => 'nullable|date',
             'delay_category_id' => 'required|numeric|exists:delay_categories,id,is_active,1',
             'delay_subcategory' => 'nullable|string|max:255',

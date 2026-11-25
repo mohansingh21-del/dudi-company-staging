@@ -32,10 +32,11 @@ class UpdateBreakdownRequest extends FormRequest
             // 'closed' is deliberately absent: a ticket closes only when a linked
             // service record records its downtime window, which guarantees every
             // closed ticket carries real downtime for the MTTR dashboards.
-            'status'           => 'nullable|in:open,in_progress,on_hold',
-            'severity'         => 'nullable|string|in:LOW,MEDIUM,HIGH,CRITICAL',
-            'description'      => 'nullable|string|max:1000',
-            'resolution_notes' => 'nullable|string|max:1000',
+            'status'              => 'nullable|in:open,in_progress,on_hold',
+            'breakdown_date_time' => 'nullable|date_format:Y-m-d H:i:s',
+            'severity'            => 'nullable|string|in:LOW,MEDIUM,HIGH,CRITICAL',
+            'description'         => 'nullable|string|max:1000',
+            'resolution_notes'    => 'nullable|string|max:1000',
         ];
     }
 
