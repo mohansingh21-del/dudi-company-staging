@@ -41,7 +41,7 @@ class Kernel extends ConsoleKernel
 
         // Midnight as the new week's first day (Monday) begins, on site time
         // whatever the server clock is set to.
-        $this->inProcess($schedule, 'roster:rotate')->mondays()->at('00:00')->timezone('Asia/Kolkata');
+        $this->inProcess($schedule, 'roster:rotate')->sundays()->at('00:00')->timezone('Asia/Kolkata');
         $this->inProcess($schedule, 'borrowed:cleanup')->everyMinute();
 
         // Carries an in-progress fleet refresh to its next feed.

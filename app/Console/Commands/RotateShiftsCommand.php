@@ -56,11 +56,12 @@ class RotateShiftsCommand extends Command
         // Current week boundary (runs on Sunday/Monday, mapping is for the week starting today/yesterday)
         // Ensure weekStart is always the current week's Monday (or Sunday) to match scheduler
         $today = Carbon::today();
-        if ($today->dayOfWeek === Carbon::SUNDAY) {
-            $weekStart = $today->copy()->addDay()->toDateString();
-        } else {
-            $weekStart = $today->copy()->startOfWeek(Carbon::MONDAY)->toDateString();
-        }
+        // if ($today->dayOfWeek === Carbon::SUNDAY) {
+        //     $weekStart = $today->copy()->addDay()->toDateString();
+        // } else {
+        //     $weekStart = $today->copy()->startOfWeek(Carbon::MONDAY)->toDateString();
+        // }
+        $weekStart = $today->copy()->startOfWeek(Carbon::SUNDAY)->toDateString();
         $weekEnd = Carbon::parse($weekStart)->addDays(6)->toDateString();
 
         // Check if mappings for this week already exist (prevent duplicate runs)
