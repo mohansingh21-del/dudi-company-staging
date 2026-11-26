@@ -2,7 +2,6 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
-use App\Enums\RoleSlug;
 
 /*
 |--------------------------------------------------------------------------
@@ -47,7 +46,6 @@ use App\Http\Controllers\Api\Admin\EmployeeWageController;
 use App\Http\Controllers\Api\Admin\WageRegisterController;
 use App\Http\Controllers\Api\Admin\EquipmentController;
 use App\Http\Controllers\Api\Admin\EquipmentNameController;
-use App\Http\Controllers\Api\Admin\EquipmentModelNumberController;
 use App\Http\Controllers\Api\Admin\IncidentTypeController;
 use App\Http\Controllers\Api\Admin\IncidentController;
 use App\Http\Controllers\Api\Admin\EquipmentAllocationController;
@@ -230,8 +228,6 @@ Route::prefix('v1')->group(function () {
         Route::get('stores/{store_id}/products', [InventoryController::class, 'getStoreProducts']);
         Route::get('open-breakdowns', [BreakdownController::class, 'getOpenBreakdowns']);
         Route::get('machine-names/{id}', [EquipmentNameController::class, 'getPublicEquipmentNames']);
-        // Model dropdown on the equipment name form; ?equipment_id= narrows to a category.
-        Route::get('equipment-model-numbers', [EquipmentModelNumberController::class, 'publicIndex']);
         Route::get('shift-plans/{shift_id}/machines', [EquipmentAllocationController::class, 'getPublicMachines']);
         Route::get('search-employee/search={search}', [EmployeeController::class, 'searchEmployeeByName']);
 
@@ -246,7 +242,7 @@ Route::prefix('v1')->group(function () {
         Route::get('dispatch/dumper-summary', [DispatchTripController::class, 'dumperSummary']);
         Route::get('dispatch/fleet-performance', [DispatchTripController::class, 'fleetPerformance']);
 
-        Route::middleware([RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS, RoleSlug::SITE_INCHARGES)])->group(function () {
+        Route::middleware(['role:super-admin,supervisor,site-incharge'])->group(function () {
             Route::post('dispatch/trips/import', [DispatchTripController::class, 'import']);
             Route::post('dispatch/trips', [DispatchTripController::class, 'store']);
             Route::put('dispatch/trips/{id}', [DispatchTripController::class, 'update']);
@@ -380,8 +376,6 @@ Route::prefix('v1')->group(function () {
             Route::patch('equipments/{id}/status', [EquipmentController::class, 'toggleStatus']);
             Route::apiResource('equipment-names', EquipmentNameController::class);
             Route::patch('equipment-names/{id}/status', [EquipmentNameController::class, 'toggleStatus']);
-            Route::apiResource('equipment-model-numbers', EquipmentModelNumberController::class);
-            Route::patch('equipment-model-numbers/{id}/status', [EquipmentModelNumberController::class, 'toggleStatus']);
             Route::apiResource('breakdown-types', BreakdownTypeController::class);
             Route::patch('breakdown-types/{id}/status', [BreakdownTypeController::class, 'toggleStatus']);
             Route::apiResource('delay-categories', DelayCategoryController::class);
@@ -413,7 +407,7 @@ Route::prefix('v1')->group(function () {
 
     });
 
-    Route::middleware(['auth:sanctum', RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS)])->prefix('admin')
+    Route::middleware(['auth:sanctum', 'role:super-admin,supervisor'])->prefix('admin')
         ->group(function () {
 
 
@@ -598,7 +592,7 @@ Route::prefix('v1')->group(function () {
 
             // KEEP YOUR EXISTING VEHICLE ROUTES HERE
             // NO CHANGES REQUIRED
-    
+
             /*
             |--------------------------------------------------------------------------
             | Shift Plan/Equipment Allocation/Employee deployment
@@ -683,43 +677,43 @@ Route::prefix('v1')->group(function () {
 
 
             Route::prefix('recoveries')->group(function () {
- 
-           
- 
+
+
+
                 // Upload Excel
                 Route::post(
                     '/bulk-upload',
                     [RecoveryUploadController::class, 'upload']
                 );
- 
+
                 // Upload history
- 
- 
+
+
                 // Preview staging upload
                 Route::get(
                     '/uploads/{upload}/preview',
                     [RecoveryUploadController::class, 'preview']
                 );
- 
+
                 // Edit staging row
                 Route::put(
                     '/uploads/rows/{row}',
                     [RecoveryUploadController::class, 'updateRow']
                 );
- 
+
                 // Delete staging row
                 Route::delete(
                     '/uploads/rows/{row}',
                     [RecoveryUploadController::class, 'deleteRow']
                 );
- 
+
                 // FINAL SUBMIT
                 Route::post(
                     '/uploads/{upload}/submit',
                     [RecoveryUploadController::class, 'submit']
                 );
- 
- 
+
+
                 /*
 
  
@@ -736,8 +730,8 @@ Route::prefix('v1')->group(function () {
                     '/',
                     [RecoveryController::class, 'index']
                 );
- 
- 
+
+
                 /*
      * =====================================================
      * LEVEL 2
@@ -750,8 +744,8 @@ Route::prefix('v1')->group(function () {
                     '/uploads/{upload}/rows',
                     [RecoveryController::class, 'uploadRows']
                 );
- 
- 
+
+
                 /*
      * =====================================================
      * LEVEL 3
@@ -769,19 +763,17 @@ Route::prefix('v1')->group(function () {
                     [RecoveryUploadController::class, 'uploads']
                 );
             });
-
         });
     /*
     |--------------------------------------------------------------------------
     | Delay Analysis Management
     |--------------------------------------------------------------------------
     */
-    Route::middleware(['auth:sanctum', RoleSlug::middleware(RoleSlug::SUPER_ADMIN, RoleSlug::SUPERVISORS, RoleSlug::SITE_INCHARGES)])->prefix('admin/delays')->group(function () {
+    Route::middleware(['auth:sanctum', 'role:super-admin,supervisor,site_incharge'])->prefix('admin/delays')->group(function () {
         Route::get('/', [DelayController::class, 'index']);
         Route::post('import', [DelayController::class, 'import']);
         Route::get('{id}', [DelayController::class, 'show']);
         Route::post('/', [DelayController::class, 'store']);
         Route::put('{id}', [DelayController::class, 'update']);
     });
-
 });

@@ -5,9 +5,10 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Role;
-use App\Http\Requests\StoreDepartmentRequest;
-use App\Http\Requests\UpdateDepartmentRequest;
+use App\Http\Requests\StoreDesignationRequest;
+use App\Http\Requests\UpdateDesignationRequest;
 use App\Http\Resources\DesignationResource;
+use Illuminate\Support\Str;
 
 class DesignationController extends Controller
 {
@@ -55,7 +56,43 @@ class DesignationController extends Controller
         }
     }
 
+    public function store(StoreDesignationRequest $request)
+    {
+        $dept = Role::create([
+            'code' => $request->code,
+            'name' => $request->name,
+            'slug' => Str::slug($request->name),
+            'status' => 1
+        ]);
 
+        return response()->json([
+            'status' => 200,
+            'message' => 'Designation created'
+            // 'data' => new DepartmentResource($dept)
+        ]);
+    }
+    public function update(UpdateDesignationRequest $request, int $id)
+    {
+        $dept = Role::find($id);
+
+        if (!$dept) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Designation not found'
+            ]);
+        }
+
+        $dept->update([
+            'code' => $request->code,
+            'name' => $request->name,
+            'slug' => Str::slug($request->name),
+        ]);
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Designation updated successfully'
+        ]);
+    }
     public function show(int $id)
     {
         $dept = Role::find($id);
@@ -63,7 +100,7 @@ class DesignationController extends Controller
         if (!$dept) {
             return response()->json([
                 'status' => 404,
-                'message' => 'Department not found'
+                'message' => 'Designation not found'
             ]);
         }
 
@@ -82,7 +119,7 @@ class DesignationController extends Controller
         if (!$dept) {
             return response()->json([
                 'status' => 404,
-                'message' => 'Role not found'
+                'message' => 'Designation not found'
             ]);
         }
         $request->validate([
@@ -95,7 +132,7 @@ class DesignationController extends Controller
 
         return response()->json([
             'status' => 200,
-            'message' => 'Role status updated successfully'
+            'message' => 'Designation status updated successfully'
         ]);
     }
 
