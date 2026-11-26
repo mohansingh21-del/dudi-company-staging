@@ -262,4 +262,23 @@ class ShiftPlan extends Model
     {
         return $query->whereIn('status', ['active', 'planned']);
     }
+
+    /**
+     * Plans whose deployed employees are held off the weekly rotation.
+     *
+     * Only a live plan holds anyone. A draft has not been published, and one left
+     * unpublished would otherwise freeze its whole workforce on its shift every
+     * week until someone closes it.
+     */
+    public function scopeHoldsRotation($query)
+    {
+        return $query->whereNotIn('status', self::NON_HOLDING_STATUSES);
+    }
+
+    public function holdsRotation()
+    {
+        return !in_array($this->status, self::NON_HOLDING_STATUSES, true);
+    }
+
+    const NON_HOLDING_STATUSES = ['draft', 'closed', 'completed'];
 }

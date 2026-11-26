@@ -162,7 +162,7 @@ class RotateShiftsCommand extends Command
     {
         $deployments = ShiftWorkforceDeployment::active()
             ->whereHas('shiftPlan', function ($q) {
-                $q->notClosed();
+                $q->holdsRotation();
             })
             ->whereHas('employee', function ($q) use ($rotatingRelays) {
                 $q->where('is_active', 1)->whereIn('relay_id', $rotatingRelays->pluck('id'));
