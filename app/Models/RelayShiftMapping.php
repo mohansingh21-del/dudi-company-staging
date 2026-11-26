@@ -36,9 +36,11 @@ class RelayShiftMapping extends Model
      */
     public static function getForDate($relayId, $dateStr)
     {
+        // Newest week wins if two ever overlap.
         return static::where('relay_id', $relayId)
             ->where('week_start_date', '<=', $dateStr)
             ->where('week_end_date', '>=', $dateStr)
+            ->orderBy('week_start_date', 'desc')
             ->first();
     }
 

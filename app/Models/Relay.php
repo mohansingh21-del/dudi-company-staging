@@ -31,6 +31,7 @@ class Relay extends Model
         $mapping = $this->shiftMappings()
             ->where('week_start_date', '<=', $today)
             ->where('week_end_date', '>=', $today)
+            ->orderBy('week_start_date', 'desc')
             ->first();
 
         if (!$mapping) {

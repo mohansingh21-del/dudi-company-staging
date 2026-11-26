@@ -39,7 +39,7 @@ class Kernel extends ConsoleKernel
         // before starting, and roster:rotate silently skipped whole weeks.
         // Do not add runInBackground() either; it needs proc_open as well.
 
-        // Midnight as the new week's first day (Monday) begins, on site time
+        // Midnight as the new week's first day (Sunday) begins, on site time
         // whatever the server clock is set to.
         $this->inProcess($schedule, 'roster:rotate')->sundays()->at('00:00')->timezone('Asia/Kolkata');
         $this->inProcess($schedule, 'borrowed:cleanup')->everyMinute();

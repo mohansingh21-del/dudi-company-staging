@@ -237,19 +237,24 @@ class RelayController extends Controller
     private function assignShiftToRelay(Relay $relay, $shiftId)
     {
         $today = now();
-        $weekStart = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->toDateString();
-        $weekEnd = $today->copy()->startOfWeek(\Carbon\Carbon::MONDAY)->addDays(6)->toDateString();
 
-        \App\Models\RelayShiftMapping::updateOrCreate(
-            [
-                'week_start_date' => $weekStart,
+        // Change the week already running for this relay if there is one, so this
+        // never adds a second, overlapping week next to roster:rotate's (e.g. the
+        // last Monday-based week). Otherwise start a Sunday-Saturday week.
+        $running = \App\Models\RelayShiftMapping::getForDate($relay->id, $today->toDateString());
+
+        if ($running) {
+            $running->update(['shift_id' => $shiftId]);
+        } else {
+            $weekStart = $today->copy()->startOfWeek(\Carbon\Carbon::SUNDAY);
+
+            \App\Models\RelayShiftMapping::create([
+                'week_start_date' => $weekStart->toDateString(),
+                'week_end_date' => $weekStart->copy()->addDays(6)->toDateString(),
                 'relay_id' => $relay->id,
-            ],
-            [
-                'week_end_date' => $weekEnd,
                 'shift_id' => $shiftId,
-            ]
-        );
+            ]);
+        }
 
         $shift = \App\Models\Shift::find($shiftId);
         if ($shift && stripos($shift->shift_name, 'general') !== false) {
