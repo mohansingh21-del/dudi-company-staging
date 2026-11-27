@@ -35,6 +35,11 @@ class RotationHoldService
             return;
         }
 
+        // A draft holds nobody; publishing it writes the hold (ShiftPlanService::updateStatus).
+        if (!$plan->holdsRotation()) {
+            return;
+        }
+
         $relay = $employee->relay;
         if (!$relay || !$relay->is_rotating || !$relay->is_active) {
             return;
@@ -103,7 +108,7 @@ class RotationHoldService
         $stillDeployedIds = ShiftWorkforceDeployment::active()
             ->whereIn('employee_id', $employeeIds)
             ->whereHas('shiftPlan', function ($q) {
-                $q->notClosed();
+                $q->holdsRotation();
             })
             ->pluck('employee_id')
             ->all();

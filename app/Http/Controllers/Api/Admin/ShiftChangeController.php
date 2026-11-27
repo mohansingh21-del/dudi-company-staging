@@ -24,11 +24,11 @@ class ShiftChangeController extends Controller
         try {
             $limit = $request->input('limit', 10);
             $today = now()->toDateString();
-            $weekStart = Carbon::parse($today)->startOfWeek(Carbon::MONDAY)->toDateString();
+            $weekStart = Carbon::parse($today)->startOfWeek(Carbon::SUNDAY)->toDateString();
 
             // Resolve each rotating relay's effective shift the same way Relay::getCurrentShiftIdAttribute()
             // does: current week's mapping if present, else fall back to the latest mapping on record.
-            // An exact "week_start_date = this week's Monday" match would go empty whenever the weekly
+            // An exact "week_start_date = this week's Sunday" match would go empty whenever the weekly
             // rotation job hasn't run yet, so it can't be pushed down as a plain whereHas() condition.
             $relayCurrentShiftIds = \App\Models\Relay::where('is_active', 1)
                 ->where('is_rotating', 1)

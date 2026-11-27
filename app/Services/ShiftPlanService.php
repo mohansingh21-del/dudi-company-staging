@@ -758,7 +758,24 @@ class ShiftPlanService
             ];
         }
 
+        $wasHolding = $shiftPlan->holdsRotation();
         $shiftPlan->update(['status' => $status]);
+
+        // A plan starts or stops holding its workforce off the rotation when it
+        // moves between draft and live, so the holds follow the status.
+        $nowHolding = $shiftPlan->holdsRotation();
+        if ($wasHolding !== $nowHolding) {
+            $deployments = $shiftPlan->workforceDeployments()->active()->with(['employee.relay', 'shiftPlan'])->get();
+            $holds = app(\App\Services\RotationHoldService::class);
+
+            if ($nowHolding) {
+                foreach ($deployments as $deployment) {
+                    $holds->holdDeployment($deployment);
+                }
+            } else {
+                $holds->releaseUnstartedHolds($deployments->pluck('employee_id')->all());
+            }
+        }
 
         return [
             'status' => 200,

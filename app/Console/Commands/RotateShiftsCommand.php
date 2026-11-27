@@ -26,7 +26,7 @@ class RotateShiftsCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Rotate relay shift mappings according to a hardcoded sequence every Monday at midnight';
+    protected $description = 'Rotate relay shift mappings every Sunday at midnight (weeks run Sunday-Saturday)';
 
     /**
      * The sequence defines the rotation order by shift ID.
@@ -53,19 +53,15 @@ class RotateShiftsCommand extends Command
             ->pluck('id')
             ->toArray();
 
-        // Current week boundary (runs on Sunday/Monday, mapping is for the week starting today/yesterday)
-        // Ensure weekStart is always the current week's Monday (or Sunday) to match scheduler
+        // Weeks run Sunday-Saturday; the scheduler runs this at 00:00 every Sunday.
         $today = Carbon::today();
-        // if ($today->dayOfWeek === Carbon::SUNDAY) {
-        //     $weekStart = $today->copy()->addDay()->toDateString();
-        // } else {
-        //     $weekStart = $today->copy()->startOfWeek(Carbon::MONDAY)->toDateString();
-        // }
         $weekStart = $today->copy()->startOfWeek(Carbon::SUNDAY)->toDateString();
         $weekEnd = Carbon::parse($weekStart)->addDays(6)->toDateString();
 
-        // Check if mappings for this week already exist (prevent duplicate runs)
-        $existingThisWeek = RelayShiftMapping::where('week_start_date', $weekStart)->exists();
+        // Check if mappings for this week already exist (prevent duplicate runs).
+        // ">=" also catches the last Monday-based week (Mon-Sun): run mid-week
+        // before the first Sunday, an exact match would miss it and rotate again.
+        $existingThisWeek = RelayShiftMapping::where('week_start_date', '>=', $weekStart)->exists();
         if ($existingThisWeek && !$force) {
             $this->warn('Relay mappings for this week already exist. Use --force to override.');
             return 0;
@@ -100,6 +96,12 @@ class RotateShiftsCommand extends Command
             if ($force) {
                 RelayShiftMapping::where('week_start_date', $weekStart)->delete();
             }
+
+            // The last Monday-based week (Mon-Sun) runs into this Sunday. End it the
+            // day before, or the relay has two mappings that day and resolves to either.
+            RelayShiftMapping::where('week_start_date', '<', $weekStart)
+                ->where('week_end_date', '>=', $weekStart)
+                ->update(['week_end_date' => Carbon::parse($weekStart)->subDay()->toDateString()]);
 
             if ($latestMappings->isEmpty()) {
                 // First run — seed from current employee_shift_assignments
@@ -162,7 +164,7 @@ class RotateShiftsCommand extends Command
     {
         $deployments = ShiftWorkforceDeployment::active()
             ->whereHas('shiftPlan', function ($q) {
-                $q->notClosed();
+                $q->holdsRotation();
             })
             ->whereHas('employee', function ($q) use ($rotatingRelays) {
                 $q->where('is_active', 1)->whereIn('relay_id', $rotatingRelays->pluck('id'));
